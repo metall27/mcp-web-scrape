@@ -1,0 +1,36 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+
+mcp:
+  endpoint: /mcp
+  api_key_header: X-API-Key
+
+scraping:
+  user_agent: "MCP-Web-Scrape/1.0"
+  timeout: 30s
+  max_redirects: 10
+  max_body_size: 10485760  # 10MB
+  allowed_domains: []  # Empty means all domains allowed
+
+search:
+  provider: duckduckgo  # duckduckgo, brave, bing
+  api_key: ""  # Required for brave/bing
+  max_results: 10
+  safe_search: true
+
+rate_limit:
+  enabled: true
+  requests_per_second: 10.0
+  burst_size: 20
+
+cache:
+  enabled: true
+  ttl: 5m
+  cleanup_interval: 10m
+
+log:
+  level: info  # debug, info, warn, error
+  pretty: true
