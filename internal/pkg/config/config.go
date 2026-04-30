@@ -11,6 +11,7 @@ type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	MCP       MCPConfig       `mapstructure:"mcp"`
 	Scraping  ScrapingConfig  `mapstructure:"scraping"`
+	Browser   BrowserConfig   `mapstructure:"browser"`
 	Search    SearchConfig    `mapstructure:"search"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Cache     CacheConfig     `mapstructure:"cache"`
@@ -36,6 +37,19 @@ type ScrapingConfig struct {
 	MaxRedirects     int           `mapstructure:"max_redirects"`
 	MaxBodySize      int64         `mapstructure:"max_body_size"`
 	AllowedDomains   []string      `mapstructure:"allowed_domains"`
+}
+
+type BrowserConfig struct {
+	Enabled         bool          `mapstructure:"enabled"`
+	Timeout         time.Duration `mapstructure:"timeout"`
+	WaitTime        time.Duration `mapstructure:"wait_time"`
+	ViewportWidth   int           `mapstructure:"viewport_width"`
+	ViewportHeight  int           `mapstructure:"viewport_height"`
+	UserAgent       string        `mapstructure:"user_agent"`
+	Headless        bool          `mapstructure:"headless"`
+	BlockImages     bool          `mapstructure:"block_images"`
+	DisableGPU      bool          `mapstructure:"disable_gpu"`
+	NoSandbox       bool          `mapstructure:"no_sandbox"`
 }
 
 type SearchConfig struct {
@@ -105,6 +119,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scraping.timeout", 30*time.Second)
 	v.SetDefault("scraping.max_redirects", 10)
 	v.SetDefault("scraping.max_body_size", 10*1024*1024) // 10MB
+
+	// Browser defaults
+	v.SetDefault("browser.enabled", true)
+	v.SetDefault("browser.timeout", 30*time.Second)
+	v.SetDefault("browser.wait_time", 1*time.Second)
+	v.SetDefault("browser.viewport_width", 1920)
+	v.SetDefault("browser.viewport_height", 1080)
+	v.SetDefault("browser.headless", true)
+	v.SetDefault("browser.block_images", false)
+	v.SetDefault("browser.disable_gpu", true)
+	v.SetDefault("browser.no_sandbox", true)
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")
