@@ -369,6 +369,236 @@ JavaScript рендеринг реализован через библиотек
 - Медленнее для простых страниц
 - Нужна дополнительная настройка в Docker
 
+### Установка Chrome/Chromium на Linux сервере
+
+Для работы `scrape_with_js` необходим Chrome или Chromium. **Важно:** Используйте варианты без GUI зависимостей для серверных установок.
+
+#### Ubuntu/Debian (без GUI)
+
+```bash
+# Вариант 1: Chromium без рекомендованных зависимостей
+sudo apt-get update
+sudo apt-get install -y chromium-browser --no-install-recommends
+
+# Вариант 2: Минимальная установка
+sudo apt-get install -y chromium-codecs-ffmpeg-extra
+
+# Проверка установки
+chromium-browser --version
+chromium-browser --headless --no-sandbox --dump-dom https://example.com
+```
+
+#### CentOS/RHEL/Rocky
+
+```bash
+# Chromium (минимальные зависимости)
+sudo yum install -y chromium
+
+# Проверка GUI зависимостей
+yum deplist chromium | grep -E "x11|gtk|qt"
+```
+
+#### Chrome Headless Shell (самый чистый вариант)
+
+Google предлагает специальную версию для headless режима:
+
+```bash
+# Скачивание
+wget https://storage.googleapis.com/chrome-for-testing/public/123.0.6312.58/linux64/chrome-headless-shell-linux64.zip
+unzip chrome-headless-shell-linux64.zip
+sudo mv chrome-headless-shell-linux64/chrome-headless-shell /usr/local/bin/
+
+# Тест
+chrome-headless-shell --dump-dom https://example.com
+```
+
+#### Сравнение вариантов
+
+| Вариант | GUI зависимости | Размер | Стабильность | Для продакшена |
+|---------|----------------|--------|--------------|----------------|
+| `google-chrome` | ❌ Есть | ~400MB | ⭐⭐⭐⭐⭐ | ❌ |
+| `chromium-browser` | ⚠️ Минимальные | ~350MB | ⭐⭐⭐⭐ | ⚠️ |
+| `chromium` (Alpine) | ✅ Нет GUI | ~150MB | ⭐⭐⭐⭐ | ✅ |
+| `chrome-headless-shell` | ✅ Нет GUI | ~100MB | ⭐⭐⭐ | ✅ |
+| Docker Alpine | ✅ Нет GUI | ~300MB | ⭐⭐⭐⭐⭐ | ✅✅ |
+
+#### Проверка отсутствия GUI зависимостей
+
+```bash
+# Ubuntu/Debian
+apt-cache depends chromium-browser | grep -E "x11|gtk|qt"
+dpkg -l | grep -E "x11|gtk|qt|libx11"
+
+# CentOS/RHEL
+yum deplist chromium | grep -E "x11|gtk|qt"
+rpm -qa | grep -E "x11|gtk|qt"
+```
+
+## Docker部署
+
+Docker является **рекомендуемым** способом запуска MCP сервера с JavaScript rendering. Он полностью изолирует Chrome и не требует установки GUI библиотек.
+
+### Dockerfile (Multi-stage build)
+
+```dockerfile
+# Stage 1: Build
+FROM golang:1.21-alpine AS builder
+WORKDIR /app
+COPY . .
+# Скачать зависимости
+RUN go mod download
+# Собрать бинарник
+RUN CGO_ENABLED=0 go build -o mcp-web-scrape ./cmd/server
+
+# Stage 2: Runtime
+FROM alpine:latest
+# Установить Chromium БЕЗ GUI зависимостей
+RUN apk add --no-cache chromium \
+    && rm -rf /var/cache/apk/* \
+    /var/tmp/* \
+    /tmp/*
+
+# Создать пользователя (без root)
+RUN addgroup -g 1000 -S mcp && \
+    adduser -u 1000 -S mcp -G mcp
+
+WORKDIR /app
+# Скопировать бинарник из builder stage
+COPY --from=builder /app/mcp-web-scrape /app/
+COPY config.yaml /app/
+
+# Изменить владельца
+RUN chown -R mcp:mcp /app
+
+# Переключиться на пользователя
+USER mcp
+
+# Порты
+# 8080 - HTTP/MCP server
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+
+# Переменные окружения
+ENV MCP_WEB_SCRAPE_SERVER_HOST=0.0.0.0
+ENV MCP_WEB_SCRAPE_SERVER_PORT=8080
+ENV MCP_WEB_SCRAPE_BROWSER_ENABLED=true
+
+CMD ["./mcp-web-scrape"]
+```
+
+### docker-compose.yml
+
+```yaml
+version: '3.8'
+
+services:
+  mcp-web-scrape:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-web-scrape
+    restart: unless-stopped
+    ports:
+      - "8080:8080"    # MCP endpoint
+    environment:
+      - MCP_WEB_SCRAPE_LOG_LEVEL=info
+      - MCP_WEB_SCRAPE_BROWSER_ENABLED=true
+      - MCP_WEB_SCRAPE_RATE_LIMIT_ENABLED=true
+    volumes:
+      # Монтировать конфиг (опционально)
+      - ./config.yaml:/app/config.yaml:ro
+      # Для persisted cache (будущая функциональность)
+      - cache-data:/app/cache
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    # Resource limits (важно для Chrome)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - mcp-network
+
+volumes:
+  cache-data:
+
+networks:
+  mcp-network:
+    driver: bridge
+```
+
+### Команды Docker
+
+```bash
+# Сборка образа
+docker build -t mcp-web-scrape:latest .
+
+# Запуск через docker-compose
+docker-compose up -d
+
+# Проверка логов
+docker-compose logs -f
+
+# Проверка health status
+docker-compose ps
+docker inspect mcp-web-scrape | grep -A 10 Health
+
+# Остановка
+docker-compose down
+
+# Пересборка
+docker-compose up -d --build
+```
+
+### Docker порты и endpoints
+
+| Порт | Назначение | Внутри контейнера | Снаружи | Пример использования |
+|------|------------|-------------------|---------|---------------------|
+| 8080 | HTTP/MCP Server | 8080 | 8080 | `http://localhost:8080/mcp` |
+
+### Оптимизация Docker образа
+
+```dockerfile
+# Для ещё меньшего размера образа
+FROM alpine:latest AS chrome-downloader
+# Скачивание только headless Chrome
+RUN apk add --no-cache wget && \
+    wget https://storage.googleapis.com/chrome-for-testing/public/123.0.6312.58/linux64/chrome-headless-shell-linux64.zip && \
+    unzip chrome-headless-shell-linux64.zip -d /opt/
+
+# Основной образ
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates wget
+COPY --from=chrome-downloader /opt/chrome-headless-shell-linux64 /opt/chrome/
+ENV CHROME_BIN=/opt/chrome/chrome-headless-shell
+# ... остальное
+```
+
+**Размеры образов:**
+- С полным Chromium: ~300MB
+- С chrome-headless-shell: ~200MB
+- Без браузера (только HTTP scrape): ~20MB
+
+### Продакшен рекомендации
+
+1. **Используйте Alpine Linux** - минимальный базовый образ
+2. **Multi-stage build** - уменьшает размер финального образа
+3. **Non-root user** - безопасность
+4. **Health checks** - мониторинг состояния
+5. **Resource limits** - защита от OOM
+6. **Volumes для cache** - персистентность данных
+
 ## Интеграция с llama.cpp
 
 ### Настройка в WebUI

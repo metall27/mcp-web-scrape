@@ -1,0 +1,66 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+AGENTS.md
+*.md
+
+# Examples
+examples/
+
+# Build artifacts
+mcp-web-scrape
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+test/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Cache
+.cache/
+
+# Docker files (не копировать в образ)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Config (монтируем извне)
+config.local.yaml
+.env
+.env.local
+
+# Coverage
+*.out
+coverage/
+
+# Dependency directories
+vendor/
