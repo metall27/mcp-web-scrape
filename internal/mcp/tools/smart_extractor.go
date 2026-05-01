@@ -108,20 +108,87 @@ func (t *SmartExtractorTool) extractNews(html string, maxItems int) map[string]i
 }
 
 func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
-	// Extract code blocks, API docs, technical content
-	codeRegex := regexp.MustCompile(`<pre[^>]*><code[^>]*>(.+?)</code></pre>`)
+	// Extract code blocks with language detection
+	codeRegex := regexp.MustCompile(`(?i)<pre[^>]*><code[^>]*class="(?:language-|highlight-)?([^"]*)"?[^>]*>(.+?)</code></pre>`)
 	codeBlocks := codeRegex.FindAllStringSubmatch(html, -1)
 
 	var codes []map[string]interface{}
 	for _, match := range codeBlocks {
-		code := t.cleanHTML(match[1])
+		var language string
+		if len(match) > 2 && match[1] != "" {
+			language = match[1]
+		} else {
+			language = t.detectLanguage(match[2])
+		}
+		code := t.cleanHTML(match[2])
 		codes = append(codes, map[string]interface{}{
 			"code":     code,
-			"language": t.detectLanguage(code),
+			"language": language,
 		})
 	}
 
-	// Extract headings
+	// Extract API endpoints (REST/GraphQL)
+	apiRegex := regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH|query|mutation)\s+["']?(/[^\s"']+)["']?`)
+	apiMatches := apiRegex.FindAllStringSubmatch(html, -1)
+
+	var endpoints []map[string]string
+	for _, match := range apiMatches {
+		if len(match) > 2 {
+			endpoints = append(endpoints, map[string]string{
+				"method": match[1],
+				"path":   match[2],
+			})
+		}
+	}
+
+	// Extract command line examples
+	cliRegex := regexp.MustCompile(`(?i)(?:`+"```"+`\s*(?:bash|sh|shell|cmd)?|<code[^>]*class="language-(?:bash|sh)">)([^\n]+(?:\n[^\n]+)*?)(?:`+"```"+`|</code>)`)
+	cliExamples := cliRegex.FindAllStringSubmatch(html, -1)
+
+	var commands []string
+	for _, match := range cliExamples {
+		if len(match) > 1 {
+			cmd := t.cleanHTML(match[1])
+			if len(cmd) > 3 && len(cmd) < 500 {
+				commands = append(commands, cmd)
+			}
+		}
+	}
+
+	// Extract configuration examples
+	configRegex := regexp.MustCompile(`(?i)(?:config|configuration|settings|\.env|\.yaml|\.json|\.toml|\.ini)[^:]*[:\s]+([^\n<]+(?:\n[^\n<]+){0,5})`)
+	configs := configRegex.FindAllStringSubmatch(html, -1)
+
+	var configuration []string
+	for _, match := range configs {
+		if len(match) > 1 {
+			config := strings.TrimSpace(match[1])
+			if len(config) > 5 {
+				configuration = append(configuration, config)
+			}
+		}
+	}
+
+	// Extract technical terms and keywords
+	techTerms := []string{
+		"API", "REST", "GraphQL", "WebSocket", "SDK", "library", "framework",
+		"database", "SQL", "NoSQL", "cache", "queue", "microservices",
+		"authentication", "authorization", "OAuth", "JWT", "token",
+		"endpoint", "request", "response", "payload", "schema",
+	}
+	foundTerms := make(map[string]bool)
+	lowerHTML := strings.ToLower(html)
+	for _, term := range techTerms {
+		if strings.Contains(lowerHTML, strings.ToLower(term)) {
+			foundTerms[term] = true
+		}
+	}
+
+	// Extract version numbers
+	versionRegex := regexp.MustCompile(`(?:v|version)?\s*(\d+\.\d+(?:\.\d+)?)`)
+	versions := versionRegex.FindAllString(html, 10)
+
+	// Extract document structure
 	headingsRegex := regexp.MustCompile(`<(h[1-6])[^>]*>(.+?)</\1>`)
 	headings := headingsRegex.FindAllStringSubmatch(html, -1)
 
@@ -136,9 +203,16 @@ func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"type":     "tech",
-		"sections": sections,
-		"codes":    codes,
+		"type":         "tech",
+		"sections":     sections,
+		"codes":        codes,
+		"endpoints":    endpoints,
+		"commands":     commands[:min(len(commands), 10)],
+		"configs":      configuration[:min(len(configuration), 10)],
+		"terms":        foundTerms,
+		"versions":     versions,
+		"code_blocks":  len(codes),
+		"api_count":    len(endpoints),
 	}
 }
 
