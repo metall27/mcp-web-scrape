@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -232,7 +234,48 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	// Run tasks
 	if err := chromedp.Run(ctx, tasks...); err != nil {
-		return nil, fmt.Errorf("chromedp execution failed: %w", err)
+		// Chrome failed, try fallback to HTTP scraping
+		t.logger.Warn().
+			Str("url", urlStr).
+			Err(err).
+			Msg("Chrome scraping failed, attempting HTTP fallback")
+
+		// Create HTTP client and try simple GET
+		client := &http.Client{
+			Timeout: 30 * time.Second,
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		}
+
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("HTTP fallback also failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("HTTP fallback failed with status %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read HTTP response: %w", err)
+		}
+
+		// Use HTTP response
+		html = string(body)
+		finalURL = resp.Request.URL.String()
+
+		t.logger.Info().
+			Str("method", "HTTP fallback").
+			Int("size", len(html)).
+			Msg("Successfully scraped with HTTP fallback")
 	}
 
 	duration := time.Since(startTime)
