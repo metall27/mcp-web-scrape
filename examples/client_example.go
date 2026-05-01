@@ -13,7 +13,7 @@ func main() {
 	serverURL := "http://localhost:8080/mcp"
 
 	// Example 1: Initialize connection
-	fmt.Println("=== Testing MCP Server ===\n")
+	fmt.Println("=== Testing MCP Server ===")
 
 	if err := testHealth(serverURL); err != nil {
 		fmt.Printf("Health check failed: %v\n", err)
@@ -21,7 +21,7 @@ func main() {
 	}
 
 	// Example 2: List available tools
-	fmt.Println("=== Available Tools ===\n")
+	fmt.Println("=== Available Tools ===")
 	tools, err := listTools(serverURL)
 	if err != nil {
 		fmt.Printf("Failed to list tools: %v\n", err)
@@ -32,7 +32,7 @@ func main() {
 	}
 
 	// Example 3: Scrape a URL
-	fmt.Println("\n=== Scraping Example ===\n")
+	fmt.Println("\n=== Scraping Example ===")
 	scrapeResult, err := callTool(serverURL, "scrape_url", map[string]interface{}{
 		"url": "https://example.com",
 	})
@@ -48,7 +48,7 @@ func main() {
 	}
 
 	// Example 4: Parse HTML
-	fmt.Println("\n=== HTML Parsing Example ===\n")
+	fmt.Println("\n=== HTML Parsing Example ===")
 	htmlContent := `<html>
 <body>
     <h1>Hello World</h1>
@@ -78,7 +78,7 @@ func main() {
 	}
 
 	// Example 5: Search
-	fmt.Println("\n=== Search Example ===\n")
+	fmt.Println("\n=== Search Example ===")
 	searchResult, err := callTool(serverURL, "search_web", map[string]interface{}{
 		"query":       "golang web scraping",
 		"max_results": 3,
