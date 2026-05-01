@@ -73,7 +73,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Scrapes content from a URL with JavaScript rendering using headless Chrome",
+		"Scrapes URL with JavaScript rendering. Returns HTML in 'html' field (NOT 'content'). Use for dynamic sites. Returns: url, final_url, status_code, content_type, html, title, rendering, duration_ms",
 		schema,
 		tool.Execute,
 	)
@@ -224,7 +224,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		"final_url":    finalURL,
 		"status_code":  200,
 		"content_type": "text/html",
-		"content":      html,
+		"html":         html,  // Renamed from 'content' to match scrape_url
 		"size_bytes":   len(html),
 		"duration_ms":  duration.Milliseconds(),
 		"title":        title,
