@@ -174,6 +174,12 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	// Limit size to avoid overwhelming LLM (max ~100KB for reliable processing)
+	maxSize := int64(100 * 1024) // 100KB
+	if int64(len(body)) > maxSize {
+		body = body[:maxSize]
+	}
+
 	// Get content type
 	contentType := resp.Header.Get("Content-Type")
 
