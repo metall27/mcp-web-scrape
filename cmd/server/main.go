@@ -76,6 +76,9 @@ func main() {
 			"time":   time.Now().Unix(),
 		})
 	})
+	router.HEAD("/health", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
 
 	// MCP endpoint
 	router.Any(cfg.MCP.Endpoint, func(c *gin.Context) {
