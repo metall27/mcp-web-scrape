@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/rs/zerolog"
 )
@@ -16,10 +19,11 @@ import (
 type ScrapeTool struct {
 	*BaseTool
 	client *http.Client
+	cache  *cache.Cache
 	logger zerolog.Logger
 }
 
-func NewScrapeTool() *ScrapeTool {
+func NewScrapeTool(cache *cache.Cache) *ScrapeTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -47,6 +51,7 @@ func NewScrapeTool() *ScrapeTool {
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 		tool := &ScrapeTool{
+			cache:  cache,
 			logger: logger.Get(),
 		}
 		return tool.execute(ctx, args)
@@ -67,6 +72,27 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 	urlStr, ok := args["url"].(string)
 	if !ok || urlStr == "" {
 		return nil, fmt.Errorf("url is required and must be a string")
+	}
+
+	// Check cache first
+	if t.cache != nil && t.cache.IsEnabled() {
+		cacheKey := t.getCacheKey(urlStr, args)
+		if cached, found := t.cache.Get(ctx, cacheKey); found {
+			t.logger.Info().
+				Str("url", urlStr).
+				Str("cache_key", cacheKey).
+				Msg("Cache hit")
+
+			return map[string]interface{}{
+				"url":          urlStr,
+				"status_code":  200,
+				"content_type": cached.Headers["content_type"],
+				"content":      string(cached.Data),
+				"size_bytes":   len(cached.Data),
+				"cached":       true,
+				"duration_ms":  0,
+			}, nil
+		}
 	}
 
 	// Validate URL
@@ -173,6 +199,34 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 		}
 	}
 
+	// Store in cache
+	if t.cache != nil && t.cache.IsEnabled() {
+		cacheKey := t.getCacheKey(urlStr, args)
+		ttl := t.cache.GetTTLForContentType(contentType)
+
+		cachedResp := &cache.CachedResponse{
+			Data:      body,
+			Timestamp: time.Now(),
+			Headers: map[string]string{
+				"content_type":   contentType,
+				"content_length": resp.Header.Get("Content-Length"),
+				"last_modified":  resp.Header.Get("Last-Modified"),
+			},
+		}
+
+		if err := t.cache.Set(ctx, cacheKey, cachedResp, ttl); err != nil {
+			t.logger.Error().
+				Str("cache_key", cacheKey).
+				Err(err).
+				Msg("Failed to store in cache")
+		} else {
+			t.logger.Info().
+				Str("cache_key", cacheKey).
+				Dur("ttl", ttl).
+				Msg("Stored in cache")
+		}
+	}
+
 	t.logger.Info().
 		Str("url", urlStr).
 		Int("status", resp.StatusCode).
@@ -202,4 +256,19 @@ func extractTitle(html string) string {
 
 	title := html[startIdx : startIdx+endIdx]
 	return strings.TrimSpace(title)
+}
+
+// getCacheKey generates a cache key based on URL and parameters
+func (t *ScrapeTool) getCacheKey(url string, args map[string]interface{}) string {
+	hash := sha256.New()
+	hash.Write([]byte(url))
+
+	// Include custom headers in hash if present
+	if headers, ok := args["headers"].(map[string]interface{}); ok {
+		for k, v := range headers {
+			hash.Write([]byte(k + ":" + fmt.Sprint(v)))
+		}
+	}
+
+	return "scrape:" + hex.EncodeToString(hash.Sum(nil))[:16]
 }

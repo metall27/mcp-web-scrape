@@ -66,9 +66,10 @@ type RateLimitConfig struct {
 }
 
 type CacheConfig struct {
-	Enabled    bool          `mapstructure:"enabled"`
-	TTL        time.Duration `mapstructure:"ttl"`
-	CleanupInt time.Duration `mapstructure:"cleanup_interval"`
+	Enabled       bool                       `mapstructure:"enabled"`
+	TTL           time.Duration              `mapstructure:"ttl"`             // default TTL
+	TTLByType     map[string]time.Duration   `mapstructure:"ttl_by_type"`     // TTL по Content-Type
+	CleanupInt    time.Duration              `mapstructure:"cleanup_interval"`
 }
 
 type LogConfig struct {
@@ -143,7 +144,12 @@ func setDefaults(v *viper.Viper) {
 
 	// Cache defaults
 	v.SetDefault("cache.enabled", true)
-	v.SetDefault("cache.ttl", 5*time.Minute)
+	v.SetDefault("cache.ttl", 15*time.Minute)
+	v.SetDefault("cache.ttl_by_type.text/html", 5*time.Minute)
+	v.SetDefault("cache.ttl_by_type.application/json", 10*time.Minute)
+	v.SetDefault("cache.ttl_by_type.text/css", 1*time.Hour)
+	v.SetDefault("cache.ttl_by_type.application/javascript", 1*time.Hour)
+	v.SetDefault("cache.ttl_by_type.image/*", 1*time.Hour)
 	v.SetDefault("cache.cleanup_interval", 10*time.Minute)
 
 	// Log defaults

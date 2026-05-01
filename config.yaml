@@ -39,7 +39,13 @@ rate_limit:
 
 cache:
   enabled: true
-  ttl: 5m
+  ttl: 15m  # default TTL
+  ttl_by_type:
+    text/html: 5m                # HTML быстро устаревает
+    application/json: 10m        # API ответы
+    text/css: 1h                 # CSS статику
+    application/javascript: 1h   # JS статику
+    image/*: 1h                  # Изображения
   cleanup_interval: 10m
 
 log:

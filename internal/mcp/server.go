@@ -64,7 +64,7 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) registerDefaultTools() error {
 	defaultTools := []tools.Tool{
-		tools.NewScrapeTool(),
+		tools.NewScrapeTool(s.cache),
 		tools.NewScrapeJSTool(),
 		tools.NewSearchTool(),
 		tools.NewParseHTMLTool(),
