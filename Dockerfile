@@ -46,16 +46,16 @@ RUN chown -R mcp:mcp /app
 USER mcp
 
 # Порты
-# 8080 - HTTP/MCP server
-EXPOSE 8080
+# 8192 - HTTP/MCP server
+EXPOSE 8192
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8192/health || exit 1
 
 # Переменные окружения по умолчанию
 ENV MCP_WEB_SCRAPE_SERVER_HOST=0.0.0.0
-ENV MCP_WEB_SCRAPE_SERVER_PORT=8080
+ENV MCP_WEB_SCRAPE_SERVER_PORT=8192
 ENV MCP_WEB_SCRAPE_LOG_LEVEL=info
 ENV MCP_WEB_SCRAPE_BROWSER_ENABLED=true
 ENV MCP_WEB_SCRAPE_BROWSER_HEADLESS=true
