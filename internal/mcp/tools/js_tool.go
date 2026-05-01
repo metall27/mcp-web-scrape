@@ -44,6 +44,12 @@ func NewScrapeJSTool() *ScrapeJSTool {
 				"description": "Take a screenshot of the page (base64 encoded)",
 				"default":     false,
 			},
+			"screenshot_mode": map[string]interface{}{
+				"type":        "string",
+				"description": "When to take screenshot: never (default), auto (if HTML > 50KB), always",
+				"enum":        []string{"never", "auto", "always"},
+				"default":     "never",
+			},
 			"user_agent": map[string]interface{}{
 				"type":        "string",
 				"description": "Custom user agent string",
@@ -119,6 +125,17 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		screenshot = ss
 	}
 
+	screenshotMode := "never"
+	if sm, ok := args["screenshot_mode"].(string); ok {
+		screenshotMode = sm
+	}
+
+	// Determine if we should take screenshot
+	shouldScreenshot := screenshot
+	if screenshotMode == "always" {
+		shouldScreenshot = true
+	}
+
 	userAgent := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	if ua, ok := args["user_agent"].(string); ok && ua != "" {
 		userAgent = ua
@@ -144,7 +161,8 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Int("timeout", timeout).
 		Str("wait_for", waitFor).
 		Int("wait_time", waitTime).
-		Bool("screenshot", screenshot).
+		Bool("screenshot", shouldScreenshot).
+		Str("screenshot_mode", screenshotMode).
 		Msg("Starting JavaScript-rendered scrape")
 
 	// Create context with timeout
@@ -206,8 +224,8 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		chromedp.Location(&finalURL),
 	)
 
-	// Take screenshot if requested
-	if screenshot {
+	// Take screenshot if requested (always take in auto mode, decide later whether to include)
+	if shouldScreenshot || screenshotMode == "auto" {
 		tasks = append(tasks, chromedp.FullScreenshot(&screenshotData, 90))
 	}
 
@@ -218,12 +236,28 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	duration := time.Since(startTime)
 
+	// Decide whether to include screenshot based on mode
+	includeScreenshot := shouldScreenshot
+	if screenshotMode == "auto" && len(screenshotData) > 0 {
+		// Include screenshot if HTML is large (> 50KB)
+		includeScreenshot = len(html) > 50*1024
+	}
+
 	// Build result in MCP format
 	content := []map[string]interface{}{
 		{
 			"type": "text",
 			"text": html,
 		},
+	}
+
+	// Add screenshot as image content if applicable
+	if includeScreenshot && len(screenshotData) > 0 {
+		content = append(content, map[string]interface{}{
+			"type": "image",
+			"data": screenshotData,
+			"mimeType": "image/png",
+		})
 	}
 
 	result := map[string]interface{}{
@@ -240,10 +274,18 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		},
 	}
 
-	if screenshot {
-		result["_metadata"].(map[string]interface{})["screenshot"] = screenshotData
+	if includeScreenshot {
+		result["_metadata"].(map[string]interface{})["screenshot_included"] = true
 		result["_metadata"].(map[string]interface{})["screenshot_size"] = len(screenshotData)
 	}
+
+	t.logger.Info().
+		Str("url", urlStr).
+		Str("final_url", finalURL).
+		Int("size_bytes", len(html)).
+		Int64("duration_ms", duration.Milliseconds()).
+		Bool("screenshot_included", includeScreenshot).
+		Msg("Successfully scraped URL with JavaScript")
 
 	t.logger.Info().
 		Str("url", urlStr).
