@@ -16,8 +16,8 @@ func TestLoadDefaults(t *testing.T) {
 		t.Errorf("Expected default host '0.0.0.0', got '%s'", cfg.Server.Host)
 	}
 
-	if cfg.Server.Port != 8080 {
-		t.Errorf("Expected default port 8080, got %d", cfg.Server.Port)
+	if cfg.Server.Port != 8192 {
+		t.Errorf("Expected default port 8192, got %d", cfg.Server.Port)
 	}
 
 	// Check cache defaults

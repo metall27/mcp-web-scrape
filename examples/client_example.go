@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	serverURL := "http://localhost:8080/mcp"
+	serverURL := "http://localhost:8192/mcp"
 
 	// Example 1: Initialize connection
 	fmt.Println("=== Testing MCP Server ===")
@@ -95,7 +95,7 @@ func main() {
 }
 
 func testHealth(serverURL string) error {
-	healthURL := "http://localhost:8080/health"
+	healthURL := "http://localhost:8192/health"
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	resp, err := client.Get(healthURL)

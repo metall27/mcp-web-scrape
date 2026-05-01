@@ -108,7 +108,7 @@ sudo mv chrome-headless-shell-linux64/chrome-headless-shell /usr/local/bin/
 | Переменная | По умолчанию |
 |------------|--------------|
 | `MCP_WEB_SCRAPE_SERVER_HOST` | `0.0.0.0` |
-| `MCP_WEB_SCRAPE_SERVER_PORT` | `8080` |
+| `MCP_WEB_SCRAPE_SERVER_PORT` | `8192` |
 | `MCP_WEB_SCRAPE_LOG_LEVEL` | `info` |
 
 Или через файл `config.yaml`.
@@ -119,14 +119,14 @@ sudo mv chrome-headless-shell-linux64/chrome-headless-shell /usr/local/bin/
 
 1. Запустите сервер: `docker-compose up -d`
 2. В llama.cpp WebUI → MCP настройки добавьте:
-   - **URL**: `http://host.docker.internal:8080/mcp`
+   - **URL**: `http://host.docker.internal:8192/mcp`
    - **Enable proxy**: ✅
 
 ### Локальный бинарник
 
 1. Запустите: `./mcp-web-scrape`
 2. В llama.cpp WebUI → MCP настройки добавьте:
-   - **URL**: `http://127.0.0.1:8080/mcp`
+   - **URL**: `http://127.0.0.1:8192/mcp`
    - **Enable proxy**: ✅
 
 ## API-эндпоинты
