@@ -85,6 +85,11 @@ func main() {
 		transport.HandleMCP(c.Writer, c.Request)
 	})
 
+	// SSE endpoint for llama.cpp WebUI compatibility
+	router.Any("/sse", func(c *gin.Context) {
+		transport.HandleMCP(c.Writer, c.Request)
+	})
+
 	// API info
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
