@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -235,6 +236,17 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	duration := time.Since(startTime)
+
+	// Optimize HTML to reduce size
+	if strings.Contains(urlStr, "github.com") {
+		html = string(OptimizeGitHubHTML([]byte(html)))
+	} else {
+		html = string(OptimizeHTML([]byte(html)))
+	}
+
+	t.logger.Info().
+		Int("optimized_size", len(html)).
+		Msg("HTML optimized for inference")
 
 	// Decide whether to include screenshot based on mode
 	includeScreenshot := shouldScreenshot
