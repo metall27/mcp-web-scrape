@@ -324,8 +324,8 @@ func (t *ScrapeTool) optimizeHTML(html []byte) []byte {
 	linkRegex := regexp.MustCompile(`<link[^>]+>`)
 	htmlStr = linkRegex.ReplaceAllString(htmlStr, "")
 
-	// Remove meta tags (all except important ones like description/keywords)
-	metaRegex := regexp.MustCompile(`<meta(?!\s+(?:name="description"|name="keywords"|property="og:|name="twitter:))[^>]+>`)
+	// Remove all meta tags (not needed for content extraction)
+	metaRegex := regexp.MustCompile(`<meta[^>]+>`)
 	htmlStr = metaRegex.ReplaceAllString(htmlStr, "")
 
 	// Remove UI elements that don't contain content
