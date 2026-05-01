@@ -84,14 +84,23 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 				Str("cache_key", cacheKey).
 				Msg("Cache hit")
 
+			content := []map[string]interface{}{
+				{
+					"type": "text",
+					"text": string(cached.Data),
+				},
+			}
+
 			return map[string]interface{}{
-				"url":          urlStr,
-				"status_code": 200,
-				"content_type": cached.Headers["content_type"],
-				"html":         string(cached.Data),
-				"size_bytes":   len(cached.Data),
-				"cached":       true,
-				"duration_ms":  0,
+				"content": content,
+				"_metadata": map[string]interface{}{
+					"url":          urlStr,
+					"status_code":  200,
+					"content_type": cached.Headers["content_type"],
+					"size_bytes":   len(cached.Data),
+					"cached":       true,
+					"duration_ms":  0,
+				},
 			}, nil
 		}
 	}
@@ -186,18 +195,22 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 			Msg("HTML optimized for inference")
 	}
 
-	// Build result
+	// Build result in MCP format
+	content := []map[string]interface{}{
+		{
+			"type": "text",
+			"text": string(body),
+		},
+	}
+
 	result := map[string]interface{}{
-		"url":         urlStr,
-		"status_code": resp.StatusCode,
-		"content_type": contentType,
-		"html":        string(body),  // Renamed from 'content' to avoid LLM confusion
-		"size_bytes":  len(body),
-		"duration_ms": duration.Milliseconds(),
-		"headers": map[string]string{
+		"content": content,
+		"_metadata": map[string]interface{}{
+			"url":          urlStr,
+			"status_code":  resp.StatusCode,
 			"content_type": contentType,
-			"content_length": resp.Header.Get("Content-Length"),
-			"last_modified": resp.Header.Get("Last-Modified"),
+			"size_bytes":   len(body),
+			"duration_ms":  duration.Milliseconds(),
 		},
 	}
 

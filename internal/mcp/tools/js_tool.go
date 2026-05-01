@@ -218,22 +218,31 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	duration := time.Since(startTime)
 
-	// Build result
+	// Build result in MCP format
+	content := []map[string]interface{}{
+		{
+			"type": "text",
+			"text": html,
+		},
+	}
+
 	result := map[string]interface{}{
-		"url":          urlStr,
-		"final_url":    finalURL,
-		"status_code":  200,
-		"content_type": "text/html",
-		"html":         html,  // Renamed from 'content' to match scrape_url
-		"size_bytes":   len(html),
-		"duration_ms":  duration.Milliseconds(),
-		"title":        title,
-		"rendering":    "javascript",
+		"content": content,
+		"_metadata": map[string]interface{}{
+			"url":          urlStr,
+			"final_url":    finalURL,
+			"status_code":  200,
+			"content_type": "text/html",
+			"size_bytes":   len(html),
+			"duration_ms":  duration.Milliseconds(),
+			"title":        title,
+			"rendering":    "javascript",
+		},
 	}
 
 	if screenshot {
-		result["screenshot"] = screenshotData
-		result["screenshot_size"] = len(screenshotData)
+		result["_metadata"].(map[string]interface{})["screenshot"] = screenshotData
+		result["_metadata"].(map[string]interface{})["screenshot_size"] = len(screenshotData)
 	}
 
 	t.logger.Info().
