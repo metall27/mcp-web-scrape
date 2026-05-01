@@ -184,13 +184,13 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		// Stealth mode to avoid bot detection
 		chromedp.Flag("exclude-switches", "enable-automation"),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("disable-extensions"),
-		chromedp.Flag("disable-dev-shm-usage"),
-		chromedp.Flag("no-first-run"),
-		chromedp.Flag("no-default-browser-check"),
-		chromedp.Flag("disable-background-timer-throttling"),
-		chromedp.Flag("disable-backgrounding-occluded-windows"),
-		chromedp.Flag("disable-renderer-backgrounding"),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
 	}
 
 	// Add image blocking if requested
