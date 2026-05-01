@@ -381,10 +381,102 @@ func (t *SmartExtractorTool) extractGeneral(html string) map[string]interface{} 
 	}
 }
 
-// Helper functions from extract_news.go
+// Helper functions
 func (t *SmartExtractorTool) extractNewsFromHTML(html string, maxItems int) []map[string]interface{} {
-	// [Previous extractNewsFromHTML implementation]
-	return []map[string]interface{}{}
+	var news []map[string]interface{}
+
+	// Multiple patterns for Russian news sites
+	patterns := []struct {
+		titlePattern string
+		linkPattern  string
+	}{
+		// Mail.ru pattern
+		{
+			titlePattern: `<a[^>]*class="list__text"[^>]*>(.+?)</a>`,
+			linkPattern:  `href="([^"]+)"`,
+		},
+		// Generic news patterns
+		{
+			titlePattern: `<h[23][^>]*><a[^>]*>(.+?)</a></h[23]>`,
+			linkPattern:  `href="([^"]+)"`,
+		},
+		{
+			titlePattern: `<a[^>]*class="[^"]*title[^"]*"[^>]*>(.+?)</a>`,
+			linkPattern:  `href="([^"]+)"`,
+		},
+		{
+			titlePattern: `<a[^>]*class="[^"]*headline[^"]*"[^>]*>(.+?)</a>`,
+			linkPattern:  `href="([^"]+)"`,
+		},
+	}
+
+	for _, pattern := range patterns {
+		titleRegex := regexp.MustCompile(pattern.titlePattern)
+		linkRegex := regexp.MustCompile(pattern.linkPattern)
+
+		titleMatches := titleRegex.FindAllStringSubmatch(html, maxItems*2)
+		linkMatches := linkRegex.FindAllStringSubmatch(html, maxItems*2)
+
+		for i := 0; i < len(titleMatches) && i < maxItems; i++ {
+			if i >= len(linkMatches) {
+				break
+			}
+
+			title := t.cleanHTML(titleMatches[i][1])
+			link := strings.TrimSpace(linkMatches[i][1])
+
+			// Clean up HTML entities
+			title = t.decodeEntities(title)
+
+			if title == "" || link == "" {
+				continue
+			}
+
+			// Make absolute URL if relative
+			if strings.HasPrefix(link, "/") {
+				// Try to detect base URL from context or use default
+				if strings.Contains(html, "mail.ru") {
+					link = "https://news.mail.ru" + link
+				} else {
+					link = "https://" + link
+				}
+			} else if !strings.HasPrefix(link, "http") {
+				link = "https://" + link
+			}
+
+			news = append(news, map[string]interface{}{
+				"title": title,
+				"link":  link,
+			})
+
+			if len(news) >= maxItems {
+				break
+			}
+		}
+
+		if len(news) > 0 {
+			break
+		}
+	}
+
+	return news
+}
+
+func (t *SmartExtractorTool) decodeEntities(text string) string {
+	// Simple HTML entity decoding
+	replacer := strings.NewReplacer(
+		"&quot;", "\"",
+		"&amp;", "&",
+		"&lt;", "<",
+		"&gt;", ">",
+		"&nbsp;", " ",
+		"&#39;", "'",
+		"&mdash;", "—",
+		"&ndash;", "–",
+		"« ", "",
+		" »", "",
+	)
+	return replacer.Replace(text)
 }
 
 func (t *SmartExtractorTool) cleanHTML(text string) string {
