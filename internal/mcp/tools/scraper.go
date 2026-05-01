@@ -85,9 +85,9 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 
 			return map[string]interface{}{
 				"url":          urlStr,
-				"status_code":  200,
+				"status_code": 200,
 				"content_type": cached.Headers["content_type"],
-				"content":      string(cached.Data),
+				"html":         string(cached.Data),
 				"size_bytes":   len(cached.Data),
 				"cached":       true,
 				"duration_ms":  0,
