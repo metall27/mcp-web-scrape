@@ -58,7 +58,7 @@ func NewSearchTool() *SearchTool {
 	return &SearchTool{
 		BaseTool: NewBaseTool(
 			"search_web",
-			"Searches the web to FIND URLs. Use to discover new sources or when you don't have a specific URL. For known URLs, use scrape_url + smart_extract instead. DuckDuckGo currently unreliable, prefer scraping known sources.",
+			"Searches the web to FIND URLs. Use to discover new sources or when you don't have a specific URL yet. Once you have a URL, use scrape_with_js to get the content. DuckDuckGo currently unreliable, prefer scraping known sources directly.",
 			schema,
 			handler,
 		),

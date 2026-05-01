@@ -80,7 +80,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Universal web scraping tool. Works with ALL websites - static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage. Returns optimized HTML + screenshot when applicable.",
+		"Universal web scraping tool - works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage. This is the ONLY scraping tool needed - it handles both static and dynamic content.",
 		schema,
 		tool.Execute,
 	)
