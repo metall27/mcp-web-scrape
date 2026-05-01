@@ -47,9 +47,9 @@ func NewScrapeJSTool() *ScrapeJSTool {
 			},
 			"screenshot_mode": map[string]interface{}{
 				"type":        "string",
-				"description": "When to take screenshot: never (default), auto (if HTML > 50KB), always",
+				"description": "When to take screenshot: never, auto (default - if HTML > 50KB), always",
 				"enum":        []string{"never", "auto", "always"},
-				"default":     "never",
+				"default":     "auto",
 			},
 			"user_agent": map[string]interface{}{
 				"type":        "string",
@@ -80,7 +80,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Scrapes URL with JavaScript rendering. Returns HTML in 'html' field (NOT 'content'). Use for dynamic sites. Returns: url, final_url, status_code, content_type, html, title, rendering, duration_ms",
+		"Scrapes URL with JavaScript rendering. Automatically takes screenshots for large HTML pages (>50KB) to reduce token usage while preserving visual context. Use for dynamic sites like GitHub, dashboards, SPA. Returns: url, final_url, status_code, html, screenshot (if HTML > 50KB), title, rendering, duration_ms",
 		schema,
 		tool.Execute,
 	)
