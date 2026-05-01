@@ -240,9 +240,16 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Err(err).
 			Msg("Chrome scraping failed, attempting HTTP fallback")
 
-		// Create HTTP client and try simple GET
+		// Create HTTP client with redirect following
 		client := &http.Client{
 			Timeout: 30 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// Allow up to 10 redirects
+				if len(via) >= 10 {
+					return fmt.Errorf("too many redirects")
+				}
+				return nil
+			},
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
@@ -250,8 +257,13 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 		}
 
+		// Set realistic browser headers
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		req.Header.Set("Connection", "keep-alive")
+		req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -268,6 +280,13 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			return nil, fmt.Errorf("failed to read HTTP response: %w", err)
 		}
 
+		// Check if response is too small (likely an error or redirect)
+		if len(body) < 100 {
+			t.logger.Warn().
+				Int("size", len(body)).
+				Msg("HTTP fallback returned very small response, might be an error page")
+		}
+
 		// Use HTTP response
 		html = string(body)
 		finalURL = resp.Request.URL.String()
@@ -275,6 +294,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		t.logger.Info().
 			Str("method", "HTTP fallback").
 			Int("size", len(html)).
+			Str("final_url", finalURL).
 			Msg("Successfully scraped with HTTP fallback")
 	}
 
