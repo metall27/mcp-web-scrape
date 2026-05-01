@@ -304,6 +304,10 @@ func (t *ScrapeTool) getCacheKey(url string, args map[string]interface{}) string
 func (t *ScrapeTool) optimizeHTML(html []byte) []byte {
 	htmlStr := string(html)
 
+	// Remove entire head section (stylesheets, scripts, meta tags)
+	headRegex := regexp.MustCompile(`(?is)<head>.*?</head>`)
+	htmlStr = headRegex.ReplaceAllString(htmlStr, "")
+
 	// Remove script tags and their content
 	scriptRegex := regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
 	htmlStr = scriptRegex.ReplaceAllString(htmlStr, "")
@@ -316,111 +320,120 @@ func (t *ScrapeTool) optimizeHTML(html []byte) []byte {
 	commentRegex := regexp.MustCompile(`<!--.*?-->`)
 	htmlStr = commentRegex.ReplaceAllString(htmlStr, "")
 
-	// Remove common meta tags (keep description, keywords, OG, twitter cards)
-	metaRemove := []string{
-		`<meta\s+charset="[^"]*"`,
-		`<meta\s+http-equiv="[^"]*"\s+content="[^"]*"`,
-		`<meta\s+name="viewport"[^>]*>`,
-		`<meta\s+name="theme-color"[^>]*>`,
+	// Remove link tags (stylesheets, DNS prefetch, etc)
+	linkRegex := regexp.MustCompile(`<link[^>]+>`)
+	htmlStr = linkRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove meta tags (all except important ones like description/keywords)
+	metaRegex := regexp.MustCompile(`<meta(?!\s+(?:name="description"|name="keywords"|property="og:|name="twitter:))[^>]+>`)
+	htmlStr = metaRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove UI elements that don't contain content
+	uiElements := []struct {
+		pattern string
+		reason  string
+	}{
+		// Navigation
+		{`(?is)<nav[^>]*>.*?</nav>`, "navigation"},
+		{`(?is)<header[^>]*>.*?</header>`, "header"},
+		{`(?is)<footer[^>]*>.*?</footer>`, "footer"},
+
+		// Buttons and forms
+		{`(?is)<button[^>]*>.*?</button>`, "buttons"},
+		{`(?is)<input[^>]+>`, "inputs"},
+		{`(?is)<textarea[^>]*>.*?</textarea>`, "textareas"},
+		{`(?is)<select[^>]*>.*?</select>`, "selects"},
+
+		// Loaders and placeholders
+		{`<div[^>]*class="[^"]*\b(?:loading|skeleton|spinner|placeholder)\b[^"]*"[^>]*>.*?</div>`, "loaders"},
+
+		// Iframes and embeds
+		{`(?is)<iframe[^>]*>.*?</iframe>`, "iframes"},
+		{`(?is)<embed[^>]+>`, "embeds"},
+		{`(?is)<object[^>]*>.*?</object>`, "objects"},
+
+		// Templates and lazy-loaded fragments
+		{`<template[^>]*>.*?</template>`, "templates"},
+		{`<include-fragment[^>]*>.*?</include-fragment>`, "fragments"},
+
+		// SVG icons
+		{`(?is)<svg[^>]*>.*?</svg>`, "svg icons"},
+
+		// Noscript tags
+		{`(?is)<noscript[^>]*>.*?</noscript>`, "noscript"},
+
+		// Details/summary (accordions, dropdowns)
+		{`(?is)<details[^>]*>.*?</details>`, "dropdowns"},
 	}
-	for _, pattern := range metaRemove {
-		metaRegex := regexp.MustCompile(`(?i)` + pattern)
-		htmlStr = metaRegex.ReplaceAllString(htmlStr, "")
+
+	for _, p := range uiElements {
+		re := regexp.MustCompile(p.pattern)
+		htmlStr = re.ReplaceAllString(htmlStr, "")
 	}
 
-	// Remove SVG content
-	svgRegex := regexp.MustCompile(`(?is)<svg[^>]*>.*?</svg>`)
-	htmlStr = svgRegex.ReplaceAllString(htmlStr, "")
+	// Remove ALL span tags (mostly inline wrappers)
+	spanRegex := regexp.MustCompile(`(?is)</?span[^>]*>`)
+	htmlStr = spanRegex.ReplaceAllString(htmlStr, "")
 
-	// Remove noscript tags
-	noscriptRegex := regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
-	htmlStr = noscriptRegex.ReplaceAllString(htmlStr, "")
-
-	// Remove iframe tags (ads, embeds)
-	iframeRegex := regexp.MustCompile(`(?is)<iframe[^>]*>.*?</iframe>`)
-	htmlStr = iframeRegex.ReplaceAllString(htmlStr, "")
-
-	// Remove empty div tags
+	// Remove empty divs
 	emptyDivRegex := regexp.MustCompile(`<div[^>]*>\s*</div>`)
 	htmlStr = emptyDivRegex.ReplaceAllString(htmlStr, "")
 
-	// Remove empty span tags
-	emptySpanRegex := regexp.MustCompile(`<span[^>]*>\s*</span>`)
-	htmlStr = emptySpanRegex.ReplaceAllString(htmlStr, "")
+	// Simplify attributes - remove all data-* attributes
+	dataAttrRegex := regexp.MustCompile(`\s+data-[a-z0-9-]+="[^"]*"`)
+	htmlStr = dataAttrRegex.ReplaceAllString(htmlStr, "")
 
-	// Optimize whitespace - collapse multiple spaces to single space
-	spaceRegex := regexp.MustCompile(`\s+`)
-	htmlStr = spaceRegex.ReplaceAllString(htmlStr, " ")
+	// Remove aria attributes (keep content, remove accessibility metadata)
+	ariaAttrRegex := regexp.MustCompile(`\s+aria-[a-z0-9-]+="[^"]*"`)
+	htmlStr = ariaAttrRegex.ReplaceAllString(htmlStr, "")
 
-	// Remove spaces between tags
+	// Remove id attributes
+	idAttrRegex := regexp.MustCompile(`\s+id="[^"]*"`)
+	htmlStr = idAttrRegex.ReplaceAllString(htmlStr, "")
+
+	// Simplify class attributes (remove utility classes, keep semantic)
+	simplifyClassRegex := regexp.MustCompile(`\s+class="[^"]*\b(?:btn|nav|footer|header|sidebar|wrapper|container|loading|skeleton|spinner)\b[^"]*"`)
+	htmlStr = simplifyClassRegex.ReplaceAllString(htmlStr, "")
+
+	// Collapse whitespace
+	htmlStr = regexp.MustCompile(`\s+`).ReplaceAllString(htmlStr, " ")
 	htmlStr = regexp.MustCompile(`>\s+<`).ReplaceAllString(htmlStr, "><")
-
-	// Trim leading/trailing whitespace
 	htmlStr = strings.TrimSpace(htmlStr)
 
 	return []byte(htmlStr)
 }
 
-// optimizeGitHubHTML applies GitHub-specific optimizations
+// optimizeGitHubHTML applies GitHub-specific optimizations on top of general
 func (t *ScrapeTool) optimizeGitHubHTML(html []byte) []byte {
 	htmlStr := string(html)
 
-	// First apply general optimization
+	// Apply general optimization first
 	htmlStr = string(t.optimizeHTML(html))
 
-	// Remove GitHub-specific elements that don't contain useful information
-	patterns := []struct {
+	// GitHub-specific removals
+	githubPatterns := []struct {
 		pattern string
 		reason  string
 	}{
-		// Navigation and header
-		{`(?is)<header[^>]*>.*?</header>`, "header"},
-		{`(?is)<nav[^>]*>.*?</nav>`, "navigation"},
+		// GitHub-specific UI components
+		{`<div[^>]*class="[^"]*\bPageLayout-PaneWrapper\b[^"]*"[^>]*>.*?</div>`, "sidebar panels"},
+		{`<div[^>]*class="[^"]*\breact-directory\b[^"]*"[^>]*>.*?</div>`, "react directory"},
+		{`(?is)<rails-partial[^>]*>.*?</rails-partial>`, "rails partials"},
+		{`<li[^>]*class="[^"]*\bNavLink\b[^"]*"[^>]*>.*?</li>`, "nav links"},
 
-		// Footer
-		{`(?is)<footer[^>]*>.*?</footer>`, "footer"},
-
-		// Skeleton loaders (placeholders)
-		{`(?is)<div[^>]*class="[^"]*Skeleton[^"]*"[^>]*>\s*</div>`, "skeleton divs"},
+		// GitHub skeleton loaders (specific class names)
 		{`<div[^>]*class="[^"]*\bSkeleton\b[^"]*"[^>]*>.*?</div>`, "skeleton loaders"},
 
-		// React app internals
-		{`(?is)<react-app[^>]*>.*?</react-app>`, "react app wrapper"},
-		{`<div[^>]*data-testid="[^"]*"[^>]*>`, "test id divs"},
-
-		// Sidebars and panels
-		{`(?is)<div[^>]*class="[^"]*\bPageLayout-PaneWrapper\b[^"]*"[^>]*>.*?</div>`, "sidebar panels"},
-
-		// Action menus, buttons, interactions
-		{`(?is)<button[^>]*>.*?</button>`, "buttons"},
-		{`(?is)<details[^>]*>.*?</details>`, "dropdowns"},
-
-		// Empty and placeholder containers
-		{`<include-fragment[^>]*>.*?</include-fragment>`, "lazy loaded fragments"},
-		{`<rails-partial[^>]*>.*?</rails-partial>`, "rails partials"},
-
-		// Accessibility wrappers
-		{`<h2[^>]*class="[^"]*\bsr-only\b[^"]*"[^>]*>.*?</h2>`, "screen reader headers"},
+		// Empty utility containers
+		{`<div[^>]*class="[^"]*\b(?:overflow-hidden|d-flex|flex-.*?|Box\b)[^"]*"[^>]*>\s*</div>`, "empty utility divs"},
 	}
 
-	for _, p := range patterns {
+	for _, p := range githubPatterns {
 		re := regexp.MustCompile(p.pattern)
 		htmlStr = re.ReplaceAllString(htmlStr, "")
 	}
 
-	// Remove all data- attributes from remaining tags (they're GitHub internals)
-	attrRegex := regexp.MustCompile(`\s+data-[a-z-]+="[^"]*"`)
-	htmlStr = attrRegex.ReplaceAllString(htmlStr, "")
-
-	// Remove aria- attributes except aria-label
-	ariaRegex := regexp.MustCompile(`\s+aria-(?:label|-labelledby|describedby)="[^"]*"`)
-	htmlStr = ariaRegex.ReplaceAllString(htmlStr, "")
-
-	// Remove utility class names (GitHub uses BEM-like patterns)
-	classRegex := regexp.MustCompile(`\s+class="[^"]*\b(?:prc-Link|Link--primary|Link--secondary|color-fg-|text-|tmp-)[^"]*"`)
-	htmlStr = classRegex.ReplaceAllString(htmlStr, ` class=""`)
-
-	// Final whitespace cleanup
+	// Final cleanup
 	htmlStr = regexp.MustCompile(`\s+`).ReplaceAllString(htmlStr, " ")
 	htmlStr = regexp.MustCompile(`>\s+<`).ReplaceAllString(htmlStr, "><")
 	htmlStr = strings.TrimSpace(htmlStr)
