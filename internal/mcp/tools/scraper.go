@@ -60,7 +60,7 @@ func NewScrapeTool(cache *cache.Cache) *ScrapeTool {
 	return &ScrapeTool{
 		BaseTool: NewBaseTool(
 			"scrape_url",
-			"Scrapes content from a URL and returns the full HTML/body content. Use this to get page content directly, then process with smart_extract. Much faster than search for known URLs.",
+			"Scrapes a URL and returns HTML in the 'html' field (NOT 'content'). Use for known URLs, then process with smart_extract. Returns: url, status_code, content_type, html, size_bytes, duration_ms, headers",
 			schema,
 			handler,
 		),
@@ -182,7 +182,7 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 		"url":         urlStr,
 		"status_code": resp.StatusCode,
 		"content_type": contentType,
-		"content":     string(body),
+		"html":        string(body),  // Renamed from 'content' to avoid LLM confusion
 		"size_bytes":  len(body),
 		"duration_ms": duration.Milliseconds(),
 		"headers": map[string]string{
