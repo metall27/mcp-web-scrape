@@ -68,6 +68,7 @@ func (s *Server) registerDefaultTools() error {
 		tools.NewScrapeJSTool(),
 		tools.NewSearchTool(),
 		tools.NewParseHTMLTool(),
+		tools.NewExtractNewsTool(),
 	}
 
 	for _, tool := range defaultTools {
