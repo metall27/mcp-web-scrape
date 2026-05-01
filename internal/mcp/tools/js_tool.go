@@ -39,8 +39,8 @@ func NewScrapeJSTool() *ScrapeJSTool {
 			},
 			"wait_time": map[string]interface{}{
 				"type":        "integer",
-				"description": "Additional wait time in milliseconds after page load (default: 1000)",
-				"default":     1000,
+				"description": "Additional wait time in milliseconds after page load (default: 3000)",
+				"default":     3000,
 			},
 			"screenshot": map[string]interface{}{
 				"type":        "boolean",
@@ -118,7 +118,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		waitFor = wf
 	}
 
-	waitTime := 1000
+	waitTime := 3000
 	if wt, ok := args["wait_time"].(float64); ok {
 		waitTime = int(wt)
 	}
@@ -181,6 +181,16 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		chromedp.Headless,
 		chromedp.UserAgent(userAgent),
 		chromedp.WindowSize(viewportWidth, viewportHeight),
+		// Stealth mode to avoid bot detection
+		chromedp.Flag("exclude-switches", "enable-automation"),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-extensions"),
+		chromedp.Flag("disable-dev-shm-usage"),
+		chromedp.Flag("no-first-run"),
+		chromedp.Flag("no-default-browser-check"),
+		chromedp.Flag("disable-background-timer-throttling"),
+		chromedp.Flag("disable-backgrounding-occluded-windows"),
+		chromedp.Flag("disable-renderer-backgrounding"),
 	}
 
 	// Add image blocking if requested
