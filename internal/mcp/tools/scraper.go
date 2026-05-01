@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -177,6 +178,14 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 	// Get content type
 	contentType := resp.Header.Get("Content-Type")
 
+	// Optimize HTML for LLM processing - remove noise, keep content
+	if strings.Contains(contentType, "text/html") {
+		body = t.optimizeHTML(body)
+		t.logger.Info().
+			Int("original_size", len(body)).
+			Msg("HTML optimized for inference")
+	}
+
 	// Build result
 	result := map[string]interface{}{
 		"url":         urlStr,
@@ -271,4 +280,65 @@ func (t *ScrapeTool) getCacheKey(url string, args map[string]interface{}) string
 	}
 
 	return "scrape:" + hex.EncodeToString(hash.Sum(nil))[:16]
+}
+
+// optimizeHTML removes noise from HTML to reduce token count for inference
+func (t *ScrapeTool) optimizeHTML(html []byte) []byte {
+	htmlStr := string(html)
+
+	// Remove script tags and their content
+	scriptRegex := regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	htmlStr = scriptRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove style tags and their content
+	styleRegex := regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	htmlStr = styleRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove HTML comments
+	commentRegex := regexp.MustCompile(`<!--.*?-->`)
+	htmlStr = commentRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove common meta tags (keep description, keywords, OG, twitter cards)
+	metaRemove := []string{
+		`<meta\s+charset="[^"]*"`,
+		`<meta\s+http-equiv="[^"]*"\s+content="[^"]*"`,
+		`<meta\s+name="viewport"[^>]*>`,
+		`<meta\s+name="theme-color"[^>]*>`,
+	}
+	for _, pattern := range metaRemove {
+		metaRegex := regexp.MustCompile(`(?i)` + pattern)
+		htmlStr = metaRegex.ReplaceAllString(htmlStr, "")
+	}
+
+	// Remove SVG content
+	svgRegex := regexp.MustCompile(`(?is)<svg[^>]*>.*?</svg>`)
+	htmlStr = svgRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove noscript tags
+	noscriptRegex := regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
+	htmlStr = noscriptRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove iframe tags (ads, embeds)
+	iframeRegex := regexp.MustCompile(`(?is)<iframe[^>]*>.*?</iframe>`)
+	htmlStr = iframeRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove empty div tags
+	emptyDivRegex := regexp.MustCompile(`<div[^>]*>\s*</div>`)
+	htmlStr = emptyDivRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove empty span tags
+	emptySpanRegex := regexp.MustCompile(`<span[^>]*>\s*</span>`)
+	htmlStr = emptySpanRegex.ReplaceAllString(htmlStr, "")
+
+	// Optimize whitespace - collapse multiple spaces to single space
+	spaceRegex := regexp.MustCompile(`\s+`)
+	htmlStr = spaceRegex.ReplaceAllString(htmlStr, " ")
+
+	// Remove spaces between tags
+	htmlStr = regexp.MustCompile(`>\s+<`).ReplaceAllString(htmlStr, "><")
+
+	// Trim leading/trailing whitespace
+	htmlStr = strings.TrimSpace(htmlStr)
+
+	return []byte(htmlStr)
 }
