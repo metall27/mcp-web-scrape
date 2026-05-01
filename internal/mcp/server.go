@@ -64,11 +64,10 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) registerDefaultTools() error {
 	defaultTools := []tools.Tool{
-		tools.NewScrapeTool(s.cache),
-		tools.NewScrapeJSTool(),
-		tools.NewSearchTool(),
-		tools.NewParseHTMLTool(),
-		tools.NewSmartExtractorTool(),
+		tools.NewScrapeJSTool(),      // Primary scraping tool with JS and screenshots
+		tools.NewSearchTool(),         // Web search
+		tools.NewParseHTMLTool(),      // HTML parsing
+		tools.NewSmartExtractorTool(), // Content extraction
 	}
 
 	for _, tool := range defaultTools {
