@@ -28,8 +28,8 @@ func NewScrapeJSTool() *ScrapeJSTool {
 			},
 			"timeout": map[string]interface{}{
 				"type":        "integer",
-				"description": "Page load timeout in seconds (default: 30)",
-				"default":     30,
+				"description": "Page load timeout in seconds (default: 60)",
+				"default":     60,
 			},
 			"wait_for": map[string]interface{}{
 				"type":        "string",
@@ -106,7 +106,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Extract options
-	timeout := 30
+	timeout := 60
 	if timeoutSec, ok := args["timeout"].(float64); ok {
 		timeout = int(timeoutSec)
 	}
