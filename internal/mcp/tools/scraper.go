@@ -189,7 +189,12 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 
 	// Optimize HTML for LLM processing - remove noise, keep content
 	if strings.Contains(contentType, "text/html") {
-		body = t.optimizeHTML(body)
+		// Check if GitHub for specialized optimization
+		if strings.Contains(urlStr, "github.com") {
+			body = t.optimizeGitHubHTML(body)
+		} else {
+			body = t.optimizeHTML(body)
+		}
 		t.logger.Info().
 			Int("original_size", len(body)).
 			Msg("HTML optimized for inference")
@@ -351,6 +356,73 @@ func (t *ScrapeTool) optimizeHTML(html []byte) []byte {
 	htmlStr = regexp.MustCompile(`>\s+<`).ReplaceAllString(htmlStr, "><")
 
 	// Trim leading/trailing whitespace
+	htmlStr = strings.TrimSpace(htmlStr)
+
+	return []byte(htmlStr)
+}
+
+// optimizeGitHubHTML applies GitHub-specific optimizations
+func (t *ScrapeTool) optimizeGitHubHTML(html []byte) []byte {
+	htmlStr := string(html)
+
+	// First apply general optimization
+	htmlStr = string(t.optimizeHTML(html))
+
+	// Remove GitHub-specific elements that don't contain useful information
+	patterns := []struct {
+		pattern string
+		reason  string
+	}{
+		// Navigation and header
+		{`(?is)<header[^>]*>.*?</header>`, "header"},
+		{`(?is)<nav[^>]*>.*?</nav>`, "navigation"},
+
+		// Footer
+		{`(?is)<footer[^>]*>.*?</footer>`, "footer"},
+
+		// Skeleton loaders (placeholders)
+		{`(?is)<div[^>]*class="[^"]*Skeleton[^"]*"[^>]*>\s*</div>`, "skeleton divs"},
+		{`<div[^>]*class="[^"]*\bSkeleton\b[^"]*"[^>]*>.*?</div>`, "skeleton loaders"},
+
+		// React app internals
+		{`(?is)<react-app[^>]*>.*?</react-app>`, "react app wrapper"},
+		{`<div[^>]*data-testid="[^"]*"[^>]*>`, "test id divs"},
+
+		// Sidebars and panels
+		{`(?is)<div[^>]*class="[^"]*\bPageLayout-PaneWrapper\b[^"]*"[^>]*>.*?</div>`, "sidebar panels"},
+
+		// Action menus, buttons, interactions
+		{`(?is)<button[^>]*>.*?</button>`, "buttons"},
+		{`(?is)<details[^>]*>.*?</details>`, "dropdowns"},
+
+		// Empty and placeholder containers
+		{`<include-fragment[^>]*>.*?</include-fragment>`, "lazy loaded fragments"},
+		{`<rails-partial[^>]*>.*?</rails-partial>`, "rails partials"},
+
+		// Accessibility wrappers
+		{`<h2[^>]*class="[^"]*\bsr-only\b[^"]*"[^>]*>.*?</h2>`, "screen reader headers"},
+	}
+
+	for _, p := range patterns {
+		re := regexp.MustCompile(p.pattern)
+		htmlStr = re.ReplaceAllString(htmlStr, "")
+	}
+
+	// Remove all data- attributes from remaining tags (they're GitHub internals)
+	attrRegex := regexp.MustCompile(`\s+data-[a-z-]+="[^"]*"`)
+	htmlStr = attrRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove aria- attributes except aria-label
+	ariaRegex := regexp.MustCompile(`\s+aria-(?:label|-labelledby|describedby)="[^"]*"`)
+	htmlStr = ariaRegex.ReplaceAllString(htmlStr, "")
+
+	// Remove utility class names (GitHub uses BEM-like patterns)
+	classRegex := regexp.MustCompile(`\s+class="[^"]*\b(?:prc-Link|Link--primary|Link--secondary|color-fg-|text-|tmp-)[^"]*"`)
+	htmlStr = classRegex.ReplaceAllString(htmlStr, ` class=""`)
+
+	// Final whitespace cleanup
+	htmlStr = regexp.MustCompile(`\s+`).ReplaceAllString(htmlStr, " ")
+	htmlStr = regexp.MustCompile(`>\s+<`).ReplaceAllString(htmlStr, "><")
 	htmlStr = strings.TrimSpace(htmlStr)
 
 	return []byte(htmlStr)
