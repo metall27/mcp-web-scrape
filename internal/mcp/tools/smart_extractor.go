@@ -221,8 +221,6 @@ func (t *SmartExtractorTool) extractFinance(html string) map[string]interface{} 
 	tableRegex := regexp.MustCompile(`<table[^>]*>(.+?)</table>`)
 	tables := tableRegex.FindAllStringSubmatch(html, -1)
 
-	var financialData []map[string]interface{}
-
 	// Look for currency patterns
 	currencyRegex := regexp.MustCompile(`[$€₽£]\s*[\d,]+(?:\.\d+)?|\d+[\d,]*(?:\.\d+)?\s*(?:USD|EUR|RUB|GBP)`)
 	matches := currencyRegex.FindAllString(html, -1)
