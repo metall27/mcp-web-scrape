@@ -25,8 +25,8 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 			},
 			"mode": map[string]interface{}{
 				"type":        "string",
-				"description": "Extraction mode: news, tech, finance, legal, general, clean_text, links",
-				"enum":        []string{"news", "tech", "finance", "legal", "general", "clean_text", "links"},
+				"description": "Extraction mode: news, tech, finance, legal, medical, general, clean_text, links",
+				"enum":        []string{"news", "tech", "finance", "legal", "medical", "general", "clean_text", "links"},
 				"default":     "general",
 			},
 			"max_items": map[string]interface{}{
@@ -48,7 +48,7 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 	return &SmartExtractorTool{
 		BaseTool: NewBaseTool(
 			"smart_extract",
-			"Intelligently extracts and structures content from HTML based on mode. Supports: news, tech (docs/API), finance (reports/data), legal (documents), general text cleaning, link extraction.",
+			"Intelligently extracts and structures content from HTML based on mode. Supports: news, tech (docs/API), finance (reports/data), legal (documents), medical (health info), general text cleaning, link extraction.",
 			schema,
 			handler,
 		),
@@ -82,6 +82,8 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 		result = t.extractFinance(html)
 	case "legal":
 		result = t.extractLegal(html)
+	case "medical":
+		result = t.extractMedical(html)
 	case "clean_text":
 		result = t.extractCleanText(html)
 	case "links":
@@ -175,6 +177,45 @@ func (t *SmartExtractorTool) extractLegal(html string) map[string]interface{} {
 		"type":     "legal",
 		"articles": articles,
 		"structure": structure,
+	}
+}
+
+func (t *SmartExtractorTool) extractMedical(html string) map[string]interface{} {
+	// Extract medical/health information: symptoms, diagnoses, treatments, medications
+	text := strings.ToLower(html)
+
+	// Common medical terms patterns
+	symptomsRegex := regexp.MustCompile(`(?:симптом|symptom|признак|sign|жалоба)[^.:]*[.:]`)
+	symptoms := symptomsRegex.FindAllString(text, 20)
+
+	diagnosisRegex := regexp.MustCompile(`(?:диагноз|diagnosis|заболевание|disease|болезнь)[^.:]*[.:]`)
+	diagnoses := diagnosisRegex.FindAllString(text, 20)
+
+	medicationRegex := regexp.MustCompile(`(?:препарат|drug|medication|лекарство|лекарствен|таблетка|мг|мл)[^.:]*[.:]`)
+	medications := medicationRegex.FindAllString(text, 20)
+
+	dosageRegex := regexp.MustCompile(`\d+\s*(?:мг|мл|mg|ml|г|g|таблеток|tablet|капель|drop|раз|times?)`)
+	dosages := dosageRegex.FindAllString(html, 15)
+
+	// Medical measurements
+	vitalsRegex := regexp.MustCompile(`(?:давление|pressure|температура|temperature|пульс|pulse|частота|rate)[^.:]*[.:]`)
+	vitals := vitalsRegex.FindAllString(text, 10)
+
+	// Look for structured medical data sections
+	sectionRegex := regexp.MustCompile(`<(?:h[2-3]|strong|b)[^>]*>(?:анамнез|history|осмотр|examination|назначен|prescribed|лечение|treatment)[^<]*</(?:h[2-3]|strong|b)>`)
+	sections := sectionRegex.FindAllString(html, -1)
+
+	return map[string]interface{}{
+		"type":              "medical",
+		"symptoms_count":    len(symptoms),
+		"symptoms":          symptoms[:min(len(symptoms), 10)],
+		"diagnoses_count":   len(diagnoses),
+		"diagnoses":         diagnoses[:min(len(diagnoses), 10)],
+		"medications_count": len(medications),
+		"medications":       medications[:min(len(medications), 10)],
+		"dosages":           dosages[:min(len(dosages), 10)],
+		"vitals":            vitals[:min(len(vitals), 10)],
+		"structured_sections": len(sections),
 	}
 }
 
