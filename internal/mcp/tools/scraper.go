@@ -60,7 +60,7 @@ func NewScrapeTool(cache *cache.Cache) *ScrapeTool {
 	return &ScrapeTool{
 		BaseTool: NewBaseTool(
 			"scrape_url",
-			"Scrapes content from a URL and returns the HTML/body content",
+			"Scrapes content from a URL and returns the full HTML/body content. Use this to get page content directly, then process with smart_extract. Much faster than search for known URLs.",
 			schema,
 			handler,
 		),
