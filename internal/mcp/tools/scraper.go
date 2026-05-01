@@ -60,7 +60,7 @@ func NewScrapeTool(cache *cache.Cache) *ScrapeTool {
 	return &ScrapeTool{
 		BaseTool: NewBaseTool(
 			"scrape_url",
-			"Scrapes a URL and returns HTML in the 'html' field (NOT 'content'). Use for known URLs, then process with smart_extract. Returns: url, status_code, content_type, html, size_bytes, duration_ms, headers",
+			"Fast HTTP scraping without JavaScript. Use for simple static pages, blogs, news sites. For dynamic sites (GitHub, dashboards, SPA) use scrape_with_js instead. Automatically optimizes HTML to reduce tokens. Returns: url, status_code, html (20-50KB), size_bytes, duration_ms",
 			schema,
 			handler,
 		),
