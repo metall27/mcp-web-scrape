@@ -41,3 +41,6 @@ logs/
 
 # Cache
 .cache/
+
+# Documentation
+RAG_INTEGRATION_ATTEMPTS.md
