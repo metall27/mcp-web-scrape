@@ -64,14 +64,14 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) registerDefaultTools() error {
 	defaultTools := []tools.Tool{
-		tools.NewScrapeJSTool(),        // Primary scraping tool with JS and screenshots
+		tools.NewRAGSearchTool(),        // PRIMARY: Semantic search (use FIRST for info requests)
+		tools.NewRAGIndexTool(),         // Index pages for RAG
+		tools.NewRAGHealthTool(),        // RAG health check
+		tools.NewRAGListDocumentsTool(), // List indexed documents
+		tools.NewScrapeJSTool(),         // FALLBACK: Scrape only if rag_search empty
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
 		tools.NewSmartExtractorTool(),   // Content extraction
-		tools.NewRAGSearchTool(),        // RAG semantic search
-		tools.NewRAGIndexTool(),         // RAG document indexing
-		tools.NewRAGHealthTool(),        // RAG health check
-		tools.NewRAGListDocumentsTool(), // RAG document listing
 	}
 
 	for _, tool := range defaultTools {
