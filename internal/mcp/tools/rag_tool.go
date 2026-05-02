@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Search indexed documentation and knowledge base. Use for: (1) Questions about documentation, (2) 'what is/how to/tell me about' questions for stable content, (3) Finding information in previously indexed technical docs. NOT for news/blogs/social media (use scrape_with_js). Returns text chunks. If no results, use scrape_with_js.",
+		"Search indexed documentation. Already indexed URLs include: https://github.com/metall27/mcp-web-scrape, https://kubernetes.io. Use for questions about these URLs before scraping. Returns relevant text chunks. If no results found, then use scrape_with_js.",
 		schema,
 		handler,
 	)
