@@ -2,6 +2,25 @@
 
 MCP-сервер для веб-скрапинга. Работает с llama.cpp WebUI, Claude Desktop и другими MCP-совместимыми AI агентами.
 
+## Содержание
+
+- [Возможности](#возможности)
+- [MCP-инструменты](#mcp-инструменты)
+  - [scrape_with_js (основной)](#scrape_with_js-основной)
+  - [search_web](#search_web)
+  - [smart_extract](#smart_extract)
+  - [parse_html](#parse_html)
+- [Результаты скрапинга](#результаты-скрапинга)
+- [Установка](#установка)
+  - [Docker (рекомендуется)](#docker-рекомендуется)
+  - [Из исходников](#из-исходников)
+  - [Chrome для JavaScript-рендеринга](#chrome-для-javascript-рендеринга)
+- [Настройка](#настройка)
+- [Интеграция с llama.cpp WebUI](#интеграция-с-llamacpp-webui)
+- [Ограничения](#ограничения)
+- [Производительность](#производительность)
+- [API-эндпоинты](#api-эндпоинты)
+
 ## Возможности
 
 - **Универсальный скрапинг** — один инструмент для всех сайтов (статические и динамические)
@@ -220,6 +239,8 @@ apk add --no-cache chromium
 - `POST /mcp` — MCP endpoint (JSON-RPC)
 - `GET /metrics` — метрики (кеши, rate limits)
 
+[↑ Вернуться к содержанию](#содержание)
+
 ## Лицензия
 
 MIT
@@ -227,6 +248,26 @@ MIT
 ---
 
 # MCP Web Scrape Server - English Documentation
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [MCP Tools](#mcp-tools)
+  - [scrape_with_js (primary)](#scrape_with_js-primary)
+  - [search_web](#search_web)
+  - [smart_extract](#smart_extract)
+  - [parse_html](#parse_html)
+- [Scrape Results](#scrape-results)
+- [Installation](#installation)
+  - [Docker (recommended)](#docker-recommended)
+  - [From source](#from-source)
+  - [Chrome for JavaScript rendering](#chrome-for-javascript-rendering)
+- [Configuration](#configuration)
+- [Integration with llama.cpp WebUI](#integration-with-llamacpp-webui)
+- [Limitations](#limitations)
+- [Performance](#performance)
+- [API Endpoints](#api-endpoints)
 
 ## Overview
 
@@ -449,6 +490,8 @@ For such sites, use `search_web` or alternative sources.
 - `POST /sse` — MCP endpoint (SSE for llama.cpp)
 - `POST /mcp` — MCP endpoint (JSON-RPC)
 - `GET /metrics` — metrics (cache, rate limits)
+
+[↑ Вернуться to contents](#table-of-contents)
 
 ## License
 
