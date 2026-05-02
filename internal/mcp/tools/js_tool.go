@@ -82,7 +82,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"🛑 STOP: FIRST check if content is indexed! If user provides URL and wants information/documentation → MUST use rag_search FIRST. This tool is ONLY for: (1) explicit scrape/fetch/download requests, OR (2) when rag_search returns no results. This gets HTML from NEW URLs using headless Chrome. Works with ALL websites (static, SPA, GitHub). Optimizes HTML and takes screenshots for large pages (>50KB). Workflow: rag_search → (if empty) → scrape_with_js + rag_index → next time rag_search works.",
+		"🚨 WRONG TOOL: If user wants information from URL → use rag_search FIRST. This tool ONLY for: (1) user says 'scrape'/'fetch' explicitly, OR (2) rag_search returned empty. You MUST check rag_search before this. Examples of WRONG use: 'tell me about URL', 'what does URL say', 'documentation for URL' → use rag_search. Examples of CORRECT use: 'scrape this URL', 'fetch HTML from URL', 'download page' → use this tool. Gets HTML using headless Chrome. All websites supported. Optimizes HTML, screenshots >50KB.",
 		schema,
 		tool.Execute,
 	)
