@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Find information in indexed documents. Use for questions like 'what is X', 'how to X', 'what are the requirements', 'tell me about X'. Search returns text chunks from previously indexed content. If no results, then use scrape_with_js.",
+		"Search indexed documentation and knowledge base. Use for: (1) Questions about documentation, (2) 'what is/how to/tell me about' questions for stable content, (3) Finding information in previously indexed technical docs. NOT for news/blogs/social media (use scrape_with_js). Returns text chunks. If no results, use scrape_with_js.",
 		schema,
 		handler,
 	)

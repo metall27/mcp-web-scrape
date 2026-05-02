@@ -82,7 +82,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Download and extract HTML from web pages. Use when you need raw HTML content or when the page is not yet indexed. Works with all websites including GitHub, documentation sites, blogs. For information questions about indexed content, use rag_search instead.",
+		"Get HTML content from URLs. Use for: (1) Dynamic content like news, blogs, social media that changes frequently, (2) Pages not yet indexed, (3) When you need raw HTML. Works with all websites including GitHub, documentation. For stable documentation/questions about indexed content, use rag_search instead.",
 		schema,
 		tool.Execute,
 	)
