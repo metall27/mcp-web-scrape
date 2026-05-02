@@ -223,3 +223,233 @@ apk add --no-cache chromium
 ## Лицензия
 
 MIT
+
+---
+
+# MCP Web Scrape Server - English Documentation
+
+## Overview
+
+**MCP Web Scrape Server** is a server implementing the MCP (Model Context Protocol) for web scraping and data retrieval from the internet. The project is designed for integration with llama.cpp WebUI, Claude Desktop, and other AI-compatible agents.
+
+## Features
+
+- **Universal scraping** — one tool for all websites (static and dynamic)
+- **JavaScript rendering** — headless Chrome for SPAs, dashboards, GitHub
+- **Auto-optimization** — reduces HTML by 70-95% to save tokens
+- **Auto-screenshots** — for large pages (>50KB) instead of text
+- **HTTP fallback** — automatically switches if Chrome fails
+- **Stealth mode** — bypasses basic anti-bot protection
+- **Smart search** — DuckDuckGo, Brave, Bing API
+- **HTML parsing** — CSS selectors and smart content extraction
+
+## MCP Tools
+
+### `scrape_with_js` (primary)
+
+Universal tool for ALL websites — static and dynamic.
+
+```json
+{
+  "url": "https://github.com/user/repo",
+  "screenshot_mode": "auto"
+}
+```
+
+**Parameters:**
+- `url` (required) — URL to scrape
+- `timeout` — timeout in seconds (default: 60)
+- `wait_time` — delay after load in ms (default: 3000)
+- `screenshot_mode` — when to take screenshot:
+  - `"auto"` (default) — if HTML > 50KB
+  - `"always"` — always
+  - `"never"` — never
+- `block_images` — block images for faster scraping
+- `user_agent` — custom User-Agent
+
+**Features:**
+- Automatically optimizes HTML (removes scripts, styles, navigation)
+- GitHub-specific optimization
+- Screenshots in base64 for vision models
+- HTTP fallback if Chrome fails
+- Stealth mode for bypassing protection
+
+### `search_web`
+
+Search URLs for subsequent scraping.
+
+```json
+{
+  "query": "golang web scraping library",
+  "max_results": 5,
+  "provider": "duckduckgo"
+}
+```
+
+Providers: `duckduckgo` (free), `brave` (requires API key), `bing` (requires API key).
+
+### `smart_extract`
+
+Smart content extraction from HTML. Use **AFTER** `scrape_with_js`.
+
+```json
+{
+  "html": "<html>...</html>",
+  "mode": "news"
+}
+```
+
+Modes:
+- `news` — news headlines
+- `tech` — API, documentation, code
+- `finance` — financial reports
+- `legal` — legal documents
+- `medical` — medical information
+- `clean_text` — plain text without tags
+- `links` — all URLs on page
+
+### `parse_html`
+
+Extract elements by CSS selectors.
+
+```json
+{
+  "html": "<html>...</html>",
+  "selector": "a.link",
+  "extract": "attr",
+  "attribute": "href"
+}
+```
+
+## Scrape Results
+
+**Response format (MCP standard):**
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "HTML content..."
+    }
+  ],
+  "_metadata": {
+    "url": "https://example.com",
+    "status_code": 200,
+    "size_bytes": 20480,
+    "duration_ms": 1234
+  }
+}
+```
+
+**With screenshot:**
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "HTML content..."
+    },
+    {
+      "type": "image",
+      "data": "base64...",
+      "mimeType": "image/png"
+    }
+  ]
+}
+```
+
+## Installation
+
+### Docker (recommended)
+
+Chrome is pre-installed, everything works out of the box:
+
+```bash
+docker-compose up -d
+```
+
+### From source
+
+Requires Go 1.21+:
+
+```bash
+go build -o mcp-web-scrape ./cmd/server
+./mcp-web-scrape
+```
+
+### Chrome for JavaScript rendering
+
+If not using Docker, install Chrome:
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y chromium-browser --no-install-recommends
+```
+
+**Alpine:**
+```bash
+apk add --no-cache chromium
+```
+
+## Configuration
+
+Via environment variables:
+
+| Variable | Default |
+|----------|---------|
+| `MCP_WEB_SCRAPE_SERVER_HOST` | `0.0.0.0` |
+| `MCP_WEB_SCRAPE_SERVER_PORT` | `8192` |
+| `MCP_WEB_SCRAPE_LOG_LEVEL` | `info` |
+
+Or via `config.yaml` (see example in repository).
+
+**Caching with TTL by content type:**
+- HTML — 5 minutes (expires quickly)
+- JSON API — 10 minutes
+- CSS/JS/image — 1 hour (static)
+
+## Integration with llama.cpp WebUI
+
+1. Start server: `docker-compose up -d`
+2. In llama.cpp WebUI → MCP settings add:
+   - **Server URL**: `https://skynet.0x27.ru/sse`
+   - **Enable proxy**: ❌ (only needed for stdio MCP)
+
+### Local binary
+
+1. Run: `./mcp-web-scrape`
+2. In llama.cpp WebUI → MCP settings:
+   - **Server URL**: `http://127.0.0.1:8192/sse`
+
+## Limitations
+
+Some sites may block scraping:
+- **Anti-bot protection** — works through stealth mode
+- **IP-based blocking** — cloud IPs may be blocked (proxy needed)
+- **Aggressive WAF** — some stores (DNS-shop.ru, etc.) block completely
+
+For such sites, use `search_web` or alternative sources.
+
+## Performance
+
+**HTML optimization:**
+- GitHub: 310KB → 20KB (94% reduction)
+- News: 130KB → 50KB (62% reduction)
+- Blogs: 80KB → 15KB (81% reduction)
+
+**Execution time:**
+- Static pages: 1-2 sec
+- JavaScript sites: 2-6 sec
+- With fallback: 5-10 sec when Chrome has issues
+
+## API Endpoints
+
+- `GET /` — server info and tools
+- `GET /health` — health check
+- `POST /sse` — MCP endpoint (SSE for llama.cpp)
+- `POST /mcp` — MCP endpoint (JSON-RPC)
+- `GET /metrics` — metrics (cache, rate limits)
+
+## License
+
+MIT

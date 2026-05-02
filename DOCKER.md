@@ -50,13 +50,13 @@ Dockerfile uses multi-stage build for optimal image size:
 
 | Port | Protocol | Purpose | External |
 |------|----------|---------|----------|
-| 8080 | HTTP | MCP server & API | 8080 |
+| 8192 | HTTP | MCP server & API | 8192 |
 
 ### Port Mapping
 
 ```yaml
 ports:
-  - "8080:8080"  # Host:Container
+  - "8192:8192"  # Host:Container
 ```
 
 ### Docker Network
@@ -75,7 +75,7 @@ networks:
 environment:
   # Server
   - MCP_WEB_SCRAPE_SERVER_HOST=0.0.0.0
-  - MCP_WEB_SCRAPE_SERVER_PORT=8080
+  - MCP_WEB_SCRAPE_SERVER_PORT=8192
   - MCP_WEB_SCRAPE_LOG_LEVEL=info
 
   # Browser
@@ -132,7 +132,7 @@ Headless Chrome typically uses:
 
 ```yaml
 healthcheck:
-  test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+  test: ["CMD", "wget", "--spider", "-q", "http://localhost:8192/health"]
   interval: 30s      # Check every 30 seconds
   timeout: 3s        # Timeout after 3 seconds
   retries: 3         # 3 retries before unhealthy
@@ -147,7 +147,7 @@ docker ps
 docker inspect mcp-web-scrape | grep -A 10 Health
 
 # Manual health check
-docker exec mcp-web-scrape wget -O- http://localhost:8080/health
+docker exec mcp-web-scrape wget -O- http://localhost:8192/health
 ```
 
 ## Deployment Scenarios
@@ -158,13 +158,13 @@ docker exec mcp-web-scrape wget -O- http://localhost:8080/health
 docker-compose up -d
 ```
 
-**Access:** `http://localhost:8080`
+**Access:** `http://localhost:8192`
 
 ### Scenario 2: Custom Port
 
 ```yaml
 ports:
-  - "9090:8080"
+  - "9090:8192"
 ```
 
 **Access:** `http://localhost:9090`
@@ -174,7 +174,7 @@ ports:
 **nginx.conf:**
 ```nginx
 upstream mcp_backend {
-    server localhost:8080;
+    server localhost:8192;
 }
 
 server {
@@ -232,7 +232,7 @@ spec:
       - name: mcp-web-scrape
         image: mcp-web-scrape:latest
         ports:
-        - containerPort: 8080
+        - containerPort: 8192
         resources:
           requests:
             memory: "512Mi"
@@ -243,13 +243,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 8192
           initialDelaySeconds: 10
           periodSeconds: 30
         readinessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 8192
           initialDelaySeconds: 5
           periodSeconds: 10
 ---
@@ -261,8 +261,8 @@ spec:
   selector:
     app: mcp-web-scrape
   ports:
-  - port: 8080
-    targetPort: 8080
+  - port: 8192
+    targetPort: 8192
   type: LoadBalancer
 ```
 
@@ -283,11 +283,11 @@ docker-compose logs mcp-web-scrape
 **Solution:**
 ```bash
 # Check port usage
-netstat -tlnp | grep 8080
+netstat -tlnp | grep 8192
 
 # Change port in docker-compose.yml
 ports:
-  - "9090:8080"
+  - "9090:8192"
 ```
 
 ### Issue: Chrome crashes
@@ -342,7 +342,7 @@ deploy:
 
 ```bash
 # Manual health check
-docker exec mcp-web-scrape wget -O- http://localhost:8080/health
+docker exec mcp-web-scrape wget -O- http://localhost:8192/health
 
 # Check if service is listening
 docker exec mcp-web-scrape netstat -tlnp
@@ -403,7 +403,7 @@ docker-compose logs -f mcp-web-scrape
 
 ```bash
 # Check metrics endpoint
-curl http://localhost:8080/metrics
+curl http://localhost:8192/metrics
 
 # Response:
 {
@@ -480,7 +480,7 @@ sleep 10
 
 # Verify
 docker-compose ps
-curl http://localhost:8080/health
+curl http://localhost:8192/health
 ```
 
 ## Production Checklist
