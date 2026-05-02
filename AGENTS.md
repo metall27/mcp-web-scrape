@@ -11,6 +11,7 @@
   - [search_web](#2-search_web)
   - [smart_extract](#3-smart_extract)
   - [parse_html](#4-parse_html)
+  - [RAG Tools (Semantic Search)](#5-rag-tools-semantic-search)
 - [Новые возможности](#новые-возможности)
   - [Авто-оптимизация HTML](#авто-оптимизация-html)
   - [Авто-скриншоты](#авто-скриншоты)
@@ -251,6 +252,219 @@ mcp-web-scrape/
   ]
 }
 ```
+
+### 5. RAG Tools (Semantic Search)
+
+RAG (Retrieval-Augmented Generation) инструменты позволяют индексировать веб-страницы и выполнять семантический поиск в уже проиндексированном контенте.
+
+**Когда использовать RAG инструменты:**
+- 🔍 Поиск в уже проиндексированной базе знаний
+- 📚 Поиск по большому количеству документов одновременно
+- 🌐 Семантический поиск (понимает смысл, не только ключевые слова)
+- 🔗 Работает с английским и русским языками
+
+**Когда НЕ использовать RAG:**
+- ❌ Для получения HTML с новой веб-страницы (используйте `scrape_with_js`)
+- ❌ Для поиска URL в интернете (используйте `search_web`)
+
+#### rag_search - Семантический поиск
+
+Выполняет семантический поиск в проиндексированных документах.
+
+**Параметры:**
+- `query` (string, required) - поисковый запрос (поддерживает русский и английский)
+- `top_k` (integer, optional) - количество результатов (default: 5, max: 20)
+- `filters` (object, optional) - фильтры по метаданным (например, `{"url": "https://example.com"}`)
+
+**Результат:**
+```json
+{
+  "query": "kubernetes orchestration",
+  "total_results": 3,
+  "search_time_ms": 123,
+  "results": [
+    {
+      "chunk_id": "uuid-123",
+      "text": "Kubernetes is an open-source container orchestration platform...",
+      "metadata": {
+        "url": "https://kubernetes.io/docs/concepts/",
+        "title": "Kubernetes Concepts",
+        "document_id": "doc-456"
+      },
+      "score": 0.95
+    }
+  ]
+}
+```
+
+**Примеры использования:**
+```json
+// Поиск информации о Kubernetes
+{
+  "name": "rag_search",
+  "arguments": {
+    "query": "что такое kubernetes",
+    "top_k": 3
+  }
+}
+
+// Поиск с фильтром по конкретному URL
+{
+  "name": "rag_search",
+  "arguments": {
+    "query": "container orchestration",
+    "filters": {
+      "url": "https://kubernetes.io"
+    }
+  }
+}
+```
+
+#### rag_index - Индексация веб-страниц
+
+Добавляет веб-страницу в базу знаний для последующего семантического поиска.
+
+**Параметры:**
+- `url` (string, required) - URL страницы для индексации
+- `processing_mode` (string, optional) - режим обработки:
+  - `structured` - структурированное извлечение контента (default)
+  - `content` - только основное содержимое
+  - `raw` - исходный HTML
+- `ttl` (integer, optional) - время жизни в днях (default: 7)
+
+**Результат:**
+```json
+{
+  "status": "indexed",
+  "document_id": "doc-789",
+  "chunks_created": 15,
+  "index_time_ms": 1234,
+  "embeddings_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "indexed_at": "2026-05-02T12:34:56Z"
+}
+```
+
+**Примеры использования:**
+```json
+// Индексация документации Kubernetes
+{
+  "name": "rag_index",
+  "arguments": {
+    "url": "https://kubernetes.io/docs/concepts/overview/",
+    "processing_mode": "structured"
+  }
+}
+
+// Индексация с TTL 30 дней
+{
+  "name": "rag_index",
+  "arguments": {
+    "url": "https://example.com/docs",
+    "ttl": 30
+  }
+}
+```
+
+#### rag_health - Проверка состояния RAG сервиса
+
+Проверяет работоспособность RAG Research Agent.
+
+**Параметры:** Нет
+
+**Результат:**
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime_seconds": 3600.5,
+  "components": {
+    "vector_store": "chromadb",
+    "embeddings_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "scraper": "mcp-web-scrape"
+  }
+}
+```
+
+#### rag_list_documents - Список проиндексированных документов
+
+Возвращает список всех проиндексированных документов.
+
+**Параметры:** Нет
+
+**Результат:**
+```json
+{
+  "documents": [
+    {
+      "document_id": "doc-123",
+      "url": "https://kubernetes.io/docs/",
+      "title": "Kubernetes Documentation",
+      "chunks_count": 45,
+      "indexed_at": "2026-05-02T10:00:00Z",
+      "ttl": 7,
+      "size_bytes": 123456
+    }
+  ],
+  "total_count": 1
+}
+```
+
+### Сравнение инструментов
+
+| Задача | Инструмент | Пример |
+|--------|-----------|--------|
+| Получить HTML с новой страницы | `scrape_with_js` | scrape_with_js("https://example.com") |
+| Найти URL в интернете | `search_web` | search_web("golang tutorial") |
+| Искать в проиндексированной базе знаний | `rag_search` | rag_search("container orchestration") |
+| Добавить страницу в базу знаний | `rag_index` | rag_index("https://docs.example.com") |
+| Извлечь конкретные элементы из HTML | `parse_html` | parse_html(html, "a.link") |
+| Умное извлечение контента | `smart_extract` | smart_extract(html, "news") |
+
+### Рекомендуемый workflow
+
+**Сценарий 1: Исследование новой темы**
+```
+1. Поиск релевантных источников
+   → search_web("kubernetes documentation")
+
+2. Индексация найденных страниц
+   → rag_index("https://kubernetes.io/docs/")
+
+3. Семантический поиск в проиндексированном
+   → rag_search("что такое kubernetes pod")
+
+4. Если информации недостаточно
+   → scrape_with_js("https://another-source.com/docs")
+```
+
+**Сценарий 2: Работа с известными источниками**
+```
+1. Проверить, что уже проиндексировано
+   → rag_list_documents()
+
+2. Искать в базе знаний
+   → rag_search("microservices architecture")
+
+3. Если не найдено - индексировать новые источники
+   → rag_index("https://microservices.io/patterns/")
+```
+
+**Сценарий 3: Быстрый ответ на вопрос**
+```
+1. Сразу попробовать поиск в RAG
+   → rag_search("как работает docker")
+
+2. Если результатов нет или мало
+   → search_web("docker tutorial") → rag_index(url) → rag_search(query)
+```
+
+### Важные замечания
+
+- **rag_search** ищет только в проиндексированных документах. Сначала нужно вызвать `rag_index`
+- **RAG работает медленнее**, чем `scrape_with_js`, но позволяет искать по большому количеству документов одновременно
+- **Семантический поиск** понимает смысл запроса, не только ключевые слова
+- **RAG поддерживает русский и английский** языки для запросов и документов
+- **TTL документов** - по умолчанию 7 дней, после чего документы удаляются
 
 ## Новые возможности
 
