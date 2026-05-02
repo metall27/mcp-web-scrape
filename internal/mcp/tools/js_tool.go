@@ -89,6 +89,19 @@ func NewScrapeJSTool() *ScrapeJSTool {
 				"enum":        []string{"auto", "fast", "balanced", "thorough", "preview"},
 				"default":     "auto",
 			},
+			"extract_sections": map[string]interface{}{
+				"type":        "array",
+				"description": "List of section titles/IDs to extract (e.g., ['Introduction', 'Methods']). Only extracts matching sections to save tokens. Empty = extract all.",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+				"default":     []string{},
+			},
+			"max_size": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum HTML size to return in bytes (0 = no limit). If exceeded, returns preview + truncation notice.",
+				"default":     0,
+			},
 		},
 		"required": []string{"url"},
 	}
@@ -99,7 +112,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Universal web scraping tool - works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage. Processing modes: auto (smart routing based on content), fast (text only), balanced (text+screenshots>50KB), thorough (always screenshot), preview (structure only). This is the ONLY scraping tool needed - it handles both static and dynamic content.",
+		"Universal web scraping tool - works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage. Processing modes: auto (smart routing), fast (text only), balanced (text+screenshots>50KB), thorough (always screenshot), preview (structure only). Token-saving features: extract_sections (get only specific sections), max_size (limit response size). This is the ONLY scraping tool needed - it handles both static and dynamic content efficiently.",
 		schema,
 		tool.Execute,
 	)
@@ -224,6 +237,22 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	processingMode := ProcessingModeAuto
 	if pm, ok := args["processing_mode"].(string); ok {
 		processingMode = ProcessingMode(pm)
+	}
+
+	// Extract sections parameter
+	var extractSections []string
+	if es, ok := args["extract_sections"].([]interface{}); ok {
+		for _, section := range es {
+			if sectionStr, ok := section.(string); ok {
+				extractSections = append(extractSections, sectionStr)
+			}
+		}
+	}
+
+	// Max size parameter
+	maxSize := 0
+	if ms, ok := args["max_size"].(float64); ok {
+		maxSize = int(ms)
 	}
 
 	t.logger.Info().
@@ -450,6 +479,27 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	// Extract specific sections if requested
+	if len(extractSections) > 0 {
+		html = t.extractSectionsByHTML(html, extractSections)
+		t.logger.Info().
+			Int("sections_requested", len(extractSections)).
+			Int("extracted_size", len(html)).
+			Msg("Extracted specific sections from HTML")
+	}
+
+	// Check max size limit
+	if maxSize > 0 && len(html) > maxSize {
+		t.logger.Info().
+			Int("max_size", maxSize).
+			Int("actual_size", len(html)).
+			Int("truncated", len(html)-maxSize).
+			Msg("HTML exceeds max_size, truncating")
+
+		// Return preview with truncation notice instead of truncating blindly
+		return t.buildTruncatedResult(ctx, html, maxSize, urlStr, finalURL, title, duration, originalHTMLSize)
+	}
+
 	// Build result in MCP format
 	content := []map[string]interface{}{
 		{
@@ -652,4 +702,143 @@ func (t *ScrapeJSTool) cleanHTML(text string) string {
 	re := regexp.MustCompile(`<[^>]+>`)
 	text = re.ReplaceAllString(text, " ")
 	return strings.Join(strings.Fields(text), " ")
+}
+
+// extractSectionsByHTML extracts specific sections from HTML based on titles
+func (t *ScrapeJSTool) extractSectionsByHTML(html string, sections []string) string {
+	if len(sections) == 0 {
+		return html
+	}
+
+	// Build a map of requested sections (lowercase for case-insensitive matching)
+	sectionMap := make(map[string]bool)
+	for _, section := range sections {
+		sectionMap[strings.ToLower(section)] = true
+	}
+
+	// Extract all headings with their content
+	lines := strings.Split(html, "\n")
+	var result []string
+	inRequestedSection := false
+	capturedContent := false
+
+	for _, line := range lines {
+		// Check if this line is a heading
+		if strings.HasPrefix(line, "<h1>") || strings.HasPrefix(line, "<h2>") ||
+		   strings.HasPrefix(line, "<h3>") || strings.HasPrefix(line, "<h4>") ||
+		   strings.HasPrefix(line, "<h5>") || strings.HasPrefix(line, "<h6>") {
+
+			// Extract heading title
+			re := regexp.MustCompile(`<h[1-6][^>]*>(.+?)</h[1-6]>`)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) > 1 {
+				title := strings.ToLower(t.cleanHTML(matches[1]))
+
+				// Check if this is a requested section
+				if sectionMap[title] {
+					// Start capturing this section
+					inRequestedSection = true
+					capturedContent = false
+					result = append(result, line) // Add heading
+					continue
+				}
+			}
+
+			// Different heading, stop capturing if we were
+			if inRequestedSection && capturedContent {
+				inRequestedSection = false
+			}
+		}
+
+		// Capture content if we're in a requested section
+		if inRequestedSection {
+			result = append(result, line)
+			if strings.TrimSpace(line) != "" {
+				capturedContent = true
+			}
+		}
+	}
+
+	// Return original if no sections found
+	if len(result) == 0 {
+		t.logger.Warn().
+			Str("sections_requested", fmt.Sprintf("%v", sections)).
+			Msg("No matching sections found, returning original HTML")
+		return html
+	}
+
+	extracted := strings.Join(result, "\n")
+	t.logger.Info().
+		Int("original_size", len(html)).
+		Int("extracted_size", len(extracted)).
+		Int("reduction", len(html)-len(extracted)).
+		Float64("reduction_percent", float64(len(html)-len(extracted))/float64(len(html))*100).
+		Msg("Sections extracted successfully")
+
+	return extracted
+}
+
+// buildTruncatedResult builds a result when HTML exceeds max_size
+func (t *ScrapeJSTool) buildTruncatedResult(ctx context.Context, html string, maxSize int, url, finalURL, title string, duration time.Duration, originalSize int) (map[string]interface{}, error) {
+	// Build preview with truncation notice
+	sections := t.extractSections(html)
+	wordCount := len(strings.Fields(t.cleanHTML(html)))
+
+	var previewText strings.Builder
+	previewText.WriteString(fmt.Sprintf("# Content Truncated\n\n"))
+	previewText.WriteString(fmt.Sprintf("**URL:** %s\n", url))
+	previewText.WriteString(fmt.Sprintf("**Title:** %s\n\n", title))
+	previewText.WriteString(fmt.Sprintf("⚠️ **Content too large:** %d bytes (limit: %d bytes)\n\n", originalSize, maxSize))
+	previewText.WriteString(fmt.Sprintf("**Statistics:**\n"))
+	previewText.WriteString(fmt.Sprintf("- Word count: %d\n", wordCount))
+	previewText.WriteString(fmt.Sprintf("- Sections: %d\n", len(sections)))
+	previewText.WriteString(fmt.Sprintf("\n**Recommendations:**\n"))
+	previewText.WriteString(fmt.Sprintf("1. Use `processing_mode: \"preview\"` to see structure first\n"))
+	previewText.WriteString(fmt.Sprintf("2. Use `extract_sections: [\"Section Name\"]` to get specific sections\n"))
+	previewText.WriteString(fmt.Sprintf("3. Increase `max_size` parameter if needed\n\n"))
+
+	if len(sections) > 0 && len(sections) <= 20 {
+		previewText.WriteString("**Available Sections:**\n\n")
+		for i, section := range sections {
+			prefix := strings.Repeat("  ", section["level_int"].(int))
+			previewText.WriteString(fmt.Sprintf("%s%d. %s\n", prefix, i+1, section["title"]))
+		}
+	} else if len(sections) > 20 {
+		previewText.WriteString(fmt.Sprintf("**Available Sections:** %d sections (use preview mode for details)\n", len(sections)))
+	}
+
+	// Build result
+	result := map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": previewText.String(),
+			},
+		},
+		"_metadata": map[string]interface{}{
+			"url":             url,
+			"final_url":       finalURL,
+			"status_code":     200,
+			"content_type":    "text/html",
+			"size_bytes":      len(html),
+			"original_size":   originalSize,
+			"max_size":        maxSize,
+			"truncated":       true,
+			"duration_ms":     duration.Milliseconds(),
+			"title":           title,
+			"rendering":       "javascript",
+			"word_count":      wordCount,
+			"section_count":   len(sections),
+			"processing_mode": "truncated",
+		},
+	}
+
+	t.logger.Info().
+		Str("url", url).
+		Int("original_size", originalSize).
+		Int("max_size", maxSize).
+		Int("sections", len(sections)).
+		Msg("Content truncated, returning preview with recommendations")
+
+	return result, nil
 }
