@@ -82,7 +82,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Universal web scraping tool - works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage. This is the ONLY scraping tool needed - it handles both static and dynamic content.",
+		"Get HTML content from a NEW URL. Use this tool when you need to fetch content from a web page that is NOT yet indexed. Universal web scraping tool - works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage. NOTE: If you need to search in ALREADY INDEXED documents, use rag_search instead. Workflow: For research, first try rag_search, if not found then use scrape_with_js to get new content.",
 		schema,
 		tool.Execute,
 	)

@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Semantic search in indexed documents using RAG (Retrieval-Augmented Generation). Returns most relevant text chunks based on semantic similarity.",
+		"Semantic search in ALREADY INDEXED documents using RAG (Retrieval-Augmented Generation). Use this tool ONLY when you need to search through previously indexed knowledge base. For getting HTML from new URLs, use scrape_with_js instead. Returns most relevant text chunks based on semantic similarity. Supports English and Russian queries. Workflow: first index pages with rag_index, then search with rag_search.",
 		schema,
 		handler,
 	)
@@ -354,7 +354,7 @@ func NewRAGIndexTool() Tool {
 
 	return NewBaseTool(
 		"rag_index",
-		"Index a web page in RAG for semantic search. Scrapes the content, creates embeddings, and stores in vector database.",
+		"Index a web page in RAG knowledge base for future semantic search. Use this BEFORE rag_search to add content to the knowledge base. This tool scrapes the URL, extracts content, creates embeddings, and stores in vector database. After indexing, use rag_search to query the content. Processing modes: structured (default, best for docs), content (main content only), raw (full HTML). Default TTL: 7 days.",
 		schema,
 		handler,
 	)
@@ -384,7 +384,7 @@ func NewRAGHealthTool() Tool {
 
 	return NewBaseTool(
 		"rag_health",
-		"Check RAG service health and status. Returns information about embeddings model, vector store, and scraper integration.",
+		"Check RAG service health and availability. Returns information about embeddings model, vector database status, and integration. Use this to verify RAG service is working before using rag_search or rag_index.",
 		schema,
 		handler,
 	)
@@ -412,7 +412,7 @@ func NewRAGListDocumentsTool() Tool {
 
 	return NewBaseTool(
 		"rag_list_documents",
-		"List all indexed documents in RAG vector database. Returns document metadata including chunk count and indexing time.",
+		"List all documents currently indexed in RAG knowledge base. Returns document metadata including URL, title, chunk count, indexing time, and TTL. Use this to see what content is available for rag_search before querying.",
 		schema,
 		handler,
 	)
