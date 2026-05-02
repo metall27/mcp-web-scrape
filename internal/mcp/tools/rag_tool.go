@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Search indexed knowledge base using semantic search. Returns most relevant text chunks based on meaning, not keywords. Supports English and Russian queries. Use this to find information in previously indexed documents. If no results found, use scrape_with_js to get new content.",
+		"Find information in indexed documents. Use for questions like 'what is X', 'how to X', 'what are the requirements', 'tell me about X'. Search returns text chunks from previously indexed content. If no results, then use scrape_with_js.",
 		schema,
 		handler,
 	)
