@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"First tool for ANY information/documentation requests. Search indexed knowledge base. Only use scrape_with_js if this returns empty.",
+		"Use FIRST for user queries about URL content: 'что нужно для установки', 'how to use X', 'tell me about X', 'documentation for X', 'find information about X'. Search indexed knowledge base semantically. Returns text chunks with scores. If empty results → then scrape_with_js + rag_index.",
 		schema,
 		handler,
 	)
