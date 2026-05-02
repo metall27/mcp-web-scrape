@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Semantic search in ALREADY INDEXED documents using RAG (Retrieval-Augmented Generation). Use this tool ONLY when you need to search through previously indexed knowledge base. For getting HTML from new URLs, use scrape_with_js instead. Returns most relevant text chunks based on semantic similarity. Supports English and Russian queries. Workflow: first index pages with rag_index, then search with rag_search.",
+		"🔍 PRIMARY TOOL for information requests! When user wants information/documentation from URL → ALWAYS use rag_search FIRST. Searches indexed knowledge base semantically. If empty results → then use scrape_with_js. Supports English and Russian. Returns text chunks with similarity scores. Workflow: (1) rag_search FIRST, (2) if empty → scrape_with_js + rag_index, (3) next time rag_search works.",
 		schema,
 		handler,
 	)
