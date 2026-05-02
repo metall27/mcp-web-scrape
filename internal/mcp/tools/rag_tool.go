@@ -73,7 +73,7 @@ type RAGIndexResponse struct {
 	ChunksCreated   int       `json:"chunks_created"`
 	IndexTimeMs     int       `json:"index_time_ms"`
 	EmbeddingsModel string    `json:"embeddings_model"`
-	IndexedAt       time.Time `json:"indexed_at"`
+	IndexedAt       string `json:"indexed_at"`
 }
 
 // RAGHealthResponse represents health check response
