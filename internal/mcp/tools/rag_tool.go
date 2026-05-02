@@ -291,7 +291,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Search indexed documentation. Already indexed URLs include: https://github.com/metall27/mcp-web-scrape, https://kubernetes.io. Use for questions about these URLs before scraping. Returns relevant text chunks. If no results found, then use scrape_with_js.",
+		"ALREADY INDEXED: https://github.com/metall27/mcp-web-scrape (128 chunks). For questions about this URL, use rag_search DO NOT scrape. Search returns text from indexed documentation. Other URLs: if not indexed, use scrape_with_js.",
 		schema,
 		handler,
 	)
