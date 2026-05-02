@@ -20,6 +20,7 @@ type Server struct {
 	cache        *cache.Cache
 	rateLimiter  *rate.Limiter
 	tools        map[string]tools.Tool
+	toolsOrder   []string // Preserve registration order
 	serverInfo   ServerInfo
 }
 
@@ -44,6 +45,7 @@ func New(cfg Config) (*Server, error) {
 		cache:      cfg.Cache,
 		serverInfo: ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
 		tools:      make(map[string]tools.Tool),
+		toolsOrder: []string{},
 	}
 
 	// Setup rate limiter
@@ -84,9 +86,11 @@ func (s *Server) registerDefaultTools() error {
 }
 
 func (s *Server) RegisterTool(tool tools.Tool) error {
-	s.tools[tool.Name()] = tool
+	name := tool.Name()
+	s.tools[name] = tool
+	s.toolsOrder = append(s.toolsOrder, name)
 	s.logger.Info().
-		Str("tool", tool.Name()).
+		Str("tool", name).
 		Msg("Tool registered")
 	return nil
 }
@@ -147,7 +151,9 @@ func (s *Server) handleInitialize(ctx context.Context, req *JSONRPCMessage) ([]b
 func (s *Server) handleToolsList(ctx context.Context, req *JSONRPCMessage) ([]byte, error) {
 	toolsList := []Tool{}
 
-	for _, tool := range s.tools {
+	// Iterate in registration order
+	for _, toolName := range s.toolsOrder {
+		tool := s.tools[toolName]
 		toolsList = append(toolsList, Tool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
