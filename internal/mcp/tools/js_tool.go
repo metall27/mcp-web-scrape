@@ -310,6 +310,9 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	duration := time.Since(startTime)
 
+	// Check HTML size BEFORE optimization for screenshot decision
+	originalHTMLSize := len(html)
+
 	// Optimize HTML to reduce size
 	if strings.Contains(urlStr, "github.com") {
 		html = string(OptimizeGitHubHTML([]byte(html)))
@@ -317,15 +320,25 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		html = string(OptimizeHTML([]byte(html)))
 	}
 
+	optimizedSize := len(html)
 	t.logger.Info().
-		Int("optimized_size", len(html)).
+		Int("original_size", originalHTMLSize).
+		Int("optimized_size", optimizedSize).
+		Int("reduction", originalHTMLSize-optimizedSize).
+		Float64("reduction_percent", float64(originalHTMLSize-optimizedSize)/float64(originalHTMLSize)*100).
 		Msg("HTML optimized for inference")
 
 	// Decide whether to include screenshot based on mode
 	includeScreenshot := shouldScreenshot
 	if screenshotMode == "auto" && len(screenshotData) > 0 {
-		// Include screenshot if HTML is large (> 50KB)
-		includeScreenshot = len(html) > 50*1024
+		// Include screenshot if ORIGINAL HTML is large (> 50KB)
+		// This ensures we don't skip screenshot due to successful optimization
+		includeScreenshot = originalHTMLSize > 50*1024
+		t.logger.Info().
+			Int("original_html_size", originalHTMLSize).
+			Int("threshold", 50*1024).
+			Bool("include_screenshot", includeScreenshot).
+			Msg("Screenshot decision based on original HTML size")
 	}
 
 	// Build result in MCP format
