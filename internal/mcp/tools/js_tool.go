@@ -82,7 +82,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"⚠️ READ THIS: If you are looking for information and have a URL, FIRST try rag_search to check if content is already indexed. Only use scrape_with_js when: (1) rag_search found no results, OR (2) you explicitly need the raw HTML from a specific URL. This tool gets HTML content from a NEW URL. Works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Uses headless Chrome for JavaScript rendering. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage.",
+		"⚠️ DO NOT USE if user is asking a QUESTION about content (e.g., 'what information is there about X', 'find documentation about X', 'is there anything about X', 'tell me about X'). For questions, FIRST use rag_search to search indexed knowledge base. Only use scrape_with_js when: (1) user explicitly asks to scrape/fetch/download HTML, OR (2) rag_search found no results, OR (3) you need the raw HTML from a specific URL. This tool gets HTML content from NEW URLs using headless Chrome for JavaScript rendering. Works with ALL websites including static pages, blogs, news, GitHub, dashboards, SPAs. Automatically optimizes HTML and takes screenshots for large pages (>50KB) to reduce token usage.",
 		schema,
 		tool.Execute,
 	)
