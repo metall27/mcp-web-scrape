@@ -82,7 +82,7 @@ func NewScrapeJSTool() *ScrapeJSTool {
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Get HTML from URLs. WRONG choice for: 'что нужно для установки', 'tell me about X', 'how to use X' → use rag_search FIRST. ONLY use when: (1) explicit 'scrape'/'fetch'/'download' commands, OR (2) rag_search returned empty. Headless Chrome for JavaScript. Optimizes HTML, screenshots >50KB.",
+		"DON'T USE unless user says 'scrape'/'fetch'/'download'. For 'tell me about X', 'how to use X', 'documentation for X' → use rag_search FIRST. Get HTML from URLs using headless Chrome. All websites supported. Optimizes HTML, screenshots >50KB.",
 		schema,
 		tool.Execute,
 	)
