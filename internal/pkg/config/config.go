@@ -50,6 +50,7 @@ type BrowserConfig struct {
 	BlockImages     bool          `mapstructure:"block_images"`
 	DisableGPU      bool          `mapstructure:"disable_gpu"`
 	NoSandbox       bool          `mapstructure:"no_sandbox"`
+	MaxTabs         int           `mapstructure:"max_tabs"` // Maximum concurrent browser tabs
 }
 
 type SearchConfig struct {
@@ -131,6 +132,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("browser.block_images", false)
 	v.SetDefault("browser.disable_gpu", true)
 	v.SetDefault("browser.no_sandbox", true)
+	v.SetDefault("browser.max_tabs", 10)
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")

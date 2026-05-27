@@ -25,6 +25,7 @@ browser:
   block_images: false
   disable_gpu: true
   no_sandbox: true
+  max_tabs: 10
 
 search:
   provider: duckduckgo  # duckduckgo, brave, bing

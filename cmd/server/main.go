@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/metall/mcp-web-scrape/internal/mcp"
+	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
@@ -39,6 +40,21 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize cache")
 	}
 
+	// Initialize browser pool
+	browserPool, err := browser.New(browser.Config{
+		Logger:         log.Logger,
+		MaxTabs:        cfg.Browser.MaxTabs,
+		Headless:       cfg.Browser.Headless,
+		DisableGPU:     cfg.Browser.DisableGPU,
+		NoSandbox:      cfg.Browser.NoSandbox,
+		ViewportWidth:  cfg.Browser.ViewportWidth,
+		ViewportHeight: cfg.Browser.ViewportHeight,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize browser pool")
+	}
+	defer browserPool.Close()
+
 	// Create MCP server
 	mcpServer, err := mcp.New(mcp.Config{
 		ProtocolVersion: "2024-11-05",
@@ -49,7 +65,8 @@ func main() {
 			BurstSize:         cfg.RateLimit.BurstSize,
 			Enabled:           cfg.RateLimit.Enabled,
 		},
-		Cache: cacheInstance,
+		Cache:        cacheInstance,
+		BrowserPool:  browserPool,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create MCP server")
@@ -113,10 +130,11 @@ func main() {
 	// Metrics endpoint (basic)
 	router.GET("/metrics", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"rate_limit": mcpServer.GetRateLimitInfo(),
+			"rate_limit":  mcpServer.GetRateLimitInfo(),
 			"cache": gin.H{
 				"enabled": cacheInstance.IsEnabled(),
 			},
+			"browser_pool": browserPool.GetStats(),
 		})
 	})
 

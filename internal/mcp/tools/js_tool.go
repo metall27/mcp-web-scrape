@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,16 +15,20 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
+	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/rs/zerolog"
 )
 
 type ScrapeJSTool struct {
 	*BaseTool
-	logger zerolog.Logger
+	cache        *cache.Cache
+	browserPool  *browser.Pool
+	logger       zerolog.Logger
 }
 
-func NewScrapeJSTool() *ScrapeJSTool {
+func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -80,7 +86,9 @@ func NewScrapeJSTool() *ScrapeJSTool {
 	}
 
 	tool := &ScrapeJSTool{
-		logger: logger.Get(),
+		cache:       cache,
+		browserPool: browserPool,
+		logger:      logger.Get(),
 	}
 
 	tool.BaseTool = NewBaseTool(
@@ -108,6 +116,55 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return nil, fmt.Errorf("only http and https schemes are supported")
+	}
+
+	// Check cache first
+	if t.cache != nil && t.cache.IsEnabled() {
+		cacheKey := t.getCacheKey(urlStr, args)
+		if cached, found := t.cache.Get(ctx, cacheKey); found {
+			t.logger.Info().
+				Str("url", urlStr).
+				Str("cache_key", cacheKey).
+				Msg("Cache hit")
+
+			content := []map[string]interface{}{
+				{
+					"type": "text",
+					"text": string(cached.Data),
+				},
+			}
+
+			result := map[string]interface{}{
+				"content": content,
+				"_metadata": map[string]interface{}{
+					"url":          urlStr,
+					"status_code":  200,
+					"content_type": cached.Headers["content_type"],
+					"size_bytes":   len(cached.Data),
+					"cached":       true,
+					"duration_ms":  0,
+					"rendering":    "javascript",
+				},
+			}
+
+			// Add title if available
+			if title, ok := cached.Headers["title"]; ok {
+				result["_metadata"].(map[string]interface{})["title"] = title
+			}
+
+			// Add screenshot if available in cache
+			if screenshotData, ok := cached.Headers["screenshot"]; ok {
+				// Decode base64 screenshot from cache
+				content = append(content, map[string]interface{}{
+					"type":     "image",
+					"data":     []byte(screenshotData),
+					"mimeType": "image/png",
+				})
+				result["_metadata"].(map[string]interface{})["screenshot_included"] = true
+			}
+
+			return result, nil
+		}
 	}
 
 	// Extract options
@@ -142,26 +199,6 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		shouldScreenshot = true
 	}
 
-	userAgent := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-	if ua, ok := args["user_agent"].(string); ok && ua != "" {
-		userAgent = ua
-	}
-
-	viewportWidth := 1920
-	if vw, ok := args["viewport_width"].(float64); ok {
-		viewportWidth = int(vw)
-	}
-
-	viewportHeight := 1080
-	if vh, ok := args["viewport_height"].(float64); ok {
-		viewportHeight = int(vh)
-	}
-
-	blockImages := false
-	if bi, ok := args["block_images"].(bool); ok {
-		blockImages = bi
-	}
-
 	t.logger.Info().
 		Str("url", urlStr).
 		Int("timeout", timeout).
@@ -172,42 +209,15 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Msg("Starting JavaScript-rendered scrape")
 
 	// Create context with timeout
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer timeoutCancel()
 
-	// Create chromedp context with options
-	allocOpts := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.DisableGPU,
-		chromedp.NoSandbox,
-		chromedp.Headless,
-		chromedp.UserAgent(userAgent),
-		chromedp.WindowSize(viewportWidth, viewportHeight),
-		// Stealth mode to avoid bot detection
-		chromedp.Flag("exclude-switches", "enable-automation"),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("no-first-run", true),
-		chromedp.Flag("no-default-browser-check", true),
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
+	// Get browser context from pool
+	browserCtx, browserCancel, err := t.browserPool.GetContext(timeoutCtx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get browser context: %w", err)
 	}
-
-	// Add image blocking if requested
-	if blockImages {
-		allocOpts = append(allocOpts,
-			chromedp.Flag("blink-settings", "imagesEnabled=false"),
-		)
-	}
-
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, allocOpts...)
-	defer cancel()
-
-	ctx, cancel = chromedp.NewContext(allocCtx)
-	defer cancel()
+	defer browserCancel()
 
 	// Result variables
 	var html string
@@ -246,7 +256,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Run tasks
-	if err := chromedp.Run(ctx, tasks...); err != nil {
+	if err := chromedp.Run(browserCtx, tasks...); err != nil {
 		// Chrome failed, try fallback to HTTP scraping
 		t.logger.Warn().
 			Str("url", urlStr).
@@ -396,6 +406,40 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Bool("screenshot", screenshot).
 		Msg("Successfully scraped URL with JavaScript")
 
+	// Store in cache
+	if t.cache != nil && t.cache.IsEnabled() {
+		cacheKey := t.getCacheKey(urlStr, args)
+		ttl := t.cache.GetTTLForContentType("text/html")
+
+		cachedResp := &cache.CachedResponse{
+			Data:      []byte(html),
+			Timestamp: time.Now(),
+			Headers: map[string]string{
+				"content_type": "text/html",
+				"title":        title,
+				"final_url":    finalURL,
+			},
+		}
+
+		// Store screenshot in cache if taken
+		if includeScreenshot && len(screenshotData) > 0 {
+			cachedResp.Headers["screenshot"] = string(screenshotData)
+			cachedResp.Headers["screenshot_size"] = fmt.Sprintf("%d", len(screenshotData))
+		}
+
+		if err := t.cache.Set(ctx, cacheKey, cachedResp, ttl); err != nil {
+			t.logger.Error().
+				Str("cache_key", cacheKey).
+				Err(err).
+				Msg("Failed to store in cache")
+		} else {
+			t.logger.Info().
+				Str("cache_key", cacheKey).
+				Dur("ttl", ttl).
+				Msg("Stored in cache")
+		}
+	}
+
 	// Auto-index in RAG (background, non-blocking)
 	go func() {
 		// Get RAG base URL from environment or use default
@@ -428,4 +472,26 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	}()
 
 	return result, nil
+}
+
+// getCacheKey generates a cache key based on URL and parameters
+func (t *ScrapeJSTool) getCacheKey(url string, args map[string]interface{}) string {
+	hash := sha256.New()
+	hash.Write([]byte(url))
+
+	// Include relevant parameters in hash for JS scraping
+	// Different parameters = different result
+	keys := []string{"wait_for", "wait_time", "viewport_width", "viewport_height", "block_images"}
+	for _, key := range keys {
+		if val, ok := args[key]; ok {
+			hash.Write([]byte(fmt.Sprintf("%s:%v", key, val)))
+		}
+	}
+
+	// Include user agent if custom
+	if ua, ok := args["user_agent"].(string); ok && ua != "" {
+		hash.Write([]byte("user_agent:" + ua))
+	}
+
+	return "scrape_js:" + hex.EncodeToString(hash.Sum(nil))[:16]
 }

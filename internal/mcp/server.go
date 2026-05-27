@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/mcp/tools"
@@ -18,6 +19,7 @@ type Server struct {
 	config       Config
 	logger       zerolog.Logger
 	cache        *cache.Cache
+	browserPool  *browser.Pool
 	rateLimiter  *rate.Limiter
 	tools        map[string]tools.Tool
 	toolsOrder   []string // Preserve registration order
@@ -30,6 +32,7 @@ type Config struct {
 	ServerVersion   string
 	RateLimit       RateLimitConfig
 	Cache           *cache.Cache
+	BrowserPool     *browser.Pool
 }
 
 type RateLimitConfig struct {
@@ -40,12 +43,13 @@ type RateLimitConfig struct {
 
 func New(cfg Config) (*Server, error) {
 	s := &Server{
-		config:     cfg,
-		logger:     logger.Get(),
-		cache:      cfg.Cache,
-		serverInfo: ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
-		tools:      make(map[string]tools.Tool),
-		toolsOrder: []string{},
+		config:      cfg,
+		logger:      logger.Get(),
+		cache:       cfg.Cache,
+		browserPool: cfg.BrowserPool,
+		serverInfo:  ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
+		tools:       make(map[string]tools.Tool),
+		toolsOrder:  []string{},
 	}
 
 	// Setup rate limiter
@@ -70,7 +74,7 @@ func (s *Server) registerDefaultTools() error {
 		tools.NewRAGIndexTool(),         // Index pages for RAG
 		tools.NewRAGHealthTool(),        // RAG health check
 		tools.NewRAGListDocumentsTool(), // List indexed documents
-		tools.NewScrapeJSTool(),         // FALLBACK: Scrape only if rag_search empty
+		tools.NewScrapeJSTool(s.cache, s.browserPool), // FALLBACK: Scrape only if rag_search empty
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
 		tools.NewSmartExtractorTool(),   // Content extraction
