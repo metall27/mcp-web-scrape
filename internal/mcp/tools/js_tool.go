@@ -338,7 +338,7 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 	}
 
 	// Extract output_format
-	outputFormat := "html"
+	outputFormat := "markdown"  // Default to markdown for 75% token savings
 	if of, ok := args["output_format"].(string); ok {
 		outputFormat = of
 	}
