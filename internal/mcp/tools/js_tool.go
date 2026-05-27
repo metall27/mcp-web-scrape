@@ -84,6 +84,11 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "Block images from loading (faster scraping)",
 				"default":     false,
 			},
+			"wait_for_network_idle": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Wait for network idle instead of fixed wait_time (smarter, 30s timeout)",
+				"default":     false,
+			},
 		},
 		"required": []string{"url"},
 	}
@@ -98,7 +103,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Get HTML content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Automatically optimizes HTML and takes screenshots for large pages. Auto-indexes to RAG for future semantic search.",
+		"Get HTML content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Automatically optimizes HTML and takes screenshots for large pages. Auto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites.",
 		schema,
 		tool.Execute,
 	)
@@ -187,6 +192,11 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		waitTime = int(wt)
 	}
 
+	waitForNetworkIdle := false
+	if wfi, ok := args["wait_for_network_idle"].(bool); ok {
+		waitForNetworkIdle = wfi
+	}
+
 	screenshot := false
 	if ss, ok := args["screenshot"].(bool); ok {
 		screenshot = ss
@@ -208,6 +218,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Int("timeout", timeout).
 		Str("wait_for", waitFor).
 		Int("wait_time", waitTime).
+		Bool("wait_for_network_idle", waitForNetworkIdle).
 		Bool("screenshot", shouldScreenshot).
 		Str("screenshot_mode", screenshotMode).
 		Msg("Starting JavaScript-rendered scrape")
@@ -256,8 +267,25 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		tasks = append(tasks, chromedp.WaitReady("body", chromedp.ByQuery))
 	}
 
-	// Add extra wait time
-	tasks = append(tasks, chromedp.Sleep(time.Duration(waitTime)*time.Millisecond))
+	// Wait strategy: Network Idle vs Fixed time
+	if waitForNetworkIdle {
+		// Smart wait: wait for network idle with timeout
+		tasks = append(tasks, browser.NetworkIdleAdvanced(browser.NetworkIdleOption{
+			Timeout:    30 * time.Second, // Maximum wait time
+			MinWait:    time.Duration(waitTime) * time.Millisecond, // Minimum wait (respect user's wait_time)
+			CheckCount: 3, // Need 3 consecutive checks to confirm idle
+		}))
+		t.logger.Info().
+			Bool("network_idle", true).
+			Int("min_wait_ms", waitTime).
+			Msg("Using network idle wait strategy")
+	} else {
+		// Simple fixed delay
+		tasks = append(tasks, chromedp.Sleep(time.Duration(waitTime)*time.Millisecond))
+		t.logger.Debug().
+			Int("wait_ms", waitTime).
+			Msg("Using fixed delay wait strategy")
+	}
 
 	// Get page content
 	tasks = append(tasks,
