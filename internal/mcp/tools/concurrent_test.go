@@ -53,10 +53,6 @@ func TestConcurrentCacheAccess(t *testing.T) {
 }
 
 func TestConcurrentCacheKeyGeneration(t *testing.T) {
-	tool := &ScrapeTool{
-		cache: &cache.Cache{},
-	}
-
 	numGoroutines := 50
 	var wg sync.WaitGroup
 	keys := make(chan string, numGoroutines)
@@ -67,7 +63,7 @@ func TestConcurrentCacheKeyGeneration(t *testing.T) {
 			defer wg.Done()
 
 			url := "https://example.com/page" + string(rune('0'+index%10))
-			key := tool.getCacheKey(url, map[string]interface{}{})
+			key := GenerateCacheKey(url, map[string]interface{}{})
 			keys <- key
 		}(i)
 	}
@@ -83,7 +79,7 @@ func TestConcurrentCacheKeyGeneration(t *testing.T) {
 	t.Logf("Generated %d unique keys from %d goroutines", len(uniqueKeys), numGoroutines)
 }
 
-func TestConcurrentScrapeToolCreation(t *testing.T) {
+func TestConcurrentScraperCreation(t *testing.T) {
 	cfg := config.CacheConfig{
 		Enabled:    true,
 		TTL:        1 * time.Minute,
@@ -100,14 +96,12 @@ func TestConcurrentScrapeToolCreation(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 
-			// Test cache key generation (doesn't need logger)
-			tool := &ScrapeTool{
-				cache: c,
-			}
-			_ = tool.getCacheKey("https://example.com", map[string]interface{}{})
+			// Test scraper creation (doesn't need logger)
+			scraper := NewHTTPScraper(c, nil, nil)
+			_ = scraper.Name()
 		}(i)
 	}
 
 	wg.Wait()
-	t.Logf("Concurrent tool creation test completed with %d goroutines", numGoroutines)
+	t.Logf("Concurrent scraper creation test completed with %d goroutines", numGoroutines)
 }

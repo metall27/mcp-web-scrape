@@ -4,9 +4,7 @@ import (
 	"testing"
 )
 
-func BenchmarkGetCacheKey(b *testing.B) {
-	tool := &ScrapeTool{}
-
+func BenchmarkGenerateCacheKey(b *testing.B) {
 	urls := []string{
 		"https://example.com",
 		"https://example.com/page1",
@@ -18,27 +16,23 @@ func BenchmarkGetCacheKey(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		url := urls[i%len(urls)]
-		tool.getCacheKey(url, map[string]interface{}{})
+		GenerateCacheKey(url, map[string]interface{}{})
 	}
 }
 
-func BenchmarkGetCacheKeyWithHeaders(b *testing.B) {
-	tool := &ScrapeTool{}
-
-	args := map[string]interface{}{
-		"headers": map[string]interface{}{
-			"Authorization": "Bearer token123",
-			"X-Custom-Header": "value",
-		},
+func BenchmarkGenerateCacheKeyWithParams(b *testing.B) {
+	params := map[string]interface{}{
+		"user_agent": "CustomAgent",
+		"timeout":    "30s",
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tool.getCacheKey("https://example.com", args)
+		GenerateCacheKey("https://example.com", params)
 	}
 }
 
-func BenchmarkExtractTitle(b *testing.B) {
+func BenchmarkExtractTitleFromHTML(b *testing.B) {
 	html := `<!DOCTYPE html>
 <html>
 <head>
@@ -51,6 +45,6 @@ func BenchmarkExtractTitle(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		extractTitle(html)
+		extractTitleFromHTML(html)
 	}
 }
