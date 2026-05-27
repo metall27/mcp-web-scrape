@@ -209,6 +209,11 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Str("screenshot_mode", opts.ScreenshotMode).
 		Msg("Starting JavaScript-rendered scrape")
 
+	// Validate scraper is initialized
+	if t.scraper == nil {
+		return nil, fmt.Errorf("Chrome scraper is not initialized - this is a configuration error")
+	}
+
 	// Execute scrape using ChromeScraper
 	result, err := t.scraper.Scrape(ctx, urlStr, opts)
 	if err != nil {
