@@ -47,6 +47,11 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
 	startTime := time.Now()
 
+	// 0. Validate browser pool (CRITICAL for Chrome scraper)
+	if s.browserPool == nil {
+		return nil, fmt.Errorf("browser pool is not initialized - Chrome scraping is not available in this environment")
+	}
+
 	// 1. Validate URL
 	if _, err := ValidateURL(urlStr); err != nil {
 		return nil, err
