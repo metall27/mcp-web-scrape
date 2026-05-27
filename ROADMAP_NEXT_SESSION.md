@@ -1,8 +1,8 @@
-# Roadmap: Next Session (Interactivity + Refactoring)
+# Roadmap: Next Session — Final Phase (Refactoring)
 
 ## Текущий статус: 8/9 задач выполнено ✅ (89%)
 
-### ✅ Выполнено:
+### ✅ Выполнено (прошлые сессии):
 1. ✅ Кэширование для scrape_with_js
 2. ✅ Пул браузеров
 3. ✅ Ротация User-Agent
@@ -10,407 +10,850 @@
 5. ✅ Markdown конвертация
 6. ✅ Stealth улучшения
 7. ✅ Поддержка прокси
-8. ✅ **Интерактивность** — click, type, scroll actions (ВЫПОЛНЕНО!)
+8. ✅ **Интерактивность** — click, type, scroll actions (ВЫПОЛНЕНО в этой сессии!)
 
-### 🔄 Осталось:
-9. **Рефакторинг** — единый интерфейс Scraper
-
----
-
-## Часть 1: Интерактивность (Priority 1) ✅ ВЫПОЛНЕНО
-
-### ✅ Что было сделано:
-- ✅ Создан пакет `internal/pkg/browser/actions.go` с ActionExecutor
-- ✅ Обновлена схема `scrape_with_js` с полем `actions`
-- ✅ Интегрировано выполнение действий в `js_tool.go`
-- ✅ Добавлена обработка ошибок и retry логика (до 3 ретраев)
-- ✅ Созданы примеры использования в `examples/interactive/`
-- ✅ Обновлена документация (README.md)
-
-### Реализованные действия:
-```
-- click(selector)              — кликнуть по элементу
-- type(selector, text)         — ввести текст в поле
-- submit(selector)             — отправить форму
-- scroll_to(selector)         — прокрутить к элементу
-- wait_for(selector, timeout) — ждать появления элемента
-- wait_for_text(text, timeout) — ждать текста на странице
-- hover(selector)              — навести мышь (для dropdowns)
-- select_option(selector, value) — выбрать в dropdown
-- execute_js(code)            — выполнить JS код
-- upload_file(selector, path) — загрузить файл
-```
-
-### Пример использования:
-```json
-{
-  "url": "https://example.com/login",
-  "actions": [
-    {"type": "type", "selector": "#username", "text": "user"},
-    {"type": "type", "selector": "#password", "text": "pass"},
-    {"type": "click", "selector": "button[type='submit']"},
-    {"type": "wait_for_text", "text": "Welcome", "timeout": 10000}
-  ]
-}
-```
-
-### Особенности:
-- **Retry логика:** До 3 ретраев с экспоненциальной задержкой
-- **Timeout:** 30 секунд дефолт для каждого действия
-- **Stealth:** Случайные задержки если stealth включен
-- **Кэширование:** Запросы с действиями не кэшируются
-- **Метаданные:** Информация о действиях в результате
-- **Graceful error handling:** Детальные логи
+### 🔄 Осталось (ЭТА СЕССИЯ):
+9. **Рефакторинг** — единый интерфейс Scraper (ПОСЛЕДНЯЯ ЗАДАЧА!)
 
 ---
-## Часть 1: Интерактивность (Priority 1) - ИСТОРИЧЕСКАЯ СПРАВКА
+
+## Цель следующей сессии: REFACTORING (100% завершенность)
 
 ### Задача:
-Добавить интерактивные действия в `scrape_with_js` для работы с login-protected контентом и динамическими элементами.
+Создать единый интерфейс `Scraper` для устранения дубликации кода и упрощения поддержки.
 
-### Текущие ограничения:
-- Только чтение контента
-- Не может нажать кнопку, заполнить форму
-- Не может прокрутить к конкретному элементу
-- Нет возможности interaction с SPA после загрузки
-
-### Требуемые Actions:
-
-#### 1.1. Базовые действия (Priority: High)
-```
-- click(selector)          — кликнуть по элементу
-- type(selector, text)      — ввести текст в поле
-- submit(selector)          — отправить форму
-- scroll_to(selector)      — прокрутить к элементу
-- wait_for(selector, timeout) — ждать появления элемента
-```
-
-#### 1.2. Продвинутые действия (Priority: Medium)
-```
-- hover(selector)           — навести мышь (для dropdowns)
-- select_option(selector, value) — выбрать в dropdown
-- upload_file(selector, path)  — загрузить файл
-- execute_js(code)         — выполнить JS код
-- wait_for_text(text, timeout) — ждать текста на странице
-```
-
-#### 1.3. Навигация (Priority: Low)
-```
-- go_back()                 — назад
-- go_forward()              — вперед
-- refresh()                 — обновить страницу
-```
-
-### План реализации:
-
-#### Шаг 1: Изменить API scrape_with_js
-Добавить новое поле `actions` в параметры:
-```json
-{
-  "url": "https://example.com/login",
-  "actions": [
-    {"type": "type", "selector": "#username", "text": "user"},
-    {"type": "type", "selector": "#password", "text": "pass"},
-    {"type": "click", "selector": "button[type='submit']"},
-    {"type": "wait_for_text", "text": "Welcome"}
-  ]
-}
-```
-
-#### Шаг 2: Создать пакет `internal/pkg/browser/actions`
+### Проблема (текущая):
 ```go
-// actions.go
-type Action struct {
-    Type     string
-    Selector string
-    Text     string
-    Value    string
-    Timeout  int
+// ДВА ОТДЕЛЬНЫХ ИНСТРУМЕНТА БЕЗ ОБЩЕГО ИНТЕРФЕЙСА
+scrape_url := NewScrapeTool(cache)           // HTTP (301 строка)
+scrape_with_js := NewScrapeJSTool(...)       // Chrome (849 строк)
+
+// ДУБЛИКАЦИЯ КОДА:
+- getCacheKey() в обоих файлах
+- Логика кэширования duplicated
+- HTML оптимизация duplicated
+- Валидация URL duplicated
+- Result struct разный в каждом
+```
+
+### Решение (рефакторинг):
+```go
+// ЕДИНЫЙ ИНТЕРФЕЙС ДЛЯ ВСЕХ СКРАПЕРОВ
+type Scraper interface {
+    Scrape(ctx, url string, opts Options) (*Result, error)
+    Name() string
+    SupportsJS() bool
+    SupportsActions() bool
 }
 
-func ExecuteClick(ctx, selector string) error
-func ExecuteType(ctx, selector, text string) error
-func ExecuteWaitFor(ctx, selector string, timeout time.Duration) error
-func ExecuteScrollTo(ctx, selector string) error
+// УНИФИЦИРОВАННЫЙ СКРАПЕР
+scrapers := []Scraper{
+    NewHTTPScraper(cache, uaRotator, proxy),      // 200 строк (-33%)
+    NewChromeScraper(cache, browserPool, uaRotator, proxy), // 600 строк (-29%)
+}
+
+unified := NewUnifiedScraper(scrapers)            // Авто-выбор
+result, err := unified.Scrape(ctx, url, opts)     // Единый API
 ```
-
-#### Шаг 3: Интеграция в js_tool.go
-- Распарсить `actions` из параметров
-- Выполнить действия после загрузки страницы
-- Обработать ошибки (fallback, retry)
-- Логирование каждого действия
-
-#### Шаг 4: Тестирование
-- Login форма на тестовом сайте
-- SPA с lazy loading
-- E-commerce с фильтрами
-- Проверка обработки ошибок
-
-### Структура файлов:
-```
-internal/pkg/browser/actions.go       # Основные действия
-internal/mcp/tools/js_tool.go        # Интеграция
-internal/mcp/tools/actions_test.go  # Тесты
-examples/interactive/                # Примеры использования
-```
-
-### Ожидаемые сложности:
-1. **Обработка ошибок** — что если элемент не найден?
-2. **Retry логика** — сколько раз пытаться?
-3. **Timeouts** — разумные дефолты
-4. **Screenshot после действий** — для визуального контроля
-5. **Совместимость с кэшем** — действия не кэшируются
 
 ---
 
-## Часть 2: Рефакторинг (Priority 2)
+## План реализации (2-3 часа)
 
-### Текущие проблемы:
-1. **Дубликация кода** — `ScrapeTool` и `ScrapeJSTool` имеют общую логику
-2. **Разные интерфейсы** — нет единого `Scraper` интерфейса
-3. **Сложность поддержки** — изменения нужно делать в 2 местах
+### Phase 1: Архитектура (30 минут) ⏱️
 
-### План рефакторинга:
+#### 1.1. Создать интерфейс Scraper
+**Файл:** `internal/mcp/tools/scraper.go`
 
-#### Шаг 1: Создать единый интерфейс
 ```go
-// internal/mcp/tools/scraper.go
+package tools
+
+import (
+    "context"
+    "time"
+)
+
+// Scraper интерфейс для всех скраперов
 type Scraper interface {
-    Scrape(ctx context.Context, url string, opts ScrapeOptions) (*ScrapeResult, error)
+    // Scrape выполняет скрапинг URL
+    Scrape(ctx context.Context, url string, opts Options) (*Result, error)
+
+    // Name возвращает название скрапера
     Name() string
+
+    // SupportsJS возвращает true если поддерживает JavaScript
     SupportsJS() bool
+
+    // SupportsActions возвращает true если поддерживает интерактивные действия
+    SupportsActions() bool
 }
 
-type ScrapeOptions struct {
-    Timeout       time.Duration
-    UserAgent     string
-    WaitFor       string
-    WaitTime      time.Duration
-    Screenshot    bool
-    OutputFormat  string
-    Stealth       *browser.StealthConfig
-    Actions       []Action
+// Options общие опции для всех скраперов
+type Options struct {
+    // Timeout
+    Timeout time.Duration
+
+    // User Agent
+    UserAgent string
+
+    // Wait strategies
+    WaitForSelector string
+    WaitForDuration time.Duration
+    WaitForNetworkIdle bool
+
+    // Content format
+    OutputFormat string // "html" или "markdown"
+
+    // Screenshot
+    Screenshot bool
+    ScreenshotMode string
+
+    // Viewport
+    ViewportWidth int
+    ViewportHeight int
+
+    // Stealth
+    StealthEnabled bool
+    StealthScroll bool
+    StealthMouse bool
+
+    // Proxy (не используется в HTTPScraper, только в ChromeScraper)
+    ProxyEnabled bool
+
+    // Interactive actions (только ChromeScraper)
+    Actions []Action
 }
 
-type ScrapeResult struct {
-    HTML       string
-    URL        string
+// Result общий результат для всех скраперов
+type Result struct {
+    // Content
+    HTML string
+    Title string
+
+    // Metadata
+    URL string
+    FinalURL string
     StatusCode int
-    Title       string
-    Screenshot  []byte
-    Duration    time.Duration
-    Metadata    map[string]interface{}
+    ContentType string
+
+    // Performance
+    Duration time.Duration
+    SizeBytes int
+
+    // Screenshot
+    Screenshot []byte
+
+    // Format info
+    Format string // "html" или "markdown"
+
+    // Actions metadata (если были actions)
+    ActionsMetadata *ActionsMetadata
+
+    // Cache info
+    FromCache bool
+}
+
+// ActionsMetadata метаданные о выполненных действиях
+type ActionsMetadata struct {
+    Count int
+    Types []string
 }
 ```
 
-#### Шаг 2: Рефакторинг существующих инструментов
+#### 1.2. Создать общие функции
+**Файл:** `internal/mcp/tools/common.go`
+
 ```go
-// HTTPScraper (было ScrapeTool)
-type HTTPScraper struct {
-    cache     *cache.Cache
-    client    *http.Client
-    converter *converter.Converter
-    uaRotator *useragent.Rotator
-    proxy     *proxy.Rotator
+package tools
+
+import (
+    "crypto/sha256"
+    "encoding/hex"
+    "fmt"
+    "net/url"
+)
+
+// Common shared functions for all scrapers
+
+// ValidateURL проверяет URL
+func ValidateURL(urlStr string) (*url.URL, error) {
+    parsedURL, err := url.Parse(urlStr)
+    if err != nil {
+        return nil, fmt.Errorf("invalid URL: %w", err)
+    }
+
+    if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+        return nil, fmt.Errorf("only http and https schemes are supported")
+    }
+
+    return parsedURL, nil
 }
 
-func (s *HTTPScraper) Scrape(ctx, url string, opts ScrapeOptions) (*ScrapeResult, error)
+// GenerateCacheKey генерирует ключ кэша
+func GenerateCacheKey(url string, params map[string]interface{}) string {
+    hash := sha256.New()
+    hash.Write([]byte(url))
 
-// ChromeScraper (было ScrapeJSTool)
+    // Include parameters in hash
+    for key, val := range params {
+        hash.Write([]byte(fmt.Sprintf("%s:%v", key, val)))
+    }
+
+    return "scrape:" + hex.EncodeToString(hash.Sum(nil))[:16]
+}
+```
+
+---
+
+### Phase 2: HTTPScraper (45 минут) ⏱️
+
+#### 2.1. Рефакторить scraper.go → http_scraper.go
+**Файл:** `internal/mcp/tools/http_scraper.go`
+
+```go
+package tools
+
+import (
+    "context"
+    "fmt"
+    "io"
+    "net/http"
+    "time"
+)
+
+// HTTPScraper скрапер для статических сайтов (HTTP)
+type HTTPScraper struct {
+    cache     *cache.Cache
+    uaRotator *useragent.Rotator
+    proxy     *proxy.Rotator
+    client    *http.Client
+    logger    zerolog.Logger
+}
+
+// NewHTTPScraper создает новый HTTPScraper
+func NewHTTPScraper(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *HTTPScraper {
+    return &HTTPScraper{
+        cache:     cache,
+        uaRotator: uaRotator,
+        proxy:     proxy,
+        logger:    logger.Get(),
+    }
+}
+
+// Scrape реализует интерфейс Scraper
+func (s *HTTPScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+    // 1. Validate URL
+    if _, err := ValidateURL(url); err != nil {
+        return nil, err
+    }
+
+    // 2. Check cache
+    if s.cache != nil && s.cache.IsEnabled() {
+        cacheKey := GenerateCacheKey(url, optsToMap(opts))
+        if cached, found := s.cache.Get(ctx, cacheKey); found {
+            return &Result{
+                HTML:      string(cached.Data),
+                URL:       url,
+                FromCache: true,
+                // ... другие поля
+            }, nil
+        }
+    }
+
+    // 3. Create HTTP client
+    client := &http.Client{
+        Timeout: opts.Timeout,
+    }
+
+    // 4. Add proxy if enabled
+    if s.proxy.IsEnabled() {
+        client.Transport = &http.Transport{
+            Proxy: s.proxy.GetProxyFunc(),
+        }
+    }
+
+    // 5. Make request
+    req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+
+    // Set headers
+    if opts.UserAgent != "" {
+        req.Header.Set("User-Agent", opts.UserAgent)
+    } else if s.uaRotator != nil {
+        req.Header.Set("User-Agent", s.uaRotator.Get())
+    }
+
+    // 6. Execute request
+    resp, err := client.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("HTTP request failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+    // 7. Read body
+    body, _ := io.ReadAll(resp.Body)
+
+    // 8. Optimize HTML
+    html := string(OptimizeHTML(body))
+
+    // 9. Build result
+    result := &Result{
+        HTML:        html,
+        URL:         url,
+        FinalURL:    url,
+        StatusCode:  resp.StatusCode,
+        ContentType: resp.Header.Get("Content-Type"),
+        Duration:    time.Since(startTime),
+        SizeBytes:   len(html),
+        Format:      opts.OutputFormat,
+        FromCache:   false,
+    }
+
+    // 10. Store in cache
+    if s.cache != nil && s.cache.IsEnabled() {
+        cacheKey := GenerateCacheKey(url, optsToMap(opts))
+        cachedResp := &cache.CachedResponse{
+            Data:      []byte(html),
+            Timestamp: time.Now(),
+            Headers: map[string]string{
+                "content_type": resp.Header.Get("Content-Type"),
+            },
+        }
+        s.cache.Set(ctx, cacheKey, cachedResp, ttl)
+    }
+
+    return result, nil
+}
+
+// Name возвращает название скрапера
+func (s *HTTPScraper) Name() string {
+    return "HTTP"
+}
+
+// SupportsJS возвращает false
+func (s *HTTPScraper) SupportsJS() bool {
+    return false
+}
+
+// SupportsActions возвращает false
+func (s *HTTPScraper) SupportsActions() bool {
+    return false
+}
+
+// Helper: convert Options to map for cache key
+func optsToMap(opts Options) map[string]interface{} {
+    return map[string]interface{}{
+        "user_agent": opts.UserAgent,
+        "timeout":    opts.Timeout.String(),
+        "format":     opts.OutputFormat,
+    }
+}
+```
+
+---
+
+### Phase 3: ChromeScraper (60 минут) ⏱️
+
+#### 3.1. Рефакторить js_tool.go → chrome_scraper.go
+**Файл:** `internal/mcp/tools/chrome_scraper.go`
+
+```go
+package tools
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/chromedp/chromedp"
+    "github.com/metall/mcp-web-scrape/internal/pkg/browser"
+)
+
+// ChromeScraper скрапер для динамических сайтов (JavaScript)
 type ChromeScraper struct {
     cache       *cache.Cache
     browserPool *browser.Pool
-    converter   *converter.Converter
     uaRotator   *useragent.Rotator
     proxy       *proxy.Rotator
+    converter   *converter.Converter
+    logger      zerolog.Logger
 }
 
-func (s *ChromeScraper) Scrape(ctx, url string, opts ScrapeOptions) (*ScrapeResult, error)
-```
-
-#### Шаг 3: Единая точка входа
-```go
-// internal/mcp/tools/unified_scraper.go
-type UnifiedScraper struct {
-    http   *HTTPScraper
-    chrome *ChromeScraper
+// NewChromeScraper создает новый ChromeScraper
+func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *ChromeScraper {
+    return &ChromeScraper{
+        cache:       cache,
+        browserPool: browserPool,
+        uaRotator:   uaRotator,
+        proxy:       proxy,
+        converter:   converter.New(),
+        logger:      logger.Get(),
+    }
 }
 
-func (s *UnifiedScraper) Scrape(ctx, url string, opts ScrapeOptions) (*ScrapeResult, error) {
-    // Auto-select based on options
-    if opts.Actions != nil && len(opts.Actions) > 0 {
-        return s.chrome.Scrape(ctx, url, opts)
+// Scrape реализует интерфейс Scraper
+func (s *ChromeScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+    // 1. Validate URL
+    if _, err := ValidateURL(url); err != nil {
+        return nil, err
     }
 
-    // Try HTTP first, fallback to Chrome
-    result, err := s.http.Scrape(ctx, url, opts)
+    // 2. Check cache (bypass if actions present)
+    hasActions := len(opts.Actions) > 0
+    if s.cache != nil && s.cache.IsEnabled() && !hasActions {
+        cacheKey := GenerateCacheKey(url, optsToMap(opts))
+        if cached, found := s.cache.Get(ctx, cacheKey); found {
+            return &Result{
+                HTML:      string(cached.Data),
+                URL:       url,
+                FromCache: true,
+            }, nil
+        }
+    }
+
+    // 3. Get browser context
+    browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
     if err != nil {
-        return s.chrome.Scrape(ctx, url, opts)
+        return nil, fmt.Errorf("failed to get browser context: %w", err)
     }
+    defer browserCancel()
+
+    // 4. Build Chrome tasks
+    tasks := s.buildChromeTasks(url, opts)
+
+    // 5. Run tasks
+    if err := chromedp.Run(browserCtx, tasks...); err != nil {
+        // HTTP fallback?
+        return nil, fmt.Errorf("Chrome scraping failed: %w", err)
+    }
+
+    // 6. Optimize and convert HTML
+    html := string(OptimizeHTML([]byte(htmlData)))
+    if opts.OutputFormat == "markdown" {
+        html, _ = s.converter.Convert(html, converter.FormatMarkdown)
+    }
+
+    // 7. Build result
+    result := &Result{
+        HTML:           html,
+        URL:            url,
+        FinalURL:       finalURL,
+        Title:          title,
+        StatusCode:     200,
+        ContentType:    "text/html",
+        Duration:       time.Since(startTime),
+        SizeBytes:      len(html),
+        Screenshot:     screenshotData,
+        Format:         opts.OutputFormat,
+        FromCache:      false,
+        ActionsMetadata: actionsMetadata,
+    }
+
+    // 8. Store in cache (only if no actions)
+    if s.cache != nil && s.cache.IsEnabled() && !hasActions {
+        cacheKey := GenerateCacheKey(url, optsToMap(opts))
+        // ... store in cache
+    }
+
     return result, nil
 }
+
+// Name возвращает название скрапера
+func (s *ChromeScraper) Name() string {
+    return "Chrome"
+}
+
+// SupportsJS возвращает true
+func (s *ChromeScraper) SupportsJS() bool {
+    return true
+}
+
+// SupportsActions возвращает true
+func (s *ChromeScraper) SupportsActions() bool {
+    return true
+}
+
+// buildChromeTasks строит список Chrome задач
+func (s *ChromeScraper) buildChromeTasks(url string, opts Options) []chromedp.Action {
+    tasks := []chromedp.Action{
+        chromedp.Navigate(url),
+        chromedp.WaitReady("body", chromedp.ByQuery),
+    }
+
+    // Wait strategies
+    if opts.WaitForNetworkIdle {
+        tasks = append(tasks, browser.NetworkIdleAdvanced(...))
+    } else {
+        tasks = append(tasks, chromedp.Sleep(opts.WaitForDuration))
+    }
+
+    // Interactive actions
+    if len(opts.Actions) > 0 {
+        actionExecutor := browser.NewActionExecutor(s.logger, stealth)
+        tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
+            return actionExecutor.ExecuteActions(ctx, opts.Actions)
+        }))
+    }
+
+    // Get content
+    tasks = append(tasks,
+        chromedp.OuterHTML("html", &htmlData, chromedp.ByQuery),
+        chromedp.Title(&title),
+        chromedp.Location(&finalURL),
+    )
+
+    // Screenshot
+    if opts.Screenshot {
+        tasks = append(tasks, chromedp.FullScreenshot(&screenshotData, 90))
+    }
+
+    return tasks
+}
 ```
 
-#### Шаг 4: Миграция MCP инструментов
-- Изменить `registerDefaultTools()` в server.go
-- Обновить схемы инструментов
-- Сохранить обратную совместимость
+---
 
-### Преимущества рефакторинга:
-1. **Меньше кода** — убрать дубликацию
-2. **Проще поддержка** — изменения в одном месте
-3. **Единый API** — `Scrape()` вместо разных функций
-4. **Тестируемость** — легче писать тесты
-5. **Расширяемость** — добавить новый scraper (например, Playwright) проще
+### Phase 4: UnifiedScraper (30 минут) ⏱️
 
-### Структура файлов после рефакторинга:
+#### 4.1. Создать unified_scraper.go
+**Файл:** `internal/mcp/tools/unified_scraper.go`
+
+```go
+package tools
+
+import (
+    "context"
+    "fmt"
+)
+
+// UnifiedScraper автоматический выбор лучшего метода скрапинга
+type UnifiedScraper struct {
+    scrapers []Scraper
+    logger   zerolog.Logger
+}
+
+// NewUnifiedScraper создает новый UnifiedScraper
+func NewUnifiedScraper(scrapers []Scraper) *UnifiedScraper {
+    return &UnifiedScraper{
+        scrapers: scrapers,
+        logger:   logger.Get(),
+    }
+}
+
+// Scrape автоматически выбирает лучший метод
+func (s *UnifiedScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+    // 1. Определить требования
+    needsJS := s.needsJavaScript(url, opts)
+    needsActions := len(opts.Actions) > 0
+
+    // 2. Выбрать скрапер
+    selectedScraper := s.selectScraper(needsJS, needsActions)
+
+    s.logger.Info().
+        Str("url", url).
+        Str("selected_scraper", selectedScraper.Name()).
+        Bool("needs_js", needsJS).
+        Bool("needs_actions", needsActions).
+        Msg("Auto-selected scraper")
+
+    // 3. Выполнить скрапинг
+    result, err := selectedScraper.Scrape(ctx, url, opts)
+    if err != nil {
+        // 4. Fallback: попробовать следующий скрапер
+        return s.tryFallback(ctx, url, opts, selectedScraper, err)
+    }
+
+    // 5. Добавить метаданные о выбранном методе
+    result.Method = selectedScraper.Name()
+
+    return result, nil
+}
+
+// Name возвращает название скрапера
+func (s *UnifiedScraper) Name() string {
+    return "Unified"
+}
+
+// SupportsJS возвращает true (если есть ChromeScraper)
+func (s *UnifiedScraper) SupportsJS() bool {
+    for _, scraper := range s.scrapers {
+        if scraper.SupportsJS() {
+            return true
+        }
+    }
+    return false
+}
+
+// SupportsActions возвращает true (если есть ChromeScraper)
+func (s *UnifiedScraper) SupportsActions() bool {
+    for _, scraper := range s.scrapers {
+        if scraper.SupportsActions() {
+            return true
+        }
+    }
+    return false
+}
+
+// selectScraper выбирает лучший скрапер
+func (s *UnifiedScraper) selectScraper(needsJS, needsActions bool) Scraper {
+    // Приоритет: Actions > JS > HTTP
+    for _, scraper := range s.scrapers {
+        if needsActions && scraper.SupportsActions() {
+            return scraper
+        }
+        if needsJS && scraper.SupportsJS() {
+            return scraper
+        }
+    }
+
+    // Дефолт: первый скрапер (обычно HTTP)
+    return s.scrapers[0]
+}
+
+// needsJavaScript определяет нужен ли JavaScript
+func (s *UnifiedScraper) needsJavaScript(url string, opts Options) bool {
+    // Явные требования
+    if opts.WaitForNetworkIdle {
+        return true
+    }
+
+    // Известные JavaScript сайты
+    jsSites := []string{
+        "github.com",
+        "twitter.com",
+        "facebook.com",
+        "react.dev",
+        "vuejs.org",
+        "angular.io",
+    }
+
+    for _, site := range jsSites {
+        if contains(url, site) {
+            return true
+        }
+    }
+
+    return false
+}
+
+// tryFallback пробует следующий скрапер при ошибке
+func (s *UnifiedScraper) tryFallback(ctx context.Context, url string, opts Options, failedScraper Scraper, originalErr error) (*Result, error) {
+    for _, scraper := range s.scrapers {
+        if scraper.Name() != failedScraper.Name() {
+            s.logger.Warn().
+                Str("url", url).
+                Str("failed_scraper", failedScraper.Name()).
+                Str("fallback_scraper", scraper.Name()).
+                Err(originalErr).
+                Msg("Trying fallback scraper")
+
+            result, err := scraper.Scrape(ctx, url, opts)
+            if err == nil {
+                return result, nil
+            }
+        }
+    }
+
+    return nil, fmt.Errorf("all scrapers failed: %w", originalErr)
+}
+
+func contains(s, substr string) bool {
+    return len(s) >= len(substr) && (s == substr ||
+        len(s) > len(substr) && (s[:len(substr)] == substr ||
+        s[len(s)-len(substr):] == substr ||
+        containsMiddle(s, substr)))
+}
+
+func containsMiddle(s, substr string) bool {
+    for i := 0; i <= len(s)-len(substr); i++ {
+        if s[i:i+len(substr)] == substr {
+            return true
+        }
+    }
+    return false
+}
+```
+
+---
+
+### Phase 5: Интеграция (15 минут) ⏱️
+
+#### 5.1. Обновить internal/mcp/server.go
+**Файл:** `internal/mcp/server.go`
+
+```go
+// Создать скраперы
+httpScraper := NewHTTPScraper(cache, uaRotator, proxy)
+chromeScraper := NewChromeScraper(cache, browserPool, uaRotator, proxy)
+
+// Создать unified scraper
+unifiedScraper := NewUnifiedScraper([]Scraper{
+    httpScraper,
+    chromeScraper,
+})
+
+// Регистрация инструментов
+registerDefaultTools(mcps, cache, browserPool, ragConfig, uaRotator, proxy, unifiedScraper)
+```
+
+#### 5.2. Обновить registerDefaultTools
+```go
+func registerDefaultTools(mcps *mcp.MCPServer, cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator, unifiedScraper *UnifiedScraper) {
+    // Регистрируем инструменты
+    scrapeURL := NewScrapeURLTool(unifiedScraper) // Использует unified scraper
+    scrapeWithJS := NewScrapeWithJSTool(unifiedScraper) // Использует unified scraper
+    // ...
+}
+```
+
+---
+
+### Phase 6: Тестирование (30 минут) ⏱️
+
+#### 6.1. Unit тесты
+**Файл:** `internal/mcp/tools/scraper_test.go`
+
+```go
+package tools
+
+import (
+    "context"
+    "testing"
+    "time"
+)
+
+func TestHTTPScraper(t *testing.T) {
+    scraper := NewHTTPScraper(nil, nil, nil)
+
+    if scraper.Name() != "HTTP" {
+        t.Errorf("Expected name 'HTTP', got '%s'", scraper.Name())
+    }
+
+    if scraper.SupportsJS() {
+        t.Error("HTTPScraper should not support JS")
+    }
+}
+
+func TestChromeScraper(t *testing.T) {
+    scraper := NewChromeScraper(nil, nil, nil, nil)
+
+    if scraper.Name() != "Chrome" {
+        t.Errorf("Expected name 'Chrome', got '%s'", scraper.Name())
+    }
+
+    if !scraper.SupportsJS() {
+        t.Error("ChromeScraper should support JS")
+    }
+}
+
+func TestUnifiedScraper(t *testing.T) {
+    httpScraper := NewHTTPScraper(nil, nil, nil)
+    chromeScraper := NewChromeScraper(nil, nil, nil, nil)
+
+    unified := NewUnifiedScraper([]Scraper{
+        httpScraper,
+        chromeScraper,
+    })
+
+    if !unified.SupportsJS() {
+        t.Error("UnifiedScraper should support JS (has ChromeScraper)")
+    }
+}
+```
+
+#### 6.2. Integration тесты
+```go
+func TestUnifiedScraperIntegration(t *testing.T) {
+    if testing.Short() {
+        t.Skip("Skipping integration test")
+    }
+
+    // Создать реальные скраперы
+    cache := cache.New(cache.Config{Enabled: false})
+    browserPool := setupTestBrowserPool()
+    uaRotator := useragent.NewRotator(nil)
+    proxy := proxy.NewRotator(nil)
+
+    httpScraper := NewHTTPScraper(cache, uaRotator, proxy)
+    chromeScraper := NewChromeScraper(cache, browserPool, uaRotator, proxy)
+
+    unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper})
+
+    // Тест 1: Простой сайт (должен выбрать HTTP)
+    result1, err := unified.Scrape(context.Background(), "https://example.com", Options{
+        Timeout: 30 * time.Second,
+    })
+
+    if err != nil {
+        t.Fatalf("Failed to scrape example.com: %v", err)
+    }
+
+    if result1.Method != "HTTP" {
+        t.Logf("Note: example.com used %s scraper", result1.Method)
+    }
+
+    // Тест 2: JavaScript сайт (должен выбрать Chrome)
+    result2, err := unified.Scrape(context.Background(), "https://github.com", Options{
+        Timeout: 60 * time.Second,
+    })
+
+    if err != nil {
+        t.Fatalf("Failed to scrape github.com: %v", err)
+    }
+
+    if result2.Method != "Chrome" {
+        t.Errorf("Expected Chrome for GitHub, got %s", result2.Method)
+    }
+}
+```
+
+---
+
+## Ожидаемые результаты после рефакторинга:
+
+### ✅ Улучшения:
+
+1. **Меньше кода:** 1150 → 900 строк (-22%)
+2. **Нет дубликации:** Общая логика в одном месте
+3. **Единый API:** `Scrape(ctx, url, opts)` для всех
+4. **Авто-выбор:** UnifiedScraper выбирает лучший метод
+5. **Проще тестировать:** Mock интерфейса Scraper
+6. **Легче расширять:** Добавить новый скрапер = реализовать интерфейс
+
+### 📁 Файловая структура:
+
 ```
 internal/mcp/tools/
-  scraper.go           # Интерфейс Scraper
-  http_scraper.go      # Реализация HTTP
-  chrome_scraper.go    # Реализация Chrome
-  unified_scraper.go  # Единая точка входа
-  scraper_test.go      # Тесты
+├── scraper.go           # ✅ Интерфейс Scraper + Options/Result
+├── common.go            # ✅ Общие функции (ValidateURL, GenerateCacheKey)
+├── http_scraper.go      # ✅ HTTPScraper (scraper.go → переименован)
+├── chrome_scraper.go    # ✅ ChromeScraper (js_tool.go → переименован)
+├── unified_scraper.go   # ✅ UnifiedScraper (новый файл)
+├── tool.go              # Без изменений
+├── html_optimizer.go    # Без изменений
+├── parser.go            # Без изменений
+├── search.go            # Без изменений
+└── scraper_test.go      # ✅ Обновить тесты
 ```
 
----
-
-## Порядок выполнения в следующей сессии:
-
-### Phase 1: Интерактивность (2-3 часа)
-1. ✅ Создать `internal/pkg/browser/actions.go`
-2. ✅ Обновить схему `scrape_with_js` с полем `actions`
-3. ✅ Интегрировать execution в `js_tool.go`
-4. ✅ Добавить обработку ошибок и retry логику
-5. ✅ Тестирование на реальных сайтах
-6. ✅ Обновить документацию
-
-### Phase 2: Рефакторинг (2-3 часа)
-1. ✅ Создать интерфейс `Scraper`
-2. ✅ Рефакторить `ScrapeTool` → `HTTPScraper`
-3. ✅ Рефакторить `ScrapeJSTool` → `ChromeScraper`
-4. ✅ Создать `UnifiedScraper`
-5. ✅ Миграция MCP server
-6. ✅ Тестирование backward compatibility
-7. ✅ Обновить README
-
-### Итого: 4-6 часов работы в следующей сессии
+### 🎯 Итог: 9/9 задач (100%) 🎉
 
 ---
 
-## Примеры использования интерактивности:
+## Дополнительные улучшения (future):
 
-### Пример 1: Login на сайт
-```json
-{
-  "url": "https://example.com/login",
-  "actions": [
-    {"type": "type", "selector": "#username", "text": "myuser"},
-    {"type": "type", "selector": "#password", "text": "mypass"},
-    {"type": "click", "selector": "button[type='submit']"},
-    {"type": "wait_for_text", "text": "Welcome", "timeout": 10000}
-  ]
-}
-```
-
-### Пример 2: Работа с фильтрами
-```json
-{
-  "url": "https://shop.example.com/products",
-  "actions": [
-    {"type": "scroll_to", "selector": "#filters"},
-    {"type": "click", "selector": "button[data-filter='price']"},
-    {"type": "wait_for", "selector": ".products-grid", "timeout": 5000}
-  ]
-}
-```
-
-### Пример 3: Lazy loading
-```json
-{
-  "url": "https://news.example.com",
-  "actions": [
-    {"type": "scroll_to", "selector": "footer"},
-    {"type": "wait_for", "selector": ".article:nth-child(10)", "timeout": 5000}
-  ]
-}
-```
+### После рефакторинга легко добавить:
+- ✅ PlaywrightScraper
+- ✅ FirefoxScraper
+- ✅ MobileScraper
+- ✅ ScreenshotScraper
+- ✅ PDFScraper
+- ✅ APIScraper
 
 ---
 
-## Файлы для создания в следующей сессии:
+**Старт следующей сессии: готово!** 🚀
 
-### Новые файлы:
-- `internal/pkg/browser/actions.go`
-- `internal/mcp/tools/actions_test.go`
-- `internal/mcp/tools/scraper.go` (интерфейс)
-- `internal/mcp/tools/http_scraper.go`
-- `internal/mcp/tools/chrome_scraper.go`
-- `internal/mcp/tools/unified_scraper.go`
-- `internal/mcp/tools/scraper_test.go`
-- `examples/interactive/README.md`
-- `examples/interactive/login_example.json`
-- `examples/interactive/filters_example.json`
+Все файлы и структура подготовлены для быстрого старта рефакторинга.
 
-### Изменить файлы:
-- `internal/mcp/tools/js_tool.go` (интеграция actions)
-- `internal/mcp/tools/scraper.go` (HTTP scraper)
-- `internal/mcp/server.go` (регистрация)
-
----
-
-## Критерии успеха:
-
-### Интерактивность:
-- ✅ Может залогиниться на тестовом сайте
-- ✅ Может заполнить и отправить форму
-- ✅ Может работать с lazy loading контентом
-- ✅ Graceful error handling при неудачных actions
-- ✅ Логирует каждое действие
-- ✅ Совместимо с кэшем (actions не кэшируются)
-
-### Рефакторинг:
-- ✅ Убрана дубликация кода
-- ✅ Единый интерфейс `Scraper`
-- ✅ Обратная совместимость API
-- ✅ Все тесты проходят
-- ✅ Документация обновлена
-- ✅ Примеры использования добавлены
-
----
-
-## Note для Claude (следующая сессия):
-
-1. **Начни с интерактивности** — это более приоритетно
-2. **Создай `actions.go` первым делом** — базовая инфраструктура
-3. **Тестируй по мере реализации** — не делай всё сразу
-4. **Рефакторинг делай осторожно** — сохраняй backward compatibility
-5. **Используй этот план** — он уже детально продуман
-
----
-
-## Дополнительные идеи (future):
-
-### Advanced Interactivity:
-- Drag & drop
-- Multi-select
-- File upload с прогрессом
-- Iframes handling
-- WebSockets interaction
-
-### Scrapers:
-- Playwright scraper (больше возможностей)
-- Headless Firefox (для diversity)
-- Mobile emulation (responsive design)
-
-### Monitoring:
-- Per-proxy statistics
-- Per-site statistics
-- Success rates tracking
-- Performance metrics
-
----
-
-**Total completion: 7/9 (78%)**
-
-**Next session goals: Interactivity + Refactoring = 100%**
+Время: 2-3 часа
+Результат: 100% завершенность проекта
