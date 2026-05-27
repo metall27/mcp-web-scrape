@@ -48,7 +48,7 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 	return &SmartExtractorTool{
 		BaseTool: NewBaseTool(
 			"smart_extract",
-			"Intelligently extracts and structures content from HTML. Use AFTER scrape_with_js to get structured data. Modes: news=headlines, tech=API/docs, finance=reports, legal=docs, medical=health, clean_text=plain text, links=all URLs. Converts raw HTML into clean, structured data.",
+			"Extracts key information FROM ALREADY SCRAPED content to save tokens. Use AFTER scrape_with_js when content is too large (>10KB). Modes: news=headlines, tech=API/docs, finance=reports, legal=docs, medical=health, clean_text=main content, links=URLs. IMPORTANT: For large responses, always use smart_extract to get key facts before answering.",
 			schema,
 			handler,
 		),
