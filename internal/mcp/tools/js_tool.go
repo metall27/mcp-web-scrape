@@ -85,9 +85,9 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			},
 			"output_format": map[string]interface{}{
 				"type":        "string",
-				"description": "Output format: html (default, optimized HTML) or markdown (better for LLMs)",
+				"description": "Output format: markdown (default, 75% smaller, better for LLMs) or html (raw HTML)",
 				"enum":        []string{"html", "markdown"},
-				"default":     "html",
+				"default":     "markdown",
 			},
 			"stealth_enabled": map[string]interface{}{
 				"type":        "boolean",
@@ -162,7 +162,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Get HTML content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Automatically optimizes HTML and takes screenshots for large pages. Auto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
+		"Get content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Returns Markdown by default (75% smaller, optimized for LLMs). Automatically optimizes content and takes screenshots for large pages. Auto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
 		schema,
 		handler,
 	)
