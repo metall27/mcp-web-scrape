@@ -42,5 +42,4 @@ logs/
 # Cache
 .cache/
 
-# Documentation
-RAG_INTEGRATION_ATTEMPTS.md
+# Documentation (archived files are now in docs/archive/)
