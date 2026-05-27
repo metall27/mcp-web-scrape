@@ -17,6 +17,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
+	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog"
@@ -28,6 +29,7 @@ type ScrapeJSTool struct {
 	browserPool  *browser.Pool
 	ragConfig    config.RAGConfig
 	uaRotator    *useragent.Rotator
+	converter    *converter.Converter
 	logger       zerolog.Logger
 }
 
@@ -89,6 +91,12 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "Wait for network idle instead of fixed wait_time (smarter, 30s timeout)",
 				"default":     false,
 			},
+			"output_format": map[string]interface{}{
+				"type":        "string",
+				"description": "Output format: html (default, optimized HTML) or markdown (better for LLMs)",
+				"enum":        []string{"html", "markdown"},
+				"default":     "html",
+			},
 		},
 		"required": []string{"url"},
 	}
@@ -98,6 +106,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 		browserPool: browserPool,
 		ragConfig:   ragConfig,
 		uaRotator:   uaRotator,
+		converter:   converter.New(),
 		logger:      logger.Get(),
 	}
 
@@ -205,6 +214,11 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	screenshotMode := "never"
 	if sm, ok := args["screenshot_mode"].(string); ok {
 		screenshotMode = sm
+	}
+
+	outputFormat := "html"
+	if of, ok := args["output_format"].(string); ok {
+		outputFormat = of
 	}
 
 	// Determine if we should take screenshot
@@ -385,6 +399,32 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Float64("reduction_percent", float64(originalHTMLSize-optimizedSize)/float64(originalHTMLSize)*100).
 		Msg("HTML optimized for inference")
 
+	// Convert to Markdown if requested
+	var converted bool
+	var outputConverterStats *converter.ConversionStats
+	if outputFormat == "markdown" {
+		var convertedHTML string
+		var err error
+
+		convertedHTML, outputConverterStats, err = t.converter.ConvertWithStats(html, converter.FormatMarkdown)
+		if err != nil {
+			t.logger.Warn().
+				Err(err).
+				Str("output_format", outputFormat).
+				Msg("Markdown conversion failed, falling back to HTML")
+			outputFormat = "html" // Fallback to HTML
+		} else {
+			html = convertedHTML
+			converted = true
+			t.logger.Info().
+				Int("html_size", optimizedSize).
+				Int("markdown_size", outputConverterStats.FinalSize).
+				Int("reduction", outputConverterStats.Reduction).
+				Float64("reduction_percent", outputConverterStats.ReductionPct).
+				Msg("Converted HTML to Markdown")
+		}
+	}
+
 	// Decide whether to include screenshot based on mode
 	includeScreenshot := shouldScreenshot
 	if screenshotMode == "auto" && len(screenshotData) > 0 {
@@ -415,18 +455,36 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		})
 	}
 
+	// Determine content type based on format
+	contentType := "text/html"
+	if outputFormat == "markdown" {
+		contentType = "text/markdown"
+	}
+
 	result := map[string]interface{}{
 		"content": content,
 		"_metadata": map[string]interface{}{
 			"url":          urlStr,
 			"final_url":    finalURL,
 			"status_code":  200,
-			"content_type": "text/html",
+			"content_type": contentType,
 			"size_bytes":   len(html),
 			"duration_ms":  duration.Milliseconds(),
 			"title":        title,
 			"rendering":    "javascript",
+			"format":       outputFormat,
 		},
+	}
+
+	// Add conversion stats if Markdown was generated
+	if converted && outputConverterStats != nil {
+		result["_metadata"].(map[string]interface{})["conversion_stats"] = map[string]interface{}{
+			"original_size":     outputConverterStats.OriginalSize,
+			"final_size":        outputConverterStats.FinalSize,
+			"reduction":         outputConverterStats.Reduction,
+			"reduction_percent": outputConverterStats.ReductionPct,
+			"format":            string(outputConverterStats.Format),
+		}
 	}
 
 	if includeScreenshot {
@@ -438,6 +496,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Str("url", urlStr).
 		Str("final_url", finalURL).
 		Int("size_bytes", len(html)).
+		Str("format", outputFormat).
 		Int64("duration_ms", duration.Milliseconds()).
 		Bool("screenshot_included", includeScreenshot).
 		Msg("Successfully scraped URL with JavaScript")
