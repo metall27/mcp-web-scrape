@@ -25,6 +25,7 @@ MCP-сервер для веб-скрапинга. Работает с llama.cpp
 
 - **Универсальный скрапинг** — один инструмент для всех сайтов (статические и динамические)
 - **JavaScript-рендеринг** — headless Chrome для SPA, дашбордов, GitHub
+- **Интерактивные действия** — click, type, scroll для работы с login-protected контентом (новое!)
 - **Авто-оптимизация** — уменьшает HTML на 70-95% для экономии токенов
 - **Авто-скриншоты** — для больших страниц (>50КБ) вместо текста
 - **HTTP fallback** — автоматически переключается если Chrome не справляется
@@ -55,6 +56,36 @@ MCP-сервер для веб-скрапинга. Работает с llama.cpp
   - `"never"` — никогда
 - `block_images` — блокировать картинки для ускорения
 - `user_agent` — кастомный User-Agent
+- `actions` — интерактивные действия (click, type, scroll, wait_for и др.)
+
+**Интерактивные действия** (новое!):
+Теперь поддерживает работу с login-protected контентом и динамическими элементами:
+
+```json
+{
+  "url": "https://example.com/login",
+  "actions": [
+    {"type": "type", "selector": "#username", "text": "user"},
+    {"type": "type", "selector": "#password", "text": "pass"},
+    {"type": "click", "selector": "button[type='submit']"},
+    {"type": "wait_for_text", "text": "Welcome", "timeout": 10000}
+  ]
+}
+```
+
+Доступные действия:
+- `click` — кликнуть по элементу
+- `type` — ввести текст в поле
+- `submit` — отправить форму
+- `scroll_to` — прокрутить к элементу
+- `wait_for` — ждать появления элемента
+- `wait_for_text` — ждать текста на странице
+- `hover` — навести мышь (для dropdowns)
+- `select_option` — выбрать в dropdown
+- `execute_js` — выполнить JavaScript код
+- `upload_file` — загрузить файл
+
+Подробнее и примеры: `examples/interactive/README.md`
 
 **Особенности:**
 - Автоматически оптимизирует HTML (удаляет скрипты, стили, навигацию)

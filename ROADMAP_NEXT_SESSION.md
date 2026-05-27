@@ -1,6 +1,6 @@
 # Roadmap: Next Session (Interactivity + Refactoring)
 
-## Текущий статус: 7/9 задач выполнено ✅
+## Текущий статус: 8/9 задач выполнено ✅ (89%)
 
 ### ✅ Выполнено:
 1. ✅ Кэширование для scrape_with_js
@@ -10,14 +10,60 @@
 5. ✅ Markdown конвертация
 6. ✅ Stealth улучшения
 7. ✅ Поддержка прокси
+8. ✅ **Интерактивность** — click, type, scroll actions (ВЫПОЛНЕНО!)
 
 ### 🔄 Осталось:
-8. **Интерактивность** — click, type, scroll actions
 9. **Рефакторинг** — единый интерфейс Scraper
 
 ---
 
-## Часть 1: Интерактивность (Priority 1)
+## Часть 1: Интерактивность (Priority 1) ✅ ВЫПОЛНЕНО
+
+### ✅ Что было сделано:
+- ✅ Создан пакет `internal/pkg/browser/actions.go` с ActionExecutor
+- ✅ Обновлена схема `scrape_with_js` с полем `actions`
+- ✅ Интегрировано выполнение действий в `js_tool.go`
+- ✅ Добавлена обработка ошибок и retry логика (до 3 ретраев)
+- ✅ Созданы примеры использования в `examples/interactive/`
+- ✅ Обновлена документация (README.md)
+
+### Реализованные действия:
+```
+- click(selector)              — кликнуть по элементу
+- type(selector, text)         — ввести текст в поле
+- submit(selector)             — отправить форму
+- scroll_to(selector)         — прокрутить к элементу
+- wait_for(selector, timeout) — ждать появления элемента
+- wait_for_text(text, timeout) — ждать текста на странице
+- hover(selector)              — навести мышь (для dropdowns)
+- select_option(selector, value) — выбрать в dropdown
+- execute_js(code)            — выполнить JS код
+- upload_file(selector, path) — загрузить файл
+```
+
+### Пример использования:
+```json
+{
+  "url": "https://example.com/login",
+  "actions": [
+    {"type": "type", "selector": "#username", "text": "user"},
+    {"type": "type", "selector": "#password", "text": "pass"},
+    {"type": "click", "selector": "button[type='submit']"},
+    {"type": "wait_for_text", "text": "Welcome", "timeout": 10000}
+  ]
+}
+```
+
+### Особенности:
+- **Retry логика:** До 3 ретраев с экспоненциальной задержкой
+- **Timeout:** 30 секунд дефолт для каждого действия
+- **Stealth:** Случайные задержки если stealth включен
+- **Кэширование:** Запросы с действиями не кэшируются
+- **Метаданные:** Информация о действиях в результате
+- **Graceful error handling:** Детальные логи
+
+---
+## Часть 1: Интерактивность (Priority 1) - ИСТОРИЧЕСКАЯ СПРАВКА
 
 ### Задача:
 Добавить интерактивные действия в `scrape_with_js` для работы с login-protected контентом и динамическими элементами.

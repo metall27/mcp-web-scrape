@@ -1,0 +1,21 @@
+{
+  "url": "https://shop.example.com/products",
+  "stealth_enabled": true,
+  "stealth_scroll": true,
+  "wait_for_network_idle": true,
+  "actions": [
+    {
+      "type": "scroll_to",
+      "selector": "#filters"
+    },
+    {
+      "type": "click",
+      "selector": "button[data-filter='price']"
+    },
+    {
+      "type": "wait_for",
+      "selector": ".products-grid",
+      "timeout": 5000
+    }
+  ]
+}

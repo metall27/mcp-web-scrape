@@ -1,0 +1,25 @@
+{
+  "url": "https://example.com/login",
+  "stealth_enabled": true,
+  "actions": [
+    {
+      "type": "type",
+      "selector": "#username",
+      "text": "myuser"
+    },
+    {
+      "type": "type",
+      "selector": "#password",
+      "text": "mypass"
+    },
+    {
+      "type": "click",
+      "selector": "button[type='submit']"
+    },
+    {
+      "type": "wait_for_text",
+      "text": "Welcome",
+      "timeout": 10000
+    }
+  ]
+}

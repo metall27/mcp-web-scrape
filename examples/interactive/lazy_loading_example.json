@@ -1,0 +1,16 @@
+{
+  "url": "https://news.example.com",
+  "stealth_enabled": true,
+  "wait_for_network_idle": true,
+  "actions": [
+    {
+      "type": "scroll_to",
+      "selector": "footer"
+    },
+    {
+      "type": "wait_for",
+      "selector": ".article:nth-child(10)",
+      "timeout": 5000
+    }
+  ]
+}

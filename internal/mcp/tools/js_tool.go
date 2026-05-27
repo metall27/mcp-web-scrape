@@ -114,6 +114,41 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "Emulate random mouse movements (advanced anti-bot evasion)",
 				"default":     false,
 			},
+			"actions": map[string]interface{}{
+				"type":        "array",
+				"description": "Interactive actions to execute after page load (click, type, scroll_to, wait_for, etc.). Actions are not cached.",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"click", "type", "submit", "scroll_to", "wait_for", "wait_for_text", "hover", "select_option", "execute_js", "upload_file"},
+							"description": "Action type to perform",
+						},
+						"selector": map[string]interface{}{
+							"type":        "string",
+							"description": "CSS selector for the element (required for most actions)",
+						},
+						"text": map[string]interface{}{
+							"type":        "string",
+							"description": "Text to type or JavaScript code to execute (for 'type' and 'execute_js' actions)",
+						},
+						"value": map[string]interface{}{
+							"type":        "string",
+							"description": "Value to select in dropdown (for 'select_option' action)",
+						},
+						"timeout": map[string]interface{}{
+							"type":        "integer",
+							"description": "Timeout in milliseconds for wait actions (default: 30000)",
+						},
+						"retries": map[string]interface{}{
+							"type":        "integer",
+							"description": "Number of retries on failure (default: 3)",
+						},
+					},
+					"required": []string{"type"},
+				},
+			},
 		},
 		"required": []string{"url"},
 	}
@@ -130,7 +165,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Get HTML content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Automatically optimizes HTML and takes screenshots for large pages. Auto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites.",
+		"Get HTML content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Automatically optimizes HTML and takes screenshots for large pages. Auto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
 		schema,
 		tool.Execute,
 	)
@@ -155,8 +190,23 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		return nil, fmt.Errorf("only http and https schemes are supported")
 	}
 
-	// Check cache first
-	if t.cache != nil && t.cache.IsEnabled() {
+	// Parse interactive actions if provided (move this before cache check)
+	var interactiveActions []browser.Action
+	hasActions := false
+	if actionsData, ok := args["actions"].([]interface{}); ok && len(actionsData) > 0 {
+		parsedActions, err := browser.ParseActions(actionsData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse actions: %w", err)
+		}
+		interactiveActions = parsedActions
+		hasActions = true
+		t.logger.Info().
+			Int("actions_count", len(interactiveActions)).
+			Msg("Interactive actions detected, cache will be bypassed")
+	}
+
+	// Check cache first (but bypass if actions are present)
+	if t.cache != nil && t.cache.IsEnabled() && !hasActions {
 		cacheKey := t.getCacheKey(urlStr, args)
 		if cached, found := t.cache.Get(ctx, cacheKey); found {
 			t.logger.Info().
@@ -408,6 +458,28 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Msg("Added stealth mouse movement emulation")
 	}
 
+	// Execute interactive actions if provided (before getting content)
+	if hasActions {
+		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
+			t.logger.Info().
+				Int("actions_count", len(interactiveActions)).
+				Msg("Executing interactive actions")
+
+			// Create action executor with stealth support
+			actionExecutor := browser.NewActionExecutor(t.logger, stealth)
+
+			// Execute all actions
+			if err := actionExecutor.ExecuteActions(ctx, interactiveActions); err != nil {
+				return fmt.Errorf("failed to execute actions: %w", err)
+			}
+
+			t.logger.Info().
+				Msg("All interactive actions completed successfully")
+
+			return nil
+		}))
+	}
+
 	// Take screenshot if requested (always take in auto mode, decide later whether to include)
 	if shouldScreenshot || screenshotMode == "auto" {
 		tasks = append(tasks, chromedp.FullScreenshot(&screenshotData, 90))
@@ -596,6 +668,18 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		},
 	}
 
+	// Add action metadata if interactive actions were executed
+	if hasActions {
+		result["_metadata"].(map[string]interface{})["interactive_actions"] = map[string]interface{}{
+			"count":        len(interactiveActions),
+			"action_types": getActionTypes(interactiveActions),
+			"cached":       false, // Actions are never cached
+		}
+		t.logger.Info().
+			Int("actions_count", len(interactiveActions)).
+			Msg("Interactive actions metadata added to result")
+	}
+
 	// Add conversion stats if Markdown was generated
 	if converted && outputConverterStats != nil {
 		result["_metadata"].(map[string]interface{})["conversion_stats"] = map[string]interface{}{
@@ -629,8 +713,8 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Bool("screenshot", screenshot).
 		Msg("Successfully scraped URL with JavaScript")
 
-	// Store in cache
-	if t.cache != nil && t.cache.IsEnabled() {
+	// Store in cache (only if no interactive actions)
+	if t.cache != nil && t.cache.IsEnabled() && !hasActions {
 		cacheKey := t.getCacheKey(urlStr, args)
 		ttl := t.cache.GetTTLForContentType("text/html")
 
@@ -745,5 +829,21 @@ func (t *ScrapeJSTool) getCacheKey(url string, args map[string]interface{}) stri
 		hash.Write([]byte("user_agent:" + ua))
 	}
 
+	// Include actions hash (if any) - actions with same parameters should have same cache key
+	if actionsData, ok := args["actions"].([]interface{}); ok && len(actionsData) > 0 {
+		// Create a deterministic hash of actions
+		actionsJSON, _ := json.Marshal(actionsData)
+		hash.Write([]byte("actions:" + string(actionsJSON)))
+	}
+
 	return "scrape_js:" + hex.EncodeToString(hash.Sum(nil))[:16]
+}
+
+// getActionTypes возвращает список типов действий для метаданных
+func getActionTypes(actions []browser.Action) []string {
+	types := make([]string, len(actions))
+	for i, action := range actions {
+		types[i] = action.Type
+	}
+	return types
 }
