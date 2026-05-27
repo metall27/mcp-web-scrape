@@ -97,6 +97,21 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"enum":        []string{"html", "markdown"},
 				"default":     "html",
 			},
+			"stealth_enabled": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Enable stealth mode (random delays, human-like behavior) to avoid bot detection",
+				"default":     false,
+			},
+			"stealth_scroll": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Emulate scrolling behavior (many SPAs load content on scroll)",
+				"default":     true,
+			},
+			"stealth_mouse": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Emulate random mouse movements (advanced anti-bot evasion)",
+				"default":     false,
+			},
 		},
 		"required": []string{"url"},
 	}
@@ -221,6 +236,22 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		outputFormat = of
 	}
 
+	// Stealth settings
+	stealthEnabled := false
+	if se, ok := args["stealth_enabled"].(bool); ok {
+		stealthEnabled = se
+	}
+
+	stealthScroll := true
+	if ss, ok := args["stealth_scroll"].(bool); ok {
+		stealthScroll = ss
+	}
+
+	stealthMouse := false
+	if sm, ok := args["stealth_mouse"].(bool); ok {
+		stealthMouse = sm
+	}
+
 	// Determine if we should take screenshot
 	shouldScreenshot := screenshot
 	if screenshotMode == "always" {
@@ -233,6 +264,10 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Str("wait_for", waitFor).
 		Int("wait_time", waitTime).
 		Bool("wait_for_network_idle", waitForNetworkIdle).
+		Bool("stealth_enabled", stealthEnabled).
+		Bool("stealth_scroll", stealthScroll).
+		Bool("stealth_mouse", stealthMouse).
+		Str("output_format", outputFormat).
 		Bool("screenshot", shouldScreenshot).
 		Str("screenshot_mode", screenshotMode).
 		Msg("Starting JavaScript-rendered scrape")
@@ -263,6 +298,25 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Str("url", urlStr).
 		Msg("Using random User-Agent")
 
+	// Setup stealth actions if enabled
+	var stealth *browser.StealthActions
+	if stealthEnabled {
+		stealth = browser.NewStealthActions(browser.StealthConfig{
+			RandomDelay:     true,
+			MinDelay:        100 * time.Millisecond,
+			MaxDelay:        500 * time.Millisecond,
+			EmulateScroll:   stealthScroll,
+			ScrollSteps:     3,
+			MouseMovement:   stealthMouse,
+			RandomViewport:  false,
+		})
+		t.logger.Info().
+			Bool("stealth_enabled", true).
+			Bool("stealth_scroll", stealthScroll).
+			Bool("stealth_mouse", stealthMouse).
+			Msg("Stealth mode enabled")
+	}
+
 	// Build tasks
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -270,25 +324,40 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			var result interface{}
 			return chromedp.Evaluate(`Object.defineProperty(navigator, 'userAgent', {get: function() {return "`+userAgent+`"}})`, &result).Do(ctx)
 		}),
-		chromedp.Navigate(urlStr),
 	}
+
+	// Apply stealth to navigation if enabled
+	navigateAction := chromedp.Navigate(urlStr)
+	if stealth != nil {
+		navigateAction = stealth.ApplyStealth(navigateAction)
+	}
+	tasks = append(tasks, navigateAction)
 
 	// Wait for specific selector if provided
 	if waitFor != "" {
-		tasks = append(tasks, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
+		waitAction := chromedp.WaitVisible(waitFor, chromedp.ByQuery)
+		if stealth != nil {
+			waitAction = stealth.ApplyStealth(waitAction)
+		}
+		tasks = append(tasks, waitAction)
 	} else {
 		// Wait for page load by default
-		tasks = append(tasks, chromedp.WaitReady("body", chromedp.ByQuery))
+		waitAction := chromedp.WaitReady("body", chromedp.ByQuery)
+		if stealth != nil {
+			waitAction = stealth.ApplyStealth(waitAction)
+		}
+		tasks = append(tasks, waitAction)
 	}
 
 	// Wait strategy: Network Idle vs Fixed time
 	if waitForNetworkIdle {
 		// Smart wait: wait for network idle with timeout
-		tasks = append(tasks, browser.NetworkIdleAdvanced(browser.NetworkIdleOption{
+		waitAction := browser.NetworkIdleAdvanced(browser.NetworkIdleOption{
 			Timeout:    30 * time.Second, // Maximum wait time
 			MinWait:    time.Duration(waitTime) * time.Millisecond, // Minimum wait (respect user's wait_time)
 			CheckCount: 3, // Need 3 consecutive checks to confirm idle
-		}))
+		})
+		tasks = append(tasks, waitAction)
 		t.logger.Info().
 			Bool("network_idle", true).
 			Int("min_wait_ms", waitTime).
@@ -301,12 +370,26 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Msg("Using fixed delay wait strategy")
 	}
 
+	// Add stealth scroll after page load if enabled
+	if stealth != nil && stealthScroll {
+		tasks = append(tasks, stealth.EmulateScroll())
+		t.logger.Debug().
+			Msg("Added stealth scroll emulation")
+	}
+
 	// Get page content
 	tasks = append(tasks,
 		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
 		chromedp.Title(&title),
 		chromedp.Location(&finalURL),
 	)
+
+	// Add stealth mouse movements before screenshot if enabled
+	if stealth != nil && stealthMouse {
+		tasks = append(tasks, stealth.EmulateMouseMovement())
+		t.logger.Debug().
+			Msg("Added stealth mouse movement emulation")
+	}
 
 	// Take screenshot if requested (always take in auto mode, decide later whether to include)
 	if shouldScreenshot || screenshotMode == "auto" {
