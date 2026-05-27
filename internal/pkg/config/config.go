@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	MCP       MCPConfig       `mapstructure:"mcp"`
-	Scraping  ScrapingConfig  `mapstructure:"scraping"`
-	Browser   BrowserConfig   `mapstructure:"browser"`
-	Search    SearchConfig    `mapstructure:"search"`
-	RAG       RAGConfig       `mapstructure:"rag"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
-	Cache     CacheConfig     `mapstructure:"cache"`
-	Log       LogConfig       `mapstructure:"log"`
+	Server     ServerConfig    `mapstructure:"server"`
+	MCP        MCPConfig       `mapstructure:"mcp"`
+	Scraping   ScrapingConfig  `mapstructure:"scraping"`
+	Browser    BrowserConfig   `mapstructure:"browser"`
+	Search     SearchConfig    `mapstructure:"search"`
+	RAG        RAGConfig       `mapstructure:"rag"`
+	UserAgent  UserAgentConfig `mapstructure:"user_agent"`
+	RateLimit  RateLimitConfig `mapstructure:"rate_limit"`
+	Cache      CacheConfig     `mapstructure:"cache"`
+	Log        LogConfig       `mapstructure:"log"`
 }
 
 type ServerConfig struct {
@@ -66,6 +67,11 @@ type RAGConfig struct {
 	Enabled     bool   `mapstructure:"enabled"`       // Enable auto-indexing to RAG
 	MaxRetries  int    `mapstructure:"max_retries"`   // Maximum retry attempts for RAG requests
 	RetryDelay  int    `mapstructure:"retry_delay"`   // Delay between retries in seconds
+}
+
+type UserAgentConfig struct {
+	Enabled          bool     `mapstructure:"enabled"`            // Enable User-Agent rotation
+	CustomUserAgents []string `mapstructure:"custom_user_agents"` // Additional custom UAs
 }
 
 type RateLimitConfig struct {
@@ -152,6 +158,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rag.enabled", false)  // Disabled by default until RAG server is stable
 	v.SetDefault("rag.max_retries", 3)
 	v.SetDefault("rag.retry_delay", 2)
+
+	// User-Agent rotation defaults
+	v.SetDefault("user_agent.enabled", true)   // Enable by default for better stealth
+	v.SetDefault("user_agent.custom_user_agents", []string{})
 
 	// Rate limiting defaults
 	v.SetDefault("rate_limit.requests_per_second", 10.0)

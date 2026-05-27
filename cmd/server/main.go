@@ -15,6 +15,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog/log"
 )
 
@@ -55,6 +56,14 @@ func main() {
 	}
 	defer browserPool.Close()
 
+	// Initialize User-Agent rotator
+	uaRotator := useragent.New(useragent.Config{
+		CustomUserAgents: cfg.UserAgent.CustomUserAgents,
+	})
+	log.Info().
+		Int("total_uas", uaRotator.Count()).
+		Msg("User-Agent rotator initialized")
+
 	// Create MCP server
 	mcpServer, err := mcp.New(mcp.Config{
 		ProtocolVersion: "2024-11-05",
@@ -68,6 +77,7 @@ func main() {
 		Cache:       cacheInstance,
 		BrowserPool: browserPool,
 		RAG:         cfg.RAG,
+		UARotator:   uaRotator,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create MCP server")
@@ -136,6 +146,7 @@ func main() {
 				"enabled": cacheInstance.IsEnabled(),
 			},
 			"browser_pool": browserPool.GetStats(),
+			"user_agent":   uaRotator.Stats(),
 		})
 	})
 

@@ -18,6 +18,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog"
 )
 
@@ -26,10 +27,11 @@ type ScrapeJSTool struct {
 	cache        *cache.Cache
 	browserPool  *browser.Pool
 	ragConfig    config.RAGConfig
+	uaRotator    *useragent.Rotator
 	logger       zerolog.Logger
 }
 
-func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig) *ScrapeJSTool {
+func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, uaRotator *useragent.Rotator) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -90,6 +92,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 		cache:       cache,
 		browserPool: browserPool,
 		ragConfig:   ragConfig,
+		uaRotator:   uaRotator,
 		logger:      logger.Get(),
 	}
 
@@ -228,8 +231,20 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	startTime := time.Now()
 
+	// Get random User-Agent for this request
+	userAgent := t.uaRotator.Get()
+	t.logger.Debug().
+		Str("user_agent", userAgent).
+		Str("url", urlStr).
+		Msg("Using random User-Agent")
+
 	// Build tasks
 	tasks := []chromedp.Action{
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// Set User-Agent via CDP before navigation
+			var result interface{}
+			return chromedp.Evaluate(`Object.defineProperty(navigator, 'userAgent', {get: function() {return "`+userAgent+`"}})`, &result).Do(ctx)
+		}),
 		chromedp.Navigate(urlStr),
 	}
 
@@ -282,7 +297,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		}
 
 		// Set realistic browser headers
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 		req.Header.Set("Accept-Encoding", "gzip, deflate, br")

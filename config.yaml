@@ -39,6 +39,10 @@ rag:
   max_retries: 3                 # Retry attempts for RAG requests
   retry_delay: 2                 # Seconds between retries
 
+user_agent:
+  enabled: true                  # Enable User-Agent rotation
+  custom_user_agents: []         # Add custom UAs here if needed
+
 rate_limit:
   enabled: true
   requests_per_second: 10.0
