@@ -19,6 +19,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog"
 )
@@ -29,11 +30,12 @@ type ScrapeJSTool struct {
 	browserPool  *browser.Pool
 	ragConfig    config.RAGConfig
 	uaRotator    *useragent.Rotator
+	proxyRotator *proxy.Rotator
 	converter    *converter.Converter
 	logger       zerolog.Logger
 }
 
-func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, uaRotator *useragent.Rotator) *ScrapeJSTool {
+func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -117,12 +119,13 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 	}
 
 	tool := &ScrapeJSTool{
-		cache:       cache,
-		browserPool: browserPool,
-		ragConfig:   ragConfig,
-		uaRotator:   uaRotator,
-		converter:   converter.New(),
-		logger:      logger.Get(),
+		cache:        cache,
+		browserPool:  browserPool,
+		ragConfig:    ragConfig,
+		uaRotator:    uaRotator,
+		proxyRotator: proxyRotator,
+		converter:    converter.New(),
+		logger:       logger.Get(),
 	}
 
 	tool.BaseTool = NewBaseTool(
@@ -317,6 +320,20 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Msg("Stealth mode enabled")
 	}
 
+	// Get proxy if enabled
+	var selectedProxy *proxy.Proxy
+	if t.proxyRotator.IsEnabled() {
+		var err error
+		selectedProxy, err = t.proxyRotator.GetNext()
+		if err != nil {
+			t.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
+		} else if selectedProxy != nil {
+			t.logger.Info().
+				Str("proxy", selectedProxy.URL).
+				Msg("Using proxy for request")
+		}
+	}
+
 	// Build tasks
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -404,7 +421,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Err(err).
 			Msg("Chrome scraping failed, attempting HTTP fallback")
 
-		// Create HTTP client with redirect following
+		// Create HTTP client with redirect following and proxy
 		client := &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -414,6 +431,15 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 				}
 				return nil
 			},
+		}
+
+		// Add proxy to HTTP client if enabled
+		if t.proxyRotator.IsEnabled() {
+			client.Transport = &http.Transport{
+				Proxy: t.proxyRotator.GetProxyFunc(),
+			}
+			t.logger.Info().
+				Msg("Using proxy for HTTP fallback")
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
@@ -431,12 +457,23 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 		resp, err := client.Do(req)
 		if err != nil {
+			if t.proxyRotator.IsEnabled() {
+				t.proxyRotator.MarkFailure(err)
+			}
 			return nil, fmt.Errorf("HTTP fallback also failed: %w", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+			if t.proxyRotator.IsEnabled() {
+				t.proxyRotator.MarkFailure(fmt.Errorf("HTTP %d", resp.StatusCode))
+			}
 			return nil, fmt.Errorf("HTTP fallback failed with status %d", resp.StatusCode)
+		}
+
+		// Mark proxy as successful
+		if t.proxyRotator.IsEnabled() {
+			t.proxyRotator.MarkSuccess()
 		}
 
 		body, err := io.ReadAll(resp.Body)

@@ -8,16 +8,17 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig    `mapstructure:"server"`
-	MCP        MCPConfig       `mapstructure:"mcp"`
-	Scraping   ScrapingConfig  `mapstructure:"scraping"`
-	Browser    BrowserConfig   `mapstructure:"browser"`
-	Search     SearchConfig    `mapstructure:"search"`
-	RAG        RAGConfig       `mapstructure:"rag"`
-	UserAgent  UserAgentConfig `mapstructure:"user_agent"`
-	RateLimit  RateLimitConfig `mapstructure:"rate_limit"`
-	Cache      CacheConfig     `mapstructure:"cache"`
-	Log        LogConfig       `mapstructure:"log"`
+	Server    ServerConfig    `mapstructure:"server"`
+	MCP       MCPConfig       `mapstructure:"mcp"`
+	Scraping  ScrapingConfig  `mapstructure:"scraping"`
+	Browser   BrowserConfig   `mapstructure:"browser"`
+	Search    SearchConfig    `mapstructure:"search"`
+	RAG       RAGConfig       `mapstructure:"rag"`
+	UserAgent UserAgentConfig `mapstructure:"user_agent"`
+	Proxy     ProxyConfig     `mapstructure:"proxy"`
+	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+	Cache     CacheConfig     `mapstructure:"cache"`
+	Log       LogConfig       `mapstructure:"log"`
 }
 
 type ServerConfig struct {
@@ -72,6 +73,13 @@ type RAGConfig struct {
 type UserAgentConfig struct {
 	Enabled          bool     `mapstructure:"enabled"`            // Enable User-Agent rotation
 	CustomUserAgents []string `mapstructure:"custom_user_agents"` // Additional custom UAs
+}
+
+type ProxyConfig struct {
+	Enabled       bool     `mapstructure:"enabled"`        // Enable proxy rotation
+	Proxies       []string `mapstructure:"proxies"`        // List of proxy URLs
+	TestOnStartup bool     `mapstructure:"test_on_startup"` // Test proxies on startup
+	TestTimeout   int      `mapstructure:"test_timeout"`   // Proxy test timeout in seconds
 }
 
 type RateLimitConfig struct {
@@ -162,6 +170,12 @@ func setDefaults(v *viper.Viper) {
 	// User-Agent rotation defaults
 	v.SetDefault("user_agent.enabled", true)   // Enable by default for better stealth
 	v.SetDefault("user_agent.custom_user_agents", []string{})
+
+	// Proxy defaults
+	v.SetDefault("proxy.enabled", false)                  // Disabled by default
+	v.SetDefault("proxy.proxies", []string{})             // No proxies by default
+	v.SetDefault("proxy.test_on_startup", false)         // Don't test on startup by default
+	v.SetDefault("proxy.test_timeout", 10)                // 10 seconds test timeout
 
 	// Rate limiting defaults
 	v.SetDefault("rate_limit.requests_per_second", 10.0)

@@ -43,6 +43,12 @@ user_agent:
   enabled: true                  # Enable User-Agent rotation
   custom_user_agents: []         # Add custom UAs here if needed
 
+proxy:
+  enabled: false                 # Enable proxy rotation (disabled by default)
+  proxies: []                    # List of proxy URLs: ["http://user:pass@host:port", "socks5://host:port"]
+  test_on_startup: false         # Test proxies on startup
+  test_timeout: 10               # Proxy test timeout in seconds
+
 rate_limit:
   enabled: true
   requests_per_second: 10.0

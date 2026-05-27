@@ -15,6 +15,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog/log"
 )
@@ -64,6 +65,28 @@ func main() {
 		Int("total_uas", uaRotator.Count()).
 		Msg("User-Agent rotator initialized")
 
+	// Initialize proxy rotator
+	proxyRotator, err := proxy.New(proxy.Config{
+		Proxies:       cfg.Proxy.Proxies,
+		Enabled:       cfg.Proxy.Enabled,
+		TestOnStartup: cfg.Proxy.TestOnStartup,
+		TestTimeout:   time.Duration(cfg.Proxy.TestTimeout) * time.Second,
+		Logger:        log.Logger,
+	})
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to initialize proxy rotator, continuing without proxy")
+		proxyRotator, _ = proxy.New(proxy.Config{
+			Proxies: []string{},
+			Enabled: false,
+			Logger:  log.Logger,
+		})
+	} else {
+		log.Info().
+			Int("proxies", proxyRotator.GetCount()).
+			Bool("enabled", proxyRotator.IsEnabled()).
+			Msg("Proxy rotator initialized")
+	}
+
 	// Create MCP server
 	mcpServer, err := mcp.New(mcp.Config{
 		ProtocolVersion: "2024-11-05",
@@ -78,6 +101,7 @@ func main() {
 		BrowserPool: browserPool,
 		RAG:         cfg.RAG,
 		UARotator:   uaRotator,
+		ProxyRotator: proxyRotator,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create MCP server")
@@ -147,6 +171,7 @@ func main() {
 			},
 			"browser_pool": browserPool.GetStats(),
 			"user_agent":   uaRotator.Stats(),
+			"proxy":        proxyRotator.GetStats(),
 		})
 	})
 

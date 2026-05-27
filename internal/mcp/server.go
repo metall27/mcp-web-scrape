@@ -11,6 +11,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/metall/mcp-web-scrape/internal/mcp/tools"
 	"github.com/rs/zerolog"
@@ -23,6 +24,7 @@ type Server struct {
 	cache        *cache.Cache
 	browserPool  *browser.Pool
 	uaRotator    *useragent.Rotator
+	proxyRotator *proxy.Rotator
 	rateLimiter  *rate.Limiter
 	tools        map[string]tools.Tool
 	toolsOrder   []string // Preserve registration order
@@ -38,6 +40,7 @@ type Config struct {
 	BrowserPool     *browser.Pool
 	RAG             config.RAGConfig
 	UARotator       *useragent.Rotator
+	ProxyRotator    *proxy.Rotator
 }
 
 type RateLimitConfig struct {
@@ -48,14 +51,15 @@ type RateLimitConfig struct {
 
 func New(cfg Config) (*Server, error) {
 	s := &Server{
-		config:      cfg,
-		logger:      logger.Get(),
-		cache:       cfg.Cache,
-		browserPool: cfg.BrowserPool,
-		uaRotator:   cfg.UARotator,
-		serverInfo:  ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
-		tools:       make(map[string]tools.Tool),
-		toolsOrder:  []string{},
+		config:       cfg,
+		logger:       logger.Get(),
+		cache:        cfg.Cache,
+		browserPool:  cfg.BrowserPool,
+		uaRotator:    cfg.UARotator,
+		proxyRotator: cfg.ProxyRotator,
+		serverInfo:   ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
+		tools:        make(map[string]tools.Tool),
+		toolsOrder:   []string{},
 	}
 
 	// Setup rate limiter
@@ -89,7 +93,7 @@ func (s *Server) registerDefaultTools() error {
 
 	// Always register these tools
 	defaultTools = append(defaultTools,
-		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.uaRotator), // FALLBACK: Scrape only if rag_search empty
+		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.uaRotator, s.proxyRotator), // FALLBACK: Scrape only if rag_search empty
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
 		tools.NewSmartExtractorTool(),   // Content extraction
