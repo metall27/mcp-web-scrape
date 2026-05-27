@@ -10,13 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
+	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/rs/zerolog"
 )
@@ -25,10 +25,11 @@ type ScrapeJSTool struct {
 	*BaseTool
 	cache        *cache.Cache
 	browserPool  *browser.Pool
+	ragConfig    config.RAGConfig
 	logger       zerolog.Logger
 }
 
-func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool) *ScrapeJSTool {
+func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -88,6 +89,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool) *ScrapeJSToo
 	tool := &ScrapeJSTool{
 		cache:       cache,
 		browserPool: browserPool,
+		ragConfig:   ragConfig,
 		logger:      logger.Get(),
 	}
 
@@ -153,11 +155,10 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			}
 
 			// Add screenshot if available in cache
-			if screenshotData, ok := cached.Headers["screenshot"]; ok {
-				// Decode base64 screenshot from cache
+			if len(cached.Screenshot) > 0 {
 				content = append(content, map[string]interface{}{
 					"type":     "image",
-					"data":     []byte(screenshotData),
+					"data":     cached.Screenshot,
 					"mimeType": "image/png",
 				})
 				result["_metadata"].(map[string]interface{})["screenshot_included"] = true
@@ -421,9 +422,9 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			},
 		}
 
-		// Store screenshot in cache if taken
+		// Store screenshot in cache if taken (use separate field for binary data)
 		if includeScreenshot && len(screenshotData) > 0 {
-			cachedResp.Headers["screenshot"] = string(screenshotData)
+			cachedResp.Screenshot = screenshotData
 			cachedResp.Headers["screenshot_size"] = fmt.Sprintf("%d", len(screenshotData))
 		}
 
@@ -441,35 +442,64 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Auto-index in RAG (background, non-blocking)
-	go func() {
-		// Get RAG base URL from environment or use default
-		ragBaseURL := "https://rag.0x27.ru"
-		if envBaseURL := os.Getenv("RAG_BASE_URL"); envBaseURL != "" {
-			ragBaseURL = envBaseURL
-		}
+	if t.ragConfig.Enabled {
+		go func() {
+			// Prepare index request
+			indexReq := map[string]interface{}{
+				"url": urlStr,
+				"processing_mode": "structured",
+				"ttl": 7,
+			}
 
-		// Prepare index request
-		indexReq := map[string]interface{}{
-			"url": urlStr,
-			"processing_mode": "structured",
-			"ttl": 7,
-		}
+			jsonData, _ := json.Marshal(indexReq)
+			indexURL := t.ragConfig.BaseURL + "/api/v1/index"
 
-		jsonData, _ := json.Marshal(indexReq)
+			// Retry logic
+			var lastErr error
+			for attempt := 0; attempt <= t.ragConfig.MaxRetries; attempt++ {
+				if attempt > 0 {
+					// Wait before retry
+					time.Sleep(time.Duration(t.ragConfig.RetryDelay) * time.Second)
+					t.logger.Debug().
+						Str("url", urlStr).
+						Int("attempt", attempt).
+						Msg("Retrying RAG index")
+				}
 
-		// Index in background (don't block response)
-		resp, err := http.Post(
-			ragBaseURL+"/api/v1/index",
-			"application/json",
-			bytes.NewBuffer(jsonData),
-		)
-		if err != nil {
-			t.logger.Warn().Str("url", urlStr).Err(err).Msg("RAG auto-index failed")
-		} else {
-			defer resp.Body.Close()
-			t.logger.Info().Str("url", urlStr).Int("status", resp.StatusCode).Msg("RAG auto-indexed")
-		}
-	}()
+				// Index in background (don't block response)
+				resp, err := http.Post(
+					indexURL,
+					"application/json",
+					bytes.NewBuffer(jsonData),
+				)
+				if err != nil {
+					lastErr = err
+					t.logger.Warn().
+						Str("url", urlStr).
+						Int("attempt", attempt).
+						Err(err).
+						Msg("RAG auto-index attempt failed")
+					continue
+				}
+
+				// Success
+				resp.Body.Close()
+				t.logger.Info().
+					Str("url", urlStr).
+					Int("status", resp.StatusCode).
+					Int("attempt", attempt).
+					Msg("RAG auto-indexed")
+				return
+			}
+
+			// All retries failed
+			t.logger.Error().
+				Str("url", urlStr).
+				Err(lastErr).
+				Int("max_retries", t.ragConfig.MaxRetries).
+				Msg("RAG auto-index failed after all retries")
+		}()
+	}
 
 	return result, nil
 }

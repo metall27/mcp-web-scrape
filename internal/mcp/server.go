@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
+	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/mcp/tools"
 	"github.com/rs/zerolog"
@@ -33,6 +34,7 @@ type Config struct {
 	RateLimit       RateLimitConfig
 	Cache           *cache.Cache
 	BrowserPool     *browser.Pool
+	RAG             config.RAGConfig
 }
 
 type RateLimitConfig struct {
@@ -74,7 +76,7 @@ func (s *Server) registerDefaultTools() error {
 		tools.NewRAGIndexTool(),         // Index pages for RAG
 		tools.NewRAGHealthTool(),        // RAG health check
 		tools.NewRAGListDocumentsTool(), // List indexed documents
-		tools.NewScrapeJSTool(s.cache, s.browserPool), // FALLBACK: Scrape only if rag_search empty
+		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG), // FALLBACK: Scrape only if rag_search empty
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
 		tools.NewSmartExtractorTool(),   // Content extraction

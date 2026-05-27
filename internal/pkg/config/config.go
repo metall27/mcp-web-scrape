@@ -13,6 +13,7 @@ type Config struct {
 	Scraping  ScrapingConfig  `mapstructure:"scraping"`
 	Browser   BrowserConfig   `mapstructure:"browser"`
 	Search    SearchConfig    `mapstructure:"search"`
+	RAG       RAGConfig       `mapstructure:"rag"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Log       LogConfig       `mapstructure:"log"`
@@ -58,6 +59,13 @@ type SearchConfig struct {
 	APIKey         string `mapstructure:"api_key"`
 	MaxResults     int    `mapstructure:"max_results"`
 	SafeSearch     bool   `mapstructure:"safe_search"`
+}
+
+type RAGConfig struct {
+	BaseURL     string `mapstructure:"base_url"`     // RAG service base URL
+	Enabled     bool   `mapstructure:"enabled"`       // Enable auto-indexing to RAG
+	MaxRetries  int    `mapstructure:"max_retries"`   // Maximum retry attempts for RAG requests
+	RetryDelay  int    `mapstructure:"retry_delay"`   // Delay between retries in seconds
 }
 
 type RateLimitConfig struct {
@@ -138,6 +146,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("search.provider", "duckduckgo")
 	v.SetDefault("search.max_results", 10)
 	v.SetDefault("search.safe_search", true)
+
+	// RAG defaults
+	v.SetDefault("rag.base_url", "https://rag.0x27.ru")
+	v.SetDefault("rag.enabled", true)
+	v.SetDefault("rag.max_retries", 3)
+	v.SetDefault("rag.retry_delay", 2)
 
 	// Rate limiting defaults
 	v.SetDefault("rate_limit.requests_per_second", 10.0)

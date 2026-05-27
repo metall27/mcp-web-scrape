@@ -33,6 +33,12 @@ search:
   max_results: 10
   safe_search: true
 
+rag:
+  base_url: https://rag.0x27.ru  # RAG service URL
+  enabled: true                  # Enable auto-indexing
+  max_retries: 3                 # Retry attempts for RAG requests
+  retry_delay: 2                 # Seconds between retries
+
 rate_limit:
   enabled: true
   requests_per_second: 10.0

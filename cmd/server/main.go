@@ -65,8 +65,9 @@ func main() {
 			BurstSize:         cfg.RateLimit.BurstSize,
 			Enabled:           cfg.RateLimit.Enabled,
 		},
-		Cache:        cacheInstance,
-		BrowserPool:  browserPool,
+		Cache:       cacheInstance,
+		BrowserPool: browserPool,
+		RAG:         cfg.RAG,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create MCP server")

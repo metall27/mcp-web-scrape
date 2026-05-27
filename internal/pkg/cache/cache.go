@@ -23,6 +23,7 @@ type CachedResponse struct {
 	Data      []byte
 	Timestamp time.Time
 	Headers   map[string]string
+	Screenshot []byte // Separate field for binary screenshot data
 }
 
 func New(cfg config.CacheConfig) (*Cache, error) {
