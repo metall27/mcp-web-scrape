@@ -128,15 +128,15 @@ func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
 	}
 
 	// Extract API endpoints (REST/GraphQL)
-	apiRegex := regexp.MustCompile(`(?i)(?:GET|POST|PUT|DELETE|PATCH|query|mutation)\s+["']?(/[^\s"']+)["']?`)
+	apiRegex := regexp.MustCompile(`(?i)((?:GET|POST|PUT|DELETE|PATCH|query|mutation))\s+["']?(/[^\s"']+)["']?`)
 	apiMatches := apiRegex.FindAllStringSubmatch(html, -1)
 
 	var endpoints []map[string]string
 	for _, match := range apiMatches {
-		if len(match) > 1 {
+		if len(match) > 2 {
 			endpoints = append(endpoints, map[string]string{
-				"method": "unknown",
-				"path":   match[1],
+				"method": match[1],
+				"path":   match[2],
 			})
 		}
 	}
