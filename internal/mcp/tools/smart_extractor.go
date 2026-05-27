@@ -133,10 +133,10 @@ func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
 
 	var endpoints []map[string]string
 	for _, match := range apiMatches {
-		if len(match) > 2 {
+		if len(match) > 1 {
 			endpoints = append(endpoints, map[string]string{
-				"method": match[1],
-				"path":   match[2],
+				"method": "unknown",
+				"path":   match[1],
 			})
 		}
 	}
@@ -473,8 +473,8 @@ func (t *SmartExtractorTool) decodeEntities(text string) string {
 		"&#39;", "'",
 		"&mdash;", "—",
 		"&ndash;", "–",
-		"« ", "",
-		" »", "",
+		"«", "«",
+		"»", "»",
 	)
 	return replacer.Replace(text)
 }
