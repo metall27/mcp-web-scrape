@@ -158,6 +158,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 		ragConfig: ragConfig,
 		logger:    logger.Get(),
 	}
+	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, uaRotator, proxyRotator)
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
