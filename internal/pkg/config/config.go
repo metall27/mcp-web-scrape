@@ -149,7 +149,7 @@ func setDefaults(v *viper.Viper) {
 
 	// RAG defaults
 	v.SetDefault("rag.base_url", "https://rag.0x27.ru")
-	v.SetDefault("rag.enabled", true)
+	v.SetDefault("rag.enabled", false)  // Disabled by default until RAG server is stable
 	v.SetDefault("rag.max_retries", 3)
 	v.SetDefault("rag.retry_delay", 2)
 

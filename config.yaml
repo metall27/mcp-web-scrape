@@ -35,7 +35,7 @@ search:
 
 rag:
   base_url: https://rag.0x27.ru  # RAG service URL
-  enabled: true                  # Enable auto-indexing
+  enabled: false                 # Disabled until RAG server is stable
   max_retries: 3                 # Retry attempts for RAG requests
   retry_delay: 2                 # Seconds between retries
 

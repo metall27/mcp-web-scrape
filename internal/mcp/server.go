@@ -71,16 +71,25 @@ func New(cfg Config) (*Server, error) {
 }
 
 func (s *Server) registerDefaultTools() error {
-	defaultTools := []tools.Tool{
-		tools.NewRAGSearchTool(),        // PRIMARY: Semantic search (use FIRST for info requests)
-		tools.NewRAGIndexTool(),         // Index pages for RAG
-		tools.NewRAGHealthTool(),        // RAG health check
-		tools.NewRAGListDocumentsTool(), // List indexed documents
+	defaultTools := []tools.Tool{}
+
+	// Add RAG tools only if enabled
+	if s.config.RAG.Enabled {
+		defaultTools = append(defaultTools,
+			tools.NewRAGSearchTool(),        // PRIMARY: Semantic search (use FIRST for info requests)
+			tools.NewRAGIndexTool(),         // Index pages for RAG
+			tools.NewRAGHealthTool(),        // RAG health check
+			tools.NewRAGListDocumentsTool(), // List indexed documents
+		)
+	}
+
+	// Always register these tools
+	defaultTools = append(defaultTools,
 		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG), // FALLBACK: Scrape only if rag_search empty
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
 		tools.NewSmartExtractorTool(),   // Content extraction
-	}
+	)
 
 	for _, tool := range defaultTools {
 		if err := s.RegisterTool(tool); err != nil {
