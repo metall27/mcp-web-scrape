@@ -32,7 +32,17 @@ func (h *Handler) SetLogger(logger zerolog.Logger) {
 
 // GetOpenAPI spec handler
 func (h *Handler) GetOpenAPI(c *gin.Context) {
-	spec, err := GenerateSpec(h.baseURL, h.mcpServer)
+	// Determine base URL and path prefix based on request path
+	isSSEPath := c.Request.URL.Path == "/sse/openapi.json"
+
+	// For /sse/openapi.json requests, use empty base URL (relative paths)
+	// For /openapi.json requests, use full base URL
+	baseURL := h.baseURL
+	if isSSEPath {
+		baseURL = "" // Empty base for relative paths
+	}
+
+	spec, err := GenerateSpec(baseURL, h.mcpServer)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("Failed to generate OpenAPI spec")
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -151,10 +161,17 @@ func (h *Handler) GetOpenAPI(c *gin.Context) {
 		},
 	}
 
-	// Add each tool as a separate endpoint (both with and without /sse prefix)
+	// For /sse/openapi.json requests, add only /tools paths (relative)
+	// For /openapi.json requests, add both /tools and /sse/tools paths
 	for toolName, toolInfo := range tools {
-		AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
-		AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}), "/sse")
+		if isSSEPath {
+			// For /sse/openapi.json - use relative paths (no /sse prefix in paths)
+			AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
+		} else {
+			// For /openapi.json - add both variants
+			AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
+			AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}), "/sse")
+		}
 	}
 
 	c.Header("Content-Type", "application/json")
