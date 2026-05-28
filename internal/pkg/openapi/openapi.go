@@ -209,6 +209,29 @@ func (s *Spec) GenerateJSON() ([]byte, error) {
 func AddToolEndpoint(spec *Spec, toolName, toolDescription string, inputSchema map[string]interface{}) {
 	path := "/tools/" + toolName
 
+	// Convert parameters to request body schema
+	properties := make(map[string]interface{})
+	requiredParams := []string{}
+
+	for paramName, paramInfo := range inputSchema {
+		if paramMap, ok := paramInfo.(map[string]interface{}); ok {
+			properties[paramName] = paramMap
+
+			// Check if required
+			if isRequired, ok := paramMap["required"].(bool); ok && isRequired {
+				requiredParams = append(requiredParams, paramName)
+			}
+		}
+	}
+
+	requestSchema := map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(requiredParams) > 0 {
+		requestSchema["required"] = requiredParams
+	}
+
 	spec.Paths[path] = PathItem{
 		Post: &Operation{
 			Summary:     toolDescription,
@@ -218,7 +241,7 @@ func AddToolEndpoint(spec *Spec, toolName, toolDescription string, inputSchema m
 			RequestBody: &RequestBody{
 				Content: map[string]MediaType{
 					"application/json": {
-						Schema: inputSchema,
+						Schema: requestSchema,
 					},
 				},
 				Required: true,

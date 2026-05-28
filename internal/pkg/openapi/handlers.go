@@ -41,9 +41,120 @@ func (h *Handler) GetOpenAPI(c *gin.Context) {
 		return
 	}
 
-	// Add tool-specific endpoints
-	// We'll need to get the tools from the MCP server
-	// For now, we'll add common endpoints manually
+	// Add tool execution endpoints
+	tools := map[string]map[string]interface{}{
+		"scrape_url": {
+			"name":        "scrape_url",
+			"description": "Fast HTTP scraper for static websites, blogs, news, documentation",
+			"parameters": map[string]interface{}{
+				"url": map[string]interface{}{
+					"type":        "string",
+					"description": "URL to scrape (required)",
+					"required":    true,
+				},
+				"timeout": map[string]interface{}{
+					"type":        "integer",
+					"description": "Timeout in seconds (default: 30)",
+					"default":     30,
+				},
+				"user_agent": map[string]interface{}{
+					"type":        "string",
+					"description": "Custom User-Agent header",
+				},
+				"headers": map[string]interface{}{
+					"type":        "object",
+					"description": "Custom HTTP headers",
+				},
+			},
+		},
+		"scrape_with_js": {
+			"name":        "scrape_with_js",
+			"description": "Chrome-based scraper for dynamic websites with JavaScript rendering, GitHub, SPA, dashboards",
+			"parameters": map[string]interface{}{
+				"url": map[string]interface{}{
+					"type":        "string",
+					"description": "URL to scrape (required)",
+					"required":    true,
+				},
+				"timeout": map[string]interface{}{
+					"type":        "integer",
+					"description": "Timeout in seconds (default: 60)",
+					"default":     60,
+				},
+				"output_format": map[string]interface{}{
+					"type":        "string",
+					"description": "Output format",
+					"default":     "html",
+					"enum":        []string{"html", "markdown"},
+				},
+				"screenshot_mode": map[string]interface{}{
+					"type":        "string",
+					"description": "When to take screenshot",
+					"default":     "auto",
+					"enum":        []string{"auto", "always", "never"},
+				},
+				"wait_for_network_idle": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Wait for network idle (smart loading for SPA)",
+					"default":     false,
+				},
+			},
+		},
+		"search_web": {
+			"name":        "search_web",
+			"description": "Web search using DuckDuckGo, Brave, or Bing",
+			"parameters": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "Search query (required)",
+					"required":    true,
+				},
+				"max_results": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of results (default: 10)",
+					"default":     10,
+				},
+			},
+		},
+		"parse_html": {
+			"name":        "parse_html",
+			"description": "Parse and extract structured data from HTML content",
+			"parameters": map[string]interface{}{
+				"html": map[string]interface{}{
+					"type":        "string",
+					"description": "HTML content to parse (required)",
+					"required":    true,
+				},
+				"extract": map[string]interface{}{
+					"type":        "array",
+					"description": "CSS selectors to extract",
+					"items": map[string]interface{}{
+						"type": "string",
+					},
+				},
+			},
+		},
+		"smart_extract": {
+			"name":        "smart_extract",
+			"description": "Smart content extraction using LLM-based analysis of page structure",
+			"parameters": map[string]interface{}{
+				"url": map[string]interface{}{
+					"type":        "string",
+					"description": "URL to extract from (required)",
+					"required":    true,
+				},
+				"tech": map[string]interface{}{
+					"type":        "string",
+					"description": "Technology stack (auto-detected if empty)",
+				},
+			},
+		},
+	}
+
+	// Add each tool as a separate endpoint
+	for toolName, toolInfo := range tools {
+		AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
+	}
 
 	c.Header("Content-Type", "application/json")
 	c.JSON(http.StatusOK, spec)
