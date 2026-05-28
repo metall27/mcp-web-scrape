@@ -43,14 +43,24 @@ func GenerateCacheKeyJS(url string, params map[string]interface{}) string {
 
 	// Include relevant parameters in hash for JS scraping
 	// Different parameters = different result
-	keys := []string{"wait_for", "wait_time", "viewport_width", "viewport_height", "block_images"}
+	// Core format options
+	keys := []string{
+		"format",          // html vs markdown (CRITICAL - affects output content)
+		"screenshot_mode", // never, auto, always (affects response structure)
+		"wait_for",        // CSS selector (affects page state)
+		"wait_time",       // delay in ms (affects page state)
+		"viewport_width",  // viewport width (affects responsive layout)
+		"viewport_height", // viewport height (affects responsive layout)
+		"block_images",    // image blocking (affects page content)
+		"wait_for_network_idle", // network idle waiting (affects page state)
+	}
 	for _, key := range keys {
 		if val, ok := params[key]; ok {
 			hash.Write([]byte(fmt.Sprintf("%s:%v", key, val)))
 		}
 	}
 
-	// Include user agent if custom
+	// Include user agent if custom (affects some content)
 	if ua, ok := params["user_agent"].(string); ok && ua != "" {
 		hash.Write([]byte("user_agent:" + ua))
 	}
@@ -61,9 +71,10 @@ func GenerateCacheKeyJS(url string, params map[string]interface{}) string {
 // OptsToMap converts Options to map for cache key generation
 func OptsToMap(opts Options) map[string]interface{} {
 	result := map[string]interface{}{
-		"user_agent": opts.UserAgent,
-		"timeout":    opts.Timeout.String(),
-		"format":     opts.OutputFormat,
+		"user_agent":        opts.UserAgent,
+		"timeout":           opts.Timeout.String(),
+		"format":            opts.OutputFormat,
+		"screenshot_mode":   opts.ScreenshotMode,
 	}
 
 	// Add JS-specific options if relevant
@@ -80,7 +91,10 @@ func OptsToMap(opts Options) map[string]interface{} {
 		result["viewport_height"] = opts.ViewportHeight
 	}
 	if opts.WaitForNetworkIdle {
-		result["network_idle"] = true
+		result["wait_for_network_idle"] = true
+	}
+	if opts.BlockImages {
+		result["block_images"] = true
 	}
 	if opts.StealthEnabled {
 		result["stealth_enabled"] = true

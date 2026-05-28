@@ -72,11 +72,24 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				URL:         urlStr,
 				FromCache:   true,
 				Method:      s.Name(),
+				ContentType: cached.Headers["content_type"],
+				StatusCode:  200, // Cached responses are successful
+				SizeBytes:   len(cached.Data),
 			}
 
 			// Add title if available
 			if title, ok := cached.Headers["title"]; ok {
 				result.Title = title
+			}
+
+			// Add format if available
+			if format, ok := cached.Headers["format"]; ok {
+				result.Format = format
+			}
+
+			// Add final_url if available
+			if finalURL, ok := cached.Headers["final_url"]; ok {
+				result.FinalURL = finalURL
 			}
 
 			// Add screenshot if available in cache
@@ -250,13 +263,19 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	}
 
 	// 12. Build result
+	// Determine content type based on format
+	contentType := "text/html"
+	if opts.OutputFormat == "markdown" {
+		contentType = "text/markdown"
+	}
+
 	result := &Result{
 		HTML:            html,
 		Title:           title,
 		URL:             urlStr,
 		FinalURL:        finalURL,
 		StatusCode:      200,
-		ContentType:     "text/html",
+		ContentType:     contentType,
 		Duration:        duration,
 		SizeBytes:       len(html),
 		Screenshot:      screenshotData,
@@ -275,9 +294,10 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			Data:      []byte(html),
 			Timestamp: time.Now(),
 			Headers: map[string]string{
-				"content_type": "text/html",
+				"content_type": contentType,
 				"title":        title,
 				"final_url":    finalURL,
+				"format":       opts.OutputFormat,
 			},
 		}
 

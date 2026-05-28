@@ -46,6 +46,9 @@ type Options struct {
 	ViewportWidth int
 	ViewportHeight int
 
+	// Content blocking
+	BlockImages bool
+
 	// Stealth
 	StealthEnabled bool
 	StealthScroll bool

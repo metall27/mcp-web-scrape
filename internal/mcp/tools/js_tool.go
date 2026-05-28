@@ -360,6 +360,12 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		viewportHeight = int(vh)
 	}
 
+	// Extract block_images
+	blockImages := false
+	if bi, ok := args["block_images"].(bool); ok {
+		blockImages = bi
+	}
+
 	// Extract stealth settings
 	stealthEnabled := false
 	if se, ok := args["stealth_enabled"].(bool); ok {
@@ -386,6 +392,7 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		UserAgent:          userAgent,
 		ViewportWidth:      viewportWidth,
 		ViewportHeight:     viewportHeight,
+		BlockImages:       blockImages,
 		OutputFormat:       outputFormat,
 		StealthEnabled:     stealthEnabled,
 		StealthScroll:      stealthScroll,
