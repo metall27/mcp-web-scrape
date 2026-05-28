@@ -15,6 +15,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/openapi"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog/log"
@@ -110,6 +111,11 @@ func main() {
 	// Create transport
 	transport := mcp.NewTransport(mcpServer)
 
+	// Create OpenAPI handler for Open WebUI compatibility
+	baseURL := fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
+	openapiHandler := openapi.NewHandler(mcpServer, baseURL)
+	openapiHandler.SetLogger(log.Logger)
+
 	// Setup Gin router
 	if cfg.Log.Level == "debug" {
 		gin.SetMode(gin.DebugMode)
@@ -141,6 +147,9 @@ func main() {
 	router.Any("/sse", func(c *gin.Context) {
 		transport.HandleMCP(c.Writer, c.Request)
 	})
+
+	// Register OpenAPI/REST endpoints for Open WebUI compatibility
+	openapiHandler.RegisterRoutes(router)
 
 	// API info
 	router.GET("/", func(c *gin.Context) {
