@@ -151,9 +151,10 @@ func (h *Handler) GetOpenAPI(c *gin.Context) {
 		},
 	}
 
-	// Add each tool as a separate endpoint
+	// Add each tool as a separate endpoint (both with and without /sse prefix)
 	for toolName, toolInfo := range tools {
 		AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
+		AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}), "/sse")
 	}
 
 	c.Header("Content-Type", "application/json")
@@ -355,10 +356,17 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/openapi.json", h.GetOpenAPI)
 	router.GET("/sse/openapi.json", h.GetOpenAPI) // For Open WebUI compatibility
 
-	// Tools endpoints
+	// Tools endpoints (main paths)
 	api := router.Group("/tools")
 	{
 		api.GET("", h.ListTools)
 		api.POST("/:tool", h.ExecuteTool)
+	}
+
+	// Tools endpoints (SSE compatibility paths for Open WebUI)
+	sseTools := router.Group("/sse/tools")
+	{
+		sseTools.GET("", h.ListTools)
+		sseTools.POST("/:tool", h.ExecuteTool)
 	}
 }

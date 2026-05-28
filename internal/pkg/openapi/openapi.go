@@ -206,8 +206,14 @@ func (s *Spec) GenerateJSON() ([]byte, error) {
 }
 
 // AddToolEndpoint adds a REST endpoint for an MCP tool
-func AddToolEndpoint(spec *Spec, toolName, toolDescription string, inputSchema map[string]interface{}) {
-	path := "/tools/" + toolName
+func AddToolEndpoint(spec *Spec, toolName, toolDescription string, inputSchema map[string]interface{}, prefixes ...string) {
+	// Default prefix if not provided
+	prefix := ""
+	if len(prefixes) > 0 {
+		prefix = prefixes[0]
+	}
+
+	path := prefix + "/tools/" + toolName
 
 	// Convert parameters to request body schema
 	properties := make(map[string]interface{})
