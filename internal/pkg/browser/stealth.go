@@ -24,11 +24,11 @@ type StealthConfig struct {
 // DefaultStealthConfig дефолтные настройки
 var DefaultStealthConfig = StealthConfig{
 	RandomDelay:    true,
-	MinDelay:       100 * time.Millisecond,
-	MaxDelay:       500 * time.Millisecond,
+	MinDelay:       50 * time.Millisecond,  // Balance between speed and realism
+	MaxDelay:       200 * time.Millisecond, // Faster but still human-like
 	EmulateScroll:  true,
-	ScrollSteps:    3,
-	MouseMovement:  true,
+	ScrollSteps:    2,  // Reduced from 3 for speed
+	MouseMovement:  false, // Disabled by default (can be enabled)
 	RandomViewport: false, // Выключен по умолчанию (может ломать layout)
 }
 
@@ -61,10 +61,13 @@ func (s *StealthActions) RandomDelay() chromedp.Action {
 			return nil
 		}
 
-		// ИЗМЕНЕНО: Уменьшили задержки для скорости (10-50ms вместо 100-500ms)
-		delay := 10*time.Millisecond + time.Duration(s.rnd.Int63n(int64(40*time.Millisecond)))
+		// Use configured delays (default: 50-200ms for balance)
+		delay := s.config.MinDelay + time.Duration(s.rnd.Int63n(int64(s.config.MaxDelay-s.config.MinDelay)))
 
-		// УБРАНО: Дополнительная случайная задержка
+		// Sometimes add small additional delay (10% chance)
+		if s.rnd.Float32() < 0.1 {
+			delay += time.Duration(s.rnd.Int63n(int64(50 * time.Millisecond)))
+		}
 
 		time.Sleep(delay)
 		return nil
@@ -100,30 +103,53 @@ func (s *StealthActions) EmulateScroll() chromedp.Action {
 			pageHeight = 2000
 		}
 
-		// ИЗМЕНЕНО: Уменьшили количество шагов до 1 для скорости
-		scrollStep := pageHeight
-
-		// ОДИН быстрый скролл вниз (instant вместо smooth)
-		err = chromedp.ActionFunc(func(ctx context.Context) error {
-			return chromedp.Evaluate(fmt.Sprintf(`
-				(() => {
-					window.scrollTo({
-						top: %d,
-						behavior: 'instant'
-					});
-				})()
-			`, scrollStep), nil).Do(ctx)
-		}).Do(ctx)
-
-		if err != nil {
-			return err
+		// Use configured scroll steps (default: 2 for balance)
+		scrollStep := pageHeight / int64(s.config.ScrollSteps)
+		if scrollStep < 100 {
+			scrollStep = 100 // Минимальный шаг
 		}
 
-		// ИЗМЕНЕНО: Убрали задержку между шагами
+		// Скроллим по шагам для реализма
+		for i := 0; i < s.config.ScrollSteps; i++ {
+			scrollPos := int64((i + 1)) * scrollStep
 
-		// ИЗМЕНЕНО: Убрали обратный скролл вверх для скорости
+			// Используем auto (быстрее smooth) вместо instant для реализма
+			err := chromedp.ActionFunc(func(ctx context.Context) error {
+				return chromedp.Evaluate(fmt.Sprintf(`
+					(() => {
+						window.scrollTo({
+							top: %d,
+							behavior: 'auto'
+						});
+					})()
+				`, scrollPos), nil).Do(ctx)
+			}).Do(ctx)
 
-		return nil
+			if err != nil {
+				return err
+			}
+
+			// Small delay between steps for realism (50-150ms random)
+			delay := 50*time.Millisecond + time.Duration(s.rnd.Int63n(int64(100*time.Millisecond)))
+			time.Sleep(delay)
+		}
+
+		// Small scroll back up (humans often do this)
+		err = chromedp.ActionFunc(func(ctx context.Context) error {
+			return chromedp.Evaluate(`
+				(() => {
+					window.scrollBy({
+						top: -200,
+						behavior: 'auto'
+					});
+				})()
+			`, nil).Do(ctx)
+		}).Do(ctx)
+
+		// Small pause after scroll back
+		time.Sleep(50 * time.Millisecond)
+
+		return err
 	})
 }
 

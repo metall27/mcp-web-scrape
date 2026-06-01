@@ -373,10 +373,11 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 
 			s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
 
-			// Wait for body to appear (polling approach)
+			// Wait for body to appear (polling approach with configurable timeout)
 			startTime = time.Now()
 			bodyFound := false
-			for i := 0; i < 30; i++ { // Max 30 attempts
+			maxAttempts := 60 // Increased from 30 to 60 = 6 seconds instead of 3
+			for i := 0; i < maxAttempts; i++ {
 				var bodyExists bool
 				err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
 				if err == nil && bodyExists {
@@ -387,7 +388,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 			}
 
 			if !bodyFound {
-				return fmt.Errorf("body not found after 30 attempts")
+				return fmt.Errorf("body not found after %d attempts (%v)", maxAttempts, time.Since(startTime))
 			}
 
 			s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
@@ -407,10 +408,11 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 
 			s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
 
-			// Wait for body to appear (polling approach)
+			// Wait for body to appear (polling approach with configurable timeout)
 			startTime = time.Now()
 			bodyFound := false
-			for i := 0; i < 30; i++ { // Max 30 attempts
+			maxAttempts := 60 // Increased from 30 to 60 = 6 seconds instead of 3
+			for i := 0; i < maxAttempts; i++ {
 				var bodyExists bool
 				err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
 				if err == nil && bodyExists {
@@ -421,7 +423,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 			}
 
 			if !bodyFound {
-				return fmt.Errorf("body not found after 30 attempts")
+				return fmt.Errorf("body not found after %d attempts (%v)", maxAttempts, time.Since(startTime))
 			}
 
 			s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
