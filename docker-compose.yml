@@ -23,7 +23,7 @@ services:
       - MCP_WEB_SCRAPE_BROWSER_NO_SANDBOX=true
       - MCP_WEB_SCRAPE_RATE_LIMIT_ENABLED=true
       - MCP_WEB_SCRAPE_CACHE_ENABLED=true
-      - TZ=UTC
+      - TZ=Europe/Moscow
 
     # Volumes
     volumes:

@@ -237,8 +237,19 @@ docker stats mcp-web-scrape
 | **Shared Memory** | 256MB | - | Критично для headless Chrome |
 | **Processes** | 512 PID | - | Fork bomb prevention |
 | **Open Files** | 4096/8192 | - | Soft/hard file descriptor limits |
+| **Timezone** | Europe/Moscow | - | Удобство просмотра логов |
 
 **Почему Увеличены в 2x:**
+- ✅ **Chrome stability** - Headless Chrome требует больше ресурсов
+- ✅ **Concurrent requests** - Поддержка нескольких одновременных запросов
+- ✅ **Page complexity** - Современные SPA тяжелые для рендеринга
+- ✅ **Production reliability** - Запас производительности для пиковых нагрузок
+
+**Почему Moscow Time (не UTC):**
+- ✅ **Usability** - Логи сразу в понятном времени (без +3 конвертации)
+- ✅ **Real-time monitoring** - Удобнее смотреть логи в live режиме
+- ✅ **Single server** - Для одного сервера в Moscow timezone оптимально
+- ⚠️ **Для distributed systems** - Используйте UTC
 - ✅ **Chrome stability** - Headless Chrome требует больше ресурсов
 - ✅ **Concurrent requests** - Поддержка нескольких одновременных запросов
 - ✅ **Page complexity** - Современные SPA тяжелые для рендеринга
