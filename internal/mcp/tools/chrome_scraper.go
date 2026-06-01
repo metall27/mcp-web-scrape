@@ -12,6 +12,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
+	tlshttp "github.com/metall/mcp-web-scrape/internal/pkg/http"
 	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
@@ -564,24 +565,64 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 
 // httpFallback performs HTTP fallback when Chrome fails
 func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
-	// Create HTTP client with redirect following
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
+	// Phase 4: TLS Fingerprinting - Use TLS-aware HTTP client instead of standard http.Client
+	s.logger.Info().Msg("Phase 4: Using TLS-aware HTTP client with Chrome fingerprint")
+
+	// Create TLS client with Chrome fingerprint
+	tlsConfig := tlshttp.DefaultTLSClientConfig
+	tlsConfig.RandomizeExtensions = true // Enable JA4 protection
+
+	tlsClient, err := tlshttp.NewTLSClient(tlsConfig)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to create TLS client, falling back to standard HTTP")
+		// Fallback to standard HTTP client
+		tlsClient = nil
 	}
 
-	// Add proxy to HTTP client if enabled
-	if s.proxy != nil && s.proxy.IsEnabled() {
-		client.Transport = &http.Transport{
-			Proxy: s.proxy.GetProxyFunc(),
-		}
+	var client *http.Client
+	if tlsClient != nil {
+		client = tlsClient.GetHttpClient()
+
+		// Log fingerprint info
+		fingerprintInfo := tlsClient.GetFingerprintInfo()
 		s.logger.Info().
-			Msg("Using proxy for HTTP fallback")
+			Interface("fingerprint", fingerprintInfo).
+			Msg("TLS fingerprinting enabled")
+
+		// Add proxy to TLS client if enabled
+		if s.proxy != nil && s.proxy.IsEnabled() {
+			// Get next proxy
+			selectedProxy, proxyErr := s.proxy.GetNext()
+			if proxyErr == nil && selectedProxy != nil {
+				if err := tlsClient.SetProxy(selectedProxy.URL); err != nil {
+					s.logger.Warn().Err(err).Msg("Failed to set proxy for TLS client")
+				} else {
+					s.logger.Info().
+						Str("proxy", selectedProxy.URL).
+						Msg("Using proxy with TLS fingerprinting")
+				}
+			}
+		}
+	} else {
+		// Fallback to standard HTTP client
+		client = &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("too many redirects")
+				}
+				return nil
+			},
+		}
+
+		// Add proxy to standard HTTP client if enabled
+		if s.proxy != nil && s.proxy.IsEnabled() {
+			client.Transport = &http.Transport{
+				Proxy: s.proxy.GetProxyFunc(),
+			}
+			s.logger.Info().
+				Msg("Using proxy for standard HTTP fallback")
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
