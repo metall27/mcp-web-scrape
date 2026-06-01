@@ -235,7 +235,6 @@ docker stats mcp-web-scrape
 | **CPU** | 4.0 cores | 1.0 cores | Максимальная/гарантированная CPU (увеличено в 2x) |
 | **Memory** | 4GB RAM | 1GB RAM | Максимальная/гарантированная память (увеличено в 2x) |
 | **Shared Memory** | 256MB | - | Критично для headless Chrome |
-| **Processes** | 512 PID | - | Fork bomb prevention |
 | **Open Files** | 4096/8192 | - | Soft/hard file descriptor limits |
 | **Timezone** | Europe/Moscow | - | Удобство просмотра логов |
 

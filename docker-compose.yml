@@ -37,9 +37,6 @@ services:
     # Shared memory size (КРИТИЧНО для Chrome!)
     shm_size: '256mb'
 
-    # Process limits (container-level, not deploy-level)
-    pids_limit: 512
-
     # Health check
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8192/health"]
