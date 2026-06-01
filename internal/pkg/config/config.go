@@ -57,6 +57,7 @@ type BrowserConfig struct {
 	PollingConfig   PollingConfig `mapstructure:"polling"` // Navigation polling configuration
 	ToolTimeout     time.Duration `mapstructure:"tool_timeout"` // Tool-level timeout for scraping operations
 	BlockDetection  bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
+	MaxRetries      int           `mapstructure:"max_retries"` // Maximum retries with different proxies on blocking
 }
 
 // PollingConfig конфигурация для polling навигации
@@ -174,6 +175,7 @@ func setDefaults(v *viper.Viper) {
 	// Tool timeout and block detection defaults
 	v.SetDefault("browser.tool_timeout", 120*time.Second)
 	v.SetDefault("browser.block_detection", true)
+	v.SetDefault("browser.max_retries", 2) // Retry with different proxies on blocking
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")

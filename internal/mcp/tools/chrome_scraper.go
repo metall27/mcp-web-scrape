@@ -229,8 +229,18 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				Str("block_type", string(blockResult.BlockType)).
 				Str("details", blockResult.Details).
 				Float64("confidence", blockResult.Confidence).
-				Msg("Block detected, attempting HTTP fallback")
+				Msg("Block detected, marking proxy as failed and attempting HTTP fallback")
 
+			// Mark current proxy as failed (if proxy enabled)
+			// This proxy won't be used for future requests
+			if s.proxy != nil && s.proxy.IsEnabled() {
+				s.proxy.MarkFailure(fmt.Errorf("blocking detected: %s", blockResult.BlockType))
+				s.logger.Info().
+					Msg("Current proxy marked as failed, will use different proxy for next request")
+			}
+
+			// Fall back to HTTP for this request
+			// Future requests will use different (better) proxies
 			return s.httpFallback(ctx, urlStr, userAgent, startTime)
 		}
 	}
@@ -378,19 +388,26 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Set User-Agent in JS context (navigator.userAgent)
-			// Note: We DON'T set static UA in browser allocator to avoid mismatch
-			// HTTP headers use default Chrome UA, JS uses rotated UA
-			// This is better than having static UA in HTTP and rotated in JS
+			// Note: Full HTTP+JS UA sync via CDP requires complex CDP integration
+			// Current approach: JS UA rotation + accept HTTP header limitation
+			// This is acceptable for many sites; proxy rotation handles blocked IPs
+
 			var result interface{}
-			err := chromedp.Evaluate(`Object.defineProperty(navigator, 'userAgent', {get: function() {return "`+userAgent+`"}})`, &result).Do(ctx)
+			err := chromedp.Evaluate(fmt.Sprintf(`
+				Object.defineProperty(navigator, 'userAgent', {
+					get: function() { return %q; },
+					configurable: true
+				});
+			`, userAgent), &result).Do(ctx)
 
 			if err != nil {
-				s.logger.Debug().Err(err).Msg("Could not set JS User-Agent")
+				s.logger.Debug().Err(err).Msg("Failed to set JS User-Agent")
 			} else {
 				s.logger.Debug().
 					Str("user_agent", userAgent).
-					Msg("User-Agent set in JS context (navigator.userAgent)")
+					Msg("User-Agent set in JS context")
 			}
+
 			return nil
 		}),
 	}

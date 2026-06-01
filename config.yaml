@@ -32,6 +32,7 @@ browser:
     timeout: 6s                    # Total timeout for polling operations
   tool_timeout: 120s               # Tool-level timeout for scraping operations
   block_detection: true            # Enable Cloudflare/captcha detection (triggers HTTP fallback)
+  max_retries: 2                   # Maximum retries with different proxies on blocking (0 = no retry)
 
 search:
   provider: duckduckgo  # duckduckgo, brave, bing
