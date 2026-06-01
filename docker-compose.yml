@@ -6,9 +6,8 @@ services:
     image: mcp-web-scrape:latest
     container_name: mcp-web-scrape
 
-    # Restart policy с задержкой (предотвращает rapid restart loops)
+    # Restart policy
     restart: unless-stopped
-    restart_delay: 5s
 
     # Порты
     ports:
@@ -24,6 +23,7 @@ services:
       - MCP_WEB_SCRAPE_BROWSER_NO_SANDBOX=true
       - MCP_WEB_SCRAPE_RATE_LIMIT_ENABLED=true
       - MCP_WEB_SCRAPE_CACHE_ENABLED=true
+      - TZ=UTC
 
     # Volumes
     volumes:
@@ -35,8 +35,10 @@ services:
       - chrome-shm:/dev/shm
 
     # Shared memory size (КРИТИЧНО для Chrome!)
-    # Chrome требует достаточно /dev/shm для tab rendering
     shm_size: '256mb'
+
+    # Process limits (container-level, not deploy-level)
+    pids_limit: 512
 
     # Health check
     healthcheck:
@@ -47,31 +49,18 @@ services:
       start_period: 10s
 
     # Resource limits (оптимизировано для Chrome + Go)
-    # Увеличены в 2 раза для production reliability
     deploy:
       resources:
         limits:
-          cpus: '4.0'           # Max 4 CPU cores (was 2.0)
-          memory: 4G            # Max 4GB RAM (was 2GB)
+          cpus: '4.0'           # Max 4 CPU cores
+          memory: 4G            # Max 4GB RAM
         reservations:
-          cpus: '1.0'           # Гарантируем 1.0 CPU cores (was 0.5)
-          memory: 1G            # Гарантируем 1GB RAM (was 512MB)
+          cpus: '1.0'           # Гарантируем 1.0 CPU cores
+          memory: 1G            # Гарантируем 1GB RAM
 
-      # Restart policy (Docker Swarm mode)
-      restart_policy:
-        condition: unless-stopped
-        delay: 5s
-        max_attempts: 3
-        window: 120s
-
-      # Process limits
-      # Предотвращает fork bombs и process explosions
-      pids_limit: 512
-
-    # Security options (balanced for Chrome)
+    # Security options
     security_opt:
-      - no-new-privileges:true  # Предотвращает privilege escalation
-      - seccomp=default          # Standard seccomp profile
+      - no-new-privileges:true
 
     # Ulimits (system resource limits)
     ulimits:
@@ -84,52 +73,23 @@ services:
     dns:
       - 8.8.8.8                  # Google DNS
       - 8.8.4.4                  # Google DNS backup
-      - 1.1.1.1                  # Cloudflare DNS
-
-    # DNS search domains
-    dns_search: []
-
-    # Network mode
-    network_mode: bridge
 
     # Networks
     networks:
-      mcp-network:
-        aliases:
-          - mcp-web-scrape
+      - mcp-network
 
-    # Logging (улучшенное)
+    # Logging
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"          # 10MB per file
-        max-file: "3"            # Keep 3 files (30MB total)
-        compress: "true"        # Compress old logs
+        max-size: "10m"
+        max-file: "3"
 
-    # Timezone
-    timezone: "UTC"
-
-    # Process isolation (Linux only)
-    # cgroup parent для иерархического управления ресурсами
-    # cgroup_parent: "mcp-web-scrape.scope"
-
-    # Labels (для metadata и monitoring)
+    # Labels
     labels:
       - "com.mcp-web-scrape.version=1.0"
       - "com.mcp-web-scrape.phase=5-complete"
       - "com.mcp-web-scrape.production-ready=true"
-      - "monitoring.enabled=true"
-
-  # Опционально: Prometheus для мониторинга (будущая функциональность)
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   container_name: prometheus
-  #   ports:
-  #     - "9090:9090"
-  #   volumes:
-  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
-  #   networks:
-  #     - mcp-network
 
 volumes:
   mcp-cache:
@@ -140,6 +100,3 @@ volumes:
 networks:
   mcp-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
