@@ -47,15 +47,16 @@ services:
       start_period: 10s
 
     # Resource limits (оптимизировано для Chrome + Go)
+    # Увеличены в 2 раза для production reliability
     deploy:
       resources:
         limits:
-          cpus: '2.0'           # Max 2 CPU cores
-          memory: 2G            # Max 2GB RAM
-          memory_swap: 3G        # Max 3GB RAM + swap
+          cpus: '4.0'           # Max 4 CPU cores (was 2.0)
+          memory: 4G            # Max 4GB RAM (was 2GB)
+          memory_swap: 6G       # Max 6GB RAM + swap (was 3GB)
         reservations:
-          cpus: '0.5'           # Гарантируем 0.5 CPU cores
-          memory: 512M          # Гарантируем 512MB RAM
+          cpus: '1.0'           # Гарантируем 1.0 CPU cores (was 0.5)
+          memory: 1G            # Гарантируем 1GB RAM (was 512MB)
 
       # Restart policy (Docker Swarm mode)
       restart_policy:

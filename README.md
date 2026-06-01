@@ -232,12 +232,18 @@ docker stats mcp-web-scrape
 
 | Resource | Limit | Reservation | Описание |
 |----------|-------|--------------|----------|
-| **CPU** | 2.0 cores | 0.5 cores | Максимальная/гарантированная CPU |
-| **Memory** | 2GB RAM | 512MB RAM | Максимальная/гарантированная память |
-| **Memory + Swap** | 3GB | - | RAM + swap limit |
+| **CPU** | 4.0 cores | 1.0 cores | Максимальная/гарантированная CPU (увеличено в 2x) |
+| **Memory** | 4GB RAM | 1GB RAM | Максимальная/гарантированная память (увеличено в 2x) |
+| **Memory + Swap** | 6GB | - | RAM + swap limit (увеличено в 2x) |
 | **Shared Memory** | 256MB | - | Критично для headless Chrome |
 | **Processes** | 512 PID | - | Fork bomb prevention |
 | **Open Files** | 4096/8192 | - | Soft/hard file descriptor limits |
+
+**Почему Увеличены в 2x:**
+- ✅ **Chrome stability** - Headless Chrome требует больше ресурсов
+- ✅ **Concurrent requests** - Поддержка нескольких одновременных запросов
+- ✅ **Page complexity** - Современные SPA тяжелые для рендеринга
+- ✅ **Production reliability** - Запас производительности для пиковых нагрузок
 
 **Security Features:**
 - ✅ `no-new-privileges` - Privilege escalation prevention
