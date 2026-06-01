@@ -387,7 +387,7 @@ func (s *ChromeScraper) SupportsActions() bool {
 func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options) []chromedp.Action {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Set User-Agent in JS context (navigator.userAgent)
+			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
 			// Note: Full HTTP+JS UA sync via CDP requires complex CDP integration
 			// Current approach: JS UA rotation + accept HTTP header limitation
 			// This is acceptable for many sites; proxy rotation handles blocked IPs
@@ -406,6 +406,26 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 				s.logger.Debug().
 					Str("user_agent", userAgent).
 					Msg("User-Agent set in JS context")
+			}
+
+			// Phase 3: Extended Stealth - Inject anti-detection scripts
+			if stealth != nil {
+				// Generate random fingerprint for this session
+				fingerprint := stealth.GenerateRandomFingerprint()
+
+				s.logger.Info().
+					Str("timezone", fingerprint.Timezone).
+					Str("language", fingerprint.Language).
+					Str("platform", fingerprint.Platform).
+					Str("webgl_vendor", fingerprint.WebGLVendor).
+					Msg("Phase 3: Injecting Extended Stealth anti-detection scripts")
+
+				// Inject comprehensive anti-detection scripts
+				if err := stealth.InjectAntiDetectionScripts(fingerprint).Do(ctx); err != nil {
+					s.logger.Warn().Err(err).Msg("Failed to inject anti-detection scripts (non-critical)")
+				} else {
+					s.logger.Info().Msg("✅ Extended Stealth scripts injected successfully")
+				}
 			}
 
 			return nil

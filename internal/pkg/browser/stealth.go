@@ -372,3 +372,143 @@ func (s *StealthActions) GenerateRandomFingerprint() BrowserFingerprint {
 		WebGLRenderer:  renderers[s.rnd.Intn(len(renderers))],
 	}
 }
+
+// InjectAntiDetectionScripts injects JavaScript to hide browser automation traces
+// This is the main entry point for Phase 3: Extended Stealth
+func (s *StealthActions) InjectAntiDetectionScripts(fingerprint BrowserFingerprint) chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		// Build comprehensive anti-detection script
+		script := s.buildAntiDetectionScript(fingerprint)
+
+		var result interface{}
+		err := chromedp.Evaluate(script, &result).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to inject anti-detection scripts: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// buildAntiDetectionScript builds the comprehensive JavaScript for anti-detection
+func (s *StealthActions) buildAntiDetectionScript(fingerprint BrowserFingerprint) string {
+	return fmt.Sprintf(`
+		(() => {
+			// Phase 3.1: Remove navigator.webdriver
+			Object.defineProperty(navigator, 'webdriver', {
+				get: () => undefined,
+				configurable: true
+			});
+
+			// Phase 3.2: Add fake plugins
+			const fakePlugins = [
+				{
+					name: 'Chrome PDF Plugin',
+					description: 'Portable Document Format',
+					filename: 'internal-pdf-viewer',
+					length: 1
+				},
+				{
+					name: 'Chrome PDF Viewer',
+					description: '',
+					filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+					length: 1
+				},
+				{
+					name: 'Native Client',
+					description: '',
+					filename: 'internal-nacl-plugin',
+					length: 1
+				}
+			];
+
+			Object.defineProperty(navigator, 'plugins', {
+				get: () => fakePlugins,
+				configurable: true
+			});
+
+			// Phase 3.3: Set random timezone and locale
+			// Override Date.prototype.getTimezoneOffset
+			const timezoneOffsets = {
+				'America/New_York': 300,
+				'America/Los_Angeles': 480,
+				'Europe/London': 0,
+				'Europe/Berlin': -60,
+				'Europe/Paris': -60,
+				'Asia/Tokyo': -540,
+				'Australia/Sydney': -600
+			};
+
+			const targetTimezone = %q;
+			const timezoneOffset = timezoneOffsets[targetTimezone] || 0;
+
+			// Store original getTimezoneOffset
+			const originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
+			Object.defineProperty(Date.prototype, 'getTimezoneOffset', {
+				get: () => timezoneOffset,
+				configurable: true
+			});
+
+			// Override toString to return timezone name
+			const originalToString = Date.prototype.toString;
+			Date.prototype.toString = function() {
+				return originalToString.call(this).replace(/\\(.*?\\)/, '(' + targetTimezone + ')');
+			};
+
+			// Set locale
+			Object.defineProperty(navigator, 'language', {
+				get: () => %q,
+				configurable: true
+			});
+
+			// Phase 3.4: WebGL fingerprint normalization
+			const getParameter = WebGLRenderingContext.prototype.getParameter;
+			WebGLRenderingContext.prototype.getParameter = function(parameter) {
+				// UNMASKED_VENDOR_WEBGL
+				if (parameter === 37445) {
+					return %q;
+				}
+				// UNMASKED_RENDERER_WEBGL
+				if (parameter === 37446) {
+					return %q;
+				}
+				return getParameter.call(this, parameter);
+			};
+
+			// Phase 3.5: Permission API override
+			if (navigator.permissions) {
+				const originalQuery = navigator.permissions.query;
+				navigator.permissions.query = function(permissionDesc) {
+					// Return "granted" or "prompt" for common permissions
+					return Promise.resolve({
+						state: 'granted',
+						onchange: null
+					});
+				};
+			}
+
+			// Additional: Override navigator.platform
+			Object.defineProperty(navigator, 'platform', {
+				get: () => %q,
+				configurable: true
+			});
+
+			// Additional: Hide automation indicators
+			window.chrome = {
+				runtime: {}
+			};
+
+			// Additional: Override permissions
+			const originalPermissions = navigator.permissions;
+			if (originalPermissions) {
+				Object.defineProperty(navigator, 'permissions', {
+					get: () => ({
+						query: (desc) => Promise.resolve({ state: 'granted' })
+					})
+				});
+			}
+
+			return true;
+		})()
+	`, fingerprint.Timezone, fingerprint.Language, fingerprint.WebGLVendor, fingerprint.WebGLRenderer, fingerprint.Platform)
+}
