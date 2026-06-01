@@ -35,7 +35,6 @@ type Config struct {
 	NoSandbox     bool
 	ViewportWidth int
 	ViewportHeight int
-	UserAgent     string // User-Agent for HTTP headers
 }
 
 func New(cfg Config) (*Pool, error) {
@@ -55,11 +54,6 @@ func New(cfg Config) (*Pool, error) {
 		chromedp.Flag("site-per-process", false), // Disable site-per-process to prevent iframe issues
 		chromedp.Flag("disable-features", "SitePerProcess"), // Disable out-of-process iframes
 		chromedp.WindowSize(cfg.ViewportWidth, cfg.ViewportHeight),
-	}
-
-	// Add User-Agent to HTTP headers if provided
-	if cfg.UserAgent != "" {
-		allocOpts = append(allocOpts, chromedp.UserAgent(cfg.UserAgent))
 	}
 
 	if cfg.Headless {

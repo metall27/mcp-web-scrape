@@ -377,9 +377,21 @@ func (s *ChromeScraper) SupportsActions() bool {
 func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options) []chromedp.Action {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Set User-Agent via CDP before navigation
+			// Set User-Agent in JS context (navigator.userAgent)
+			// Note: We DON'T set static UA in browser allocator to avoid mismatch
+			// HTTP headers use default Chrome UA, JS uses rotated UA
+			// This is better than having static UA in HTTP and rotated in JS
 			var result interface{}
-			return chromedp.Evaluate(`Object.defineProperty(navigator, 'userAgent', {get: function() {return "`+userAgent+`"}})`, &result).Do(ctx)
+			err := chromedp.Evaluate(`Object.defineProperty(navigator, 'userAgent', {get: function() {return "`+userAgent+`"}})`, &result).Do(ctx)
+
+			if err != nil {
+				s.logger.Debug().Err(err).Msg("Could not set JS User-Agent")
+			} else {
+				s.logger.Debug().
+					Str("user_agent", userAgent).
+					Msg("User-Agent set in JS context (navigator.userAgent)")
+			}
+			return nil
 		}),
 	}
 

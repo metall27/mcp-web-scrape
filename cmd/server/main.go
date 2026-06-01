@@ -52,7 +52,6 @@ func main() {
 		NoSandbox:      cfg.Browser.NoSandbox,
 		ViewportWidth:  cfg.Browser.ViewportWidth,
 		ViewportHeight: cfg.Browser.ViewportHeight,
-		UserAgent:      cfg.Browser.UserAgent,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize browser pool")
