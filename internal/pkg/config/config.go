@@ -54,6 +54,16 @@ type BrowserConfig struct {
 	DisableGPU      bool          `mapstructure:"disable_gpu"`
 	NoSandbox       bool          `mapstructure:"no_sandbox"`
 	MaxTabs         int           `mapstructure:"max_tabs"` // Maximum concurrent browser tabs
+	PollingConfig   PollingConfig `mapstructure:"polling"` // Navigation polling configuration
+	ToolTimeout     time.Duration `mapstructure:"tool_timeout"` // Tool-level timeout for scraping operations
+	BlockDetection  bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
+}
+
+// PollingConfig конфигурация для polling навигации
+type PollingConfig struct {
+	MaxAttempts int           `mapstructure:"max_attempts"` // Maximum polling attempts for body detection
+	Interval    time.Duration `mapstructure:"interval"` // Polling interval between attempts
+	Timeout     time.Duration `mapstructure:"timeout"` // Total timeout for polling operations
 }
 
 type SearchConfig struct {
@@ -155,6 +165,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("browser.disable_gpu", true)
 	v.SetDefault("browser.no_sandbox", true)
 	v.SetDefault("browser.max_tabs", 10)
+
+	// Polling configuration defaults
+	v.SetDefault("browser.polling.max_attempts", 60)
+	v.SetDefault("browser.polling.interval", 100*time.Millisecond)
+	v.SetDefault("browser.polling.timeout", 6*time.Second)
+
+	// Tool timeout and block detection defaults
+	v.SetDefault("browser.tool_timeout", 120*time.Second)
+	v.SetDefault("browser.block_detection", true)
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")

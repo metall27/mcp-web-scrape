@@ -25,7 +25,7 @@ type ScrapeJSTool struct {
 	logger     zerolog.Logger
 }
 
-func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator) *ScrapeJSTool {
+func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -149,7 +149,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			ragConfig: ragConfig,
 			logger:    logger.Get(),
 		}
-		tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, uaRotator, proxyRotator)
+		tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator)
 		return tool.Execute(ctx, args)
 	}
 
@@ -158,7 +158,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 		ragConfig: ragConfig,
 		logger:    logger.Get(),
 	}
-	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, uaRotator, proxyRotator)
+	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator)
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",

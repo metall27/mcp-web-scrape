@@ -21,21 +21,23 @@ import (
 
 // ChromeScraper скрапер для динамических сайтов (JavaScript)
 type ChromeScraper struct {
-	cache       *cache.Cache
-	browserPool *browser.Pool
-	ragConfig   config.RAGConfig
-	uaRotator   *useragent.Rotator
-	proxy       *proxy.Rotator
-	converter   *converter.Converter
-	logger      zerolog.Logger
+	cache        *cache.Cache
+	browserPool  *browser.Pool
+	ragConfig    config.RAGConfig
+	browserCfg   config.BrowserConfig
+	uaRotator    *useragent.Rotator
+	proxy        *proxy.Rotator
+	converter    *converter.Converter
+	logger       zerolog.Logger
 }
 
 // NewChromeScraper создает новый ChromeScraper
-func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *ChromeScraper {
+func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *ChromeScraper {
 	return &ChromeScraper{
 		cache:       cache,
 		browserPool: browserPool,
 		ragConfig:   ragConfig,
+		browserCfg:  browserCfg,
 		uaRotator:   uaRotator,
 		proxy:       proxy,
 		converter:   converter.New(),
@@ -46,6 +48,15 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 // Scrape реализует интерфейс Scraper
 func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
 	startTime := time.Now()
+
+	// Apply tool-level timeout for scraping operations
+	toolTimeout := s.browserCfg.ToolTimeout
+	if toolTimeout == 0 {
+		toolTimeout = 120 * time.Second // default timeout
+	}
+
+	toolCtx, cancel := context.WithTimeout(ctx, toolTimeout)
+	defer cancel()
 
 	// 0. Validate browser pool (CRITICAL for Chrome scraper)
 	if s.browserPool == nil {
@@ -102,7 +113,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	}
 
 	// 3. Get browser context
-	browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
+	browserCtx, browserCancel, err := s.browserPool.GetContext(toolCtx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get browser context: %w", err)
 	}
@@ -206,6 +217,22 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			Msg("Chrome scraping failed, attempting HTTP fallback")
 
 		return s.httpFallback(ctx, urlStr, userAgent, startTime)
+	}
+
+	// Detect blocking if enabled
+	if s.browserCfg.BlockDetection {
+		blockResult, err := browser.DetectBlocking(ctx)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to detect blocking (non-critical)")
+		} else if blockResult.IsBlocked {
+			s.logger.Warn().
+				Str("block_type", string(blockResult.BlockType)).
+				Str("details", blockResult.Details).
+				Float64("confidence", blockResult.Confidence).
+				Msg("Block detected, attempting HTTP fallback")
+
+			return s.httpFallback(ctx, urlStr, userAgent, startTime)
+		}
 	}
 
 	duration := time.Since(startTime)
@@ -358,78 +385,8 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 
 	// Navigate with stealth if enabled
 	// Use FAST navigation - load URL directly without waiting for full page load
-	if stealth != nil {
-		// Wrap navigation in stealth
-		tasks = append(tasks, stealth.ApplyStealth(chromedp.ActionFunc(func(ctx context.Context) error {
-			s.logger.Info().Msg("🌐 Starting FAST navigation (JavaScript)...")
-			startTime := time.Now()
-
-			// Load URL directly without waiting for page load events
-			var result interface{}
-			if err := chromedp.Evaluate(fmt.Sprintf(`window.location.href = %q;`, urlStr), &result).Do(ctx); err != nil {
-				s.logger.Error().Err(err).Msg("❌ URL change failed")
-				return err
-			}
-
-			s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
-
-			// Wait for body to appear (polling approach with configurable timeout)
-			startTime = time.Now()
-			bodyFound := false
-			maxAttempts := 60 // Increased from 30 to 60 = 6 seconds instead of 3
-			for i := 0; i < maxAttempts; i++ {
-				var bodyExists bool
-				err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
-				if err == nil && bodyExists {
-					bodyFound = true
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			if !bodyFound {
-				return fmt.Errorf("body not found after %d attempts (%v)", maxAttempts, time.Since(startTime))
-			}
-
-			s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
-			return nil
-		})))
-	} else {
-		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
-			s.logger.Info().Msg("🌐 Starting FAST navigation (JavaScript, no stealth)...")
-			startTime := time.Now()
-
-			// Load URL directly without waiting for page load events
-			var result interface{}
-			if err := chromedp.Evaluate(fmt.Sprintf(`window.location.href = %q;`, urlStr), &result).Do(ctx); err != nil {
-				s.logger.Error().Err(err).Msg("❌ URL change failed")
-				return err
-			}
-
-			s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
-
-			// Wait for body to appear (polling approach with configurable timeout)
-			startTime = time.Now()
-			bodyFound := false
-			maxAttempts := 60 // Increased from 30 to 60 = 6 seconds instead of 3
-			for i := 0; i < maxAttempts; i++ {
-				var bodyExists bool
-				err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
-				if err == nil && bodyExists {
-					bodyFound = true
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			if !bodyFound {
-				return fmt.Errorf("body not found after %d attempts (%v)", maxAttempts, time.Since(startTime))
-			}
-
-			s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
-			return nil
-		}))
-	}
+	navigationTask := s.buildNavigationTask(urlStr, userAgent, stealth)
+	tasks = append(tasks, navigationTask)
 
 	// Wait for specific selector if provided
 	if opts.WaitForSelector != "" {
@@ -492,6 +449,68 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 	}
 
 	return tasks
+}
+
+// buildNavigationTask создает единую задачу навигации для stealth/non-stealth режимов
+func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *browser.StealthActions) chromedp.Action {
+	navigationAction := chromedp.ActionFunc(func(ctx context.Context) error {
+		s.logger.Info().Msg("🌐 Starting FAST navigation...")
+		startTime := time.Now()
+
+		// Load URL directly without waiting for page load events
+		var result interface{}
+		if err := chromedp.Evaluate(fmt.Sprintf(`window.location.href = %q;`, urlStr), &result).Do(ctx); err != nil {
+			s.logger.Error().Err(err).Msg("❌ URL change failed")
+			return err
+		}
+
+		s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
+
+		// Wait for body to appear using configurable polling
+		startTime = time.Now()
+		bodyFound := false
+
+		// Use configurable polling parameters
+		maxAttempts := s.browserCfg.PollingConfig.MaxAttempts
+		interval := s.browserCfg.PollingConfig.Interval
+
+		if maxAttempts == 0 {
+			maxAttempts = 60 // default
+		}
+		if interval == 0 {
+			interval = 100 * time.Millisecond // default
+		}
+
+		for i := 0; i < maxAttempts; i++ {
+			var bodyExists bool
+			err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
+			if err == nil && bodyExists {
+				bodyFound = true
+				break
+			}
+
+			// Check context cancellation
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while waiting for body")
+			default:
+				time.Sleep(interval)
+			}
+		}
+
+		if !bodyFound {
+			return fmt.Errorf("body not found after %d attempts (%v)", maxAttempts, time.Since(startTime))
+		}
+
+		s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
+		return nil
+	})
+
+	// Apply stealth wrapper if enabled
+	if stealth != nil {
+		return stealth.ApplyStealth(navigationAction)
+	}
+	return navigationAction
 }
 
 // httpFallback performs HTTP fallback when Chrome fails

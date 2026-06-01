@@ -39,6 +39,7 @@ type Config struct {
 	Cache           *cache.Cache
 	BrowserPool     *browser.Pool
 	RAG             config.RAGConfig
+	Browser         config.BrowserConfig
 	UARotator       *useragent.Rotator
 	ProxyRotator    *proxy.Rotator
 }
@@ -93,7 +94,7 @@ func (s *Server) registerDefaultTools() error {
 
 	// Always register these tools
 	defaultTools = append(defaultTools,
-		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.uaRotator, s.proxyRotator), // FALLBACK: Scrape only if rag_search empty
+		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator), // FALLBACK: Scrape only if rag_search empty
 		tools.NewScrapeTool(s.cache, s.uaRotator, s.proxyRotator), // Fast HTTP scraping for static pages
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
