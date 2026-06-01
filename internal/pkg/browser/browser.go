@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +51,8 @@ func New(cfg Config) (*Pool, error) {
 		chromedp.Flag("disable-renderer-backgrounding", true),
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("site-per-process", false), // Disable site-per-process to prevent iframe issues
+		chromedp.Flag("disable-features", "SitePerProcess"), // Disable out-of-process iframes
 		chromedp.WindowSize(cfg.ViewportWidth, cfg.ViewportHeight),
 	}
 
@@ -116,8 +119,25 @@ func (p *Pool) GetContext(parent context.Context) (context.Context, context.Canc
 	}
 
 CreateTab:
-	// Create new context from allocator
-	taskCtx, cancel := chromedp.NewContext(p.allocator)
+	// Create new context from allocator with custom error handler
+	taskCtx, cancel := chromedp.NewContext(p.allocator,
+		chromedp.WithErrorf(func(format string, v ...interface{}) {
+			// Filter out noisy chromedp errors for unhandled events
+			msg := fmt.Sprintf(format, v...)
+			if !shouldLogChromedpError(msg) {
+				return
+			}
+			p.logger.Error().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
+		}),
+		chromedp.WithLogf(func(format string, v ...interface{}) {
+			// Filter debug messages
+			msg := fmt.Sprintf(format, v...)
+			if !shouldLogChromedpError(msg) {
+				return
+			}
+			p.logger.Debug().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
+		}),
+	)
 
 	atomic.AddInt32(&p.activeTabs, 1)
 	atomic.AddInt64(&p.totalTabs, 1)
@@ -158,4 +178,22 @@ func (p *Pool) Close() error {
 	p.cancel()
 
 	return nil
+}
+
+// shouldLogChromedpError determines if a chromedp error should be logged
+func shouldLogChromedpError(msg string) bool {
+	// Filter out common chromedp "unhandled event" errors that are not critical
+	// These events occur normally during page navigation but don't affect scraping
+	ignoredErrors := []string{
+		"unhandled page event *page.EventFrameSubtreeWillBeDetached",
+		"unhandled page event *page.", // Catch-all for other unhandled page events
+	}
+
+	for _, ignored := range ignoredErrors {
+		if strings.Contains(msg, ignored) {
+			return false
+		}
+	}
+
+	return true
 }

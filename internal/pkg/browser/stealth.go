@@ -61,13 +61,10 @@ func (s *StealthActions) RandomDelay() chromedp.Action {
 			return nil
 		}
 
-		// Рандомная задержка между MinDelay и MaxDelay
-		delay := s.config.MinDelay + time.Duration(s.rnd.Int63n(int64(s.config.MaxDelay-s.config.MinDelay)))
+		// ИЗМЕНЕНО: Уменьшили задержки для скорости (10-50ms вместо 100-500ms)
+		delay := 10*time.Millisecond + time.Duration(s.rnd.Int63n(int64(40*time.Millisecond)))
 
-		// Иногда добавляем небольшую дополнительную задержку (10% шанс)
-		if s.rnd.Float32() < 0.1 {
-			delay += time.Duration(s.rnd.Int63n(int64(200 * time.Millisecond)))
-		}
+		// УБРАНО: Дополнительная случайная задержка
 
 		time.Sleep(delay)
 		return nil
@@ -103,49 +100,30 @@ func (s *StealthActions) EmulateScroll() chromedp.Action {
 			pageHeight = 2000
 		}
 
-		// Разбиваем скролл на несколько шагов
-		scrollStep := pageHeight / int64(s.config.ScrollSteps)
-		if scrollStep < 100 {
-			scrollStep = 100 // Минимальный шаг
-		}
+		// ИЗМЕНЕНО: Уменьшили количество шагов до 1 для скорости
+		scrollStep := pageHeight
 
-		// Скроллим по шагам с задержками
-		for i := 0; i < s.config.ScrollSteps; i++ {
-			scrollPos := int64((i + 1)) * scrollStep
-
-			// Выполняем скролл
-			err := chromedp.ActionFunc(func(ctx context.Context) error {
-				return chromedp.Evaluate(fmt.Sprintf(`
-					(() => {
-						window.scrollTo({
-							top: %d,
-							behavior: 'smooth'
-						});
-					})()
-				`, scrollPos), nil).Do(ctx)
-			}).Do(ctx)
-
-			if err != nil {
-				return err
-			}
-
-			// Небольшая задержка между шагами (человеческий скролл)
-			time.Sleep(100 * time.Millisecond)
-		}
-
-		// Скроллим немного вверх (люди часто возвращаются)
+		// ОДИН быстрый скролл вниз (instant вместо smooth)
 		err = chromedp.ActionFunc(func(ctx context.Context) error {
-			return chromedp.Evaluate(`
+			return chromedp.Evaluate(fmt.Sprintf(`
 				(() => {
-					window.scrollBy({
-						top: -200,
-						behavior: 'smooth'
+					window.scrollTo({
+						top: %d,
+						behavior: 'instant'
 					});
 				})()
-			`, nil).Do(ctx)
+			`, scrollStep), nil).Do(ctx)
 		}).Do(ctx)
 
-		return err
+		if err != nil {
+			return err
+		}
+
+		// ИЗМЕНЕНО: Убрали задержку между шагами
+
+		// ИЗМЕНЕНО: Убрали обратный скролл вверх для скорости
+
+		return nil
 	})
 }
 
@@ -270,12 +248,8 @@ func (s *StealthActions) ApplyStealth(task chromedp.Action) chromedp.Action {
 			return err
 		}
 
-		// После задачи: иногда скроллим
-		if s.rnd.Float32() < 0.3 {
-			if err := s.EmulateScroll().Do(ctx); err != nil {
-				// Игнорируем ошибки скролла
-			}
-		}
+		// УБРАНО: Не добавляем случайный скролл после каждого действия
+		// Это происходит слишком часто и замедляет выполнение
 
 		return nil
 	})

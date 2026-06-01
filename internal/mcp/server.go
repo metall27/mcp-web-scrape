@@ -212,7 +212,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCMessage) ([]byt
 		return s.buildError(req.ID, -32602, "Tool not found", fmt.Sprintf("Tool '%s' not found", params.Name))
 	}
 
-	// Execute tool
+	// Execute tool with provided context (tools handle their own timeouts)
 	result, err := tool.Execute(ctx, params.Arguments)
 	if err != nil {
 		s.logger.Error().

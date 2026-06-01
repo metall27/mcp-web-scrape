@@ -357,22 +357,81 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 	}
 
 	// Navigate with stealth if enabled
-	navigateAction := chromedp.Navigate(urlStr)
+	// Use FAST navigation - load URL directly without waiting for full page load
 	if stealth != nil {
-		navigateAction = stealth.ApplyStealth(navigateAction)
+		// Wrap navigation in stealth
+		tasks = append(tasks, stealth.ApplyStealth(chromedp.ActionFunc(func(ctx context.Context) error {
+			s.logger.Info().Msg("🌐 Starting FAST navigation (JavaScript)...")
+			startTime := time.Now()
+
+			// Load URL directly without waiting for page load events
+			var result interface{}
+			if err := chromedp.Evaluate(fmt.Sprintf(`window.location.href = %q;`, urlStr), &result).Do(ctx); err != nil {
+				s.logger.Error().Err(err).Msg("❌ URL change failed")
+				return err
+			}
+
+			s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
+
+			// Wait for body to appear (polling approach)
+			startTime = time.Now()
+			bodyFound := false
+			for i := 0; i < 30; i++ { // Max 30 attempts
+				var bodyExists bool
+				err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
+				if err == nil && bodyExists {
+					bodyFound = true
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			if !bodyFound {
+				return fmt.Errorf("body not found after 30 attempts")
+			}
+
+			s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
+			return nil
+		})))
+	} else {
+		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
+			s.logger.Info().Msg("🌐 Starting FAST navigation (JavaScript, no stealth)...")
+			startTime := time.Now()
+
+			// Load URL directly without waiting for page load events
+			var result interface{}
+			if err := chromedp.Evaluate(fmt.Sprintf(`window.location.href = %q;`, urlStr), &result).Do(ctx); err != nil {
+				s.logger.Error().Err(err).Msg("❌ URL change failed")
+				return err
+			}
+
+			s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
+
+			// Wait for body to appear (polling approach)
+			startTime = time.Now()
+			bodyFound := false
+			for i := 0; i < 30; i++ { // Max 30 attempts
+				var bodyExists bool
+				err := chromedp.Evaluate(`(() => { return document.body !== null; })()`, &bodyExists).Do(ctx)
+				if err == nil && bodyExists {
+					bodyFound = true
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			if !bodyFound {
+				return fmt.Errorf("body not found after 30 attempts")
+			}
+
+			s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
+			return nil
+		}))
 	}
-	tasks = append(tasks, navigateAction)
 
 	// Wait for specific selector if provided
 	if opts.WaitForSelector != "" {
 		waitAction := chromedp.WaitVisible(opts.WaitForSelector, chromedp.ByQuery)
-		if stealth != nil {
-			waitAction = stealth.ApplyStealth(waitAction)
-		}
-		tasks = append(tasks, waitAction)
-	} else {
-		// Wait for page load by default
-		waitAction := chromedp.WaitReady("body", chromedp.ByQuery)
 		if stealth != nil {
 			waitAction = stealth.ApplyStealth(waitAction)
 		}
