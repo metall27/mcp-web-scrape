@@ -32,6 +32,15 @@ type ChromeScraper struct {
 	logger       zerolog.Logger
 }
 
+// scrapeContext holds the context for a single scrape attempt (Phase 5: Retry Loop)
+type scrapeContext struct {
+	browserCtx    context.Context
+	browserCancel context.CancelFunc
+	proxy         *proxy.Proxy
+	userAgent     string
+	stealth       *browser.StealthActions
+}
+
 // NewChromeScraper создает новый ChromeScraper
 func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *ChromeScraper {
 	return &ChromeScraper{
@@ -45,6 +54,169 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 		logger:      logger.Get(),
 	}
 }
+
+// createScrapeContext creates a new scrape context for a single attempt (Phase 5: Retry Loop)
+// This method extracts browser context creation, proxy selection, and UA generation
+func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
+	scrapeCtx := &scrapeContext{}
+
+	// 1. Get browser context
+	browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get browser context: %w", err)
+	}
+	scrapeCtx.browserCtx = browserCtx
+	scrapeCtx.browserCancel = browserCancel
+
+	// 2. Get User-Agent
+	userAgent := opts.UserAgent
+	if userAgent == "" && s.uaRotator != nil {
+		userAgent = s.uaRotator.Get()
+	}
+	if userAgent == "" {
+		userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+	}
+	scrapeCtx.userAgent = userAgent
+
+	s.logger.Debug().
+		Str("user_agent", userAgent).
+		Str("url", urlStr).
+		Msg("Using User-Agent for Chrome scraping")
+
+	// 3. Setup stealth actions if enabled
+	if opts.StealthEnabled {
+		scrapeCtx.stealth = browser.NewStealthActions(browser.StealthConfig{
+			RandomDelay:    true,
+			MinDelay:       100 * time.Millisecond,
+			MaxDelay:       500 * time.Millisecond,
+			EmulateScroll:  opts.StealthScroll,
+			ScrollSteps:    3,
+			MouseMovement:  opts.StealthMouse,
+			RandomViewport: false,
+		})
+		s.logger.Info().
+			Bool("stealth_enabled", true).
+			Bool("stealth_scroll", opts.StealthScroll).
+			Bool("stealth_mouse", opts.StealthMouse).
+			Msg("Stealth mode enabled")
+	}
+
+	// 4. Get proxy if enabled
+	if s.proxy != nil && s.proxy.IsEnabled() {
+		selectedProxy, err := s.proxy.GetNext()
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
+		} else if selectedProxy != nil {
+			scrapeCtx.proxy = selectedProxy
+			s.logger.Info().
+				Str("proxy", selectedProxy.URL).
+				Msg("Using proxy for scrape attempt")
+		}
+	}
+
+	return scrapeCtx, nil
+}
+
+// scrapeAttemptResult holds the result of a single scrape attempt (Phase 5: Retry Loop)
+type scrapeAttemptResult struct {
+	html           string
+	screenshotData []byte
+	title          string
+	finalURL       string
+	isBlocked      bool
+	blockResult    browser.BlockResult
+	err            error
+}
+
+// scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
+// This method executes Chrome tasks and returns scrape result or blocking detection
+func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrapeCtx *scrapeContext, opts Options) scrapeAttemptResult {
+	result := scrapeAttemptResult{}
+
+	// 1. Build Chrome tasks
+	tasks := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.stealth, opts)
+
+	// 2. Run tasks
+	var html string
+	var screenshotData []byte
+	var title string
+	var finalURL string
+
+	chromeErr := chromedp.Run(scrapeCtx.browserCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// Execute all tasks
+			for _, task := range tasks {
+				if err := task.Do(ctx); err != nil {
+					return err
+				}
+			}
+
+			// Get content
+			if err := chromedp.OuterHTML("html", &html, chromedp.ByQuery).Do(ctx); err != nil {
+				return err
+			}
+
+			// Get title
+			if err := chromedp.Title(&title).Do(ctx); err != nil {
+				return err
+			}
+
+			// Get final URL
+			if err := chromedp.Location(&finalURL).Do(ctx); err != nil {
+				return err
+			}
+
+			// Take screenshot if requested
+			if opts.Screenshot || opts.ScreenshotMode == "auto" || opts.ScreenshotMode == "always" {
+				if err := chromedp.FullScreenshot(&screenshotData, 90).Do(ctx); err != nil {
+					s.logger.Warn().Err(err).Msg("Failed to take screenshot")
+				}
+			}
+
+			return nil
+		}),
+	)
+
+	if chromeErr != nil {
+		// Chrome failed
+		s.logger.Warn().
+			Str("url", urlStr).
+			Err(chromeErr).
+			Msg("Chrome scraping failed for this attempt")
+
+		result.err = chromeErr
+		return result
+	}
+
+	// 3. Detect blocking if enabled
+	if s.browserCfg.BlockDetection {
+		blockResult, err := browser.DetectBlocking(ctx)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to detect blocking (non-critical)")
+		} else if blockResult.IsBlocked {
+			s.logger.Warn().
+				Str("block_type", string(blockResult.BlockType)).
+				Str("details", blockResult.Details).
+				Float64("confidence", blockResult.Confidence).
+				Msg("Block detected in this attempt")
+
+			result.isBlocked = true
+			result.blockResult = blockResult
+			return result
+		}
+	}
+
+	// 4. Success - return scraped data
+	result.html = html
+	result.screenshotData = screenshotData
+	result.title = title
+	result.finalURL = finalURL
+	result.isBlocked = false
+	result.err = nil
+
+	return result
+}
+
 
 // Scrape реализует интерфейс Scraper
 func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
@@ -113,138 +285,134 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		}
 	}
 
-	// 3. Get browser context
-	browserCtx, browserCancel, err := s.browserPool.GetContext(toolCtx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get browser context: %w", err)
-	}
-	defer browserCancel()
+	// 3. Phase 5: Full Retry Loop Implementation
+	// Attempt 1 → Block Detected → New Proxy → Retry 2 → Block Detected → New Proxy → Retry 3
 
-	// 4. Get User-Agent
-	userAgent := opts.UserAgent
-	if userAgent == "" && s.uaRotator != nil {
-		userAgent = s.uaRotator.Get()
-	}
-	if userAgent == "" {
-		userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+	// Get max retries from config (default: 2)
+	maxRetries := s.browserCfg.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = 2 // default
 	}
 
-	s.logger.Debug().
-		Str("user_agent", userAgent).
-		Str("url", urlStr).
-		Msg("Using User-Agent for Chrome scraping")
-
-	// 5. Setup stealth actions if enabled
-	var stealth *browser.StealthActions
-	if opts.StealthEnabled {
-		stealth = browser.NewStealthActions(browser.StealthConfig{
-			RandomDelay:    true,
-			MinDelay:       100 * time.Millisecond,
-			MaxDelay:       500 * time.Millisecond,
-			EmulateScroll:  opts.StealthScroll,
-			ScrollSteps:    3,
-			MouseMovement:  opts.StealthMouse,
-			RandomViewport: false,
-		})
-		s.logger.Info().
-			Bool("stealth_enabled", true).
-			Bool("stealth_scroll", opts.StealthScroll).
-			Bool("stealth_mouse", opts.StealthMouse).
-			Msg("Stealth mode enabled")
-	}
-
-	// 6. Get proxy if enabled
-	var selectedProxy *proxy.Proxy
-	if s.proxy != nil && s.proxy.IsEnabled() {
-		selectedProxy, err = s.proxy.GetNext()
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
-		} else if selectedProxy != nil {
-			s.logger.Info().
-				Str("proxy", selectedProxy.URL).
-				Msg("Using proxy for request")
-		}
-	}
-
-	// 7. Build Chrome tasks
-	tasks := s.buildChromeTasks(urlStr, userAgent, stealth, opts)
-
-	// 8. Run tasks
+	// Track attempts
+	var lastError error
+	var successfulAttempt bool
 	var html string
 	var screenshotData []byte
 	var title string
 	var finalURL string
 
-	chromeErr := chromedp.Run(browserCtx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Execute all tasks
-			for _, task := range tasks {
-				if err := task.Do(ctx); err != nil {
-					return err
-				}
+	// Retry loop
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			s.logger.Info().
+				Int("attempt", attempt).
+				Int("max_retries", maxRetries).
+				Msg("Phase 5: Retrying with new proxy")
+		}
+
+		// Create scrape context for this attempt
+		scrapeCtx, err := s.createScrapeContext(toolCtx, urlStr, opts)
+		if err != nil {
+			s.logger.Error().Err(err).Msg("Failed to create scrape context")
+			lastError = err
+			continue
+		}
+
+		// Ensure browser context is cleaned up after this attempt
+		defer scrapeCtx.browserCancel()
+
+		// Perform scrape attempt
+		attemptResult := s.scrapeAttempt(toolCtx, urlStr, scrapeCtx, opts)
+
+		// Handle result
+		if attemptResult.err != nil {
+			// Chrome execution error
+			s.logger.Warn().
+				Int("attempt", attempt).
+				Err(attemptResult.err).
+				Msg("Scrape attempt failed with error")
+
+			// Mark proxy as failed if applicable
+			if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
+				s.proxy.MarkFailure(attemptResult.err)
 			}
 
-			// Get content
-			if err := chromedp.OuterHTML("html", &html, chromedp.ByQuery).Do(ctx); err != nil {
-				return err
+			lastError = attemptResult.err
+			continue
+		}
+
+		if attemptResult.isBlocked {
+			// Blocking detected
+			s.logger.Warn().
+				Int("attempt", attempt).
+				Str("block_type", string(attemptResult.blockResult.BlockType)).
+				Float64("confidence", attemptResult.blockResult.Confidence).
+				Msg("Phase 5: Blocking detected, will retry with different proxy")
+
+			// Mark current proxy as failed
+			if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
+				s.proxy.MarkFailure(fmt.Errorf("blocking detected: %s", attemptResult.blockResult.BlockType))
+				s.logger.Info().
+					Int("attempt", attempt).
+					Msg("Current proxy marked as failed, next attempt will use different proxy")
 			}
 
-			// Get title
-			if err := chromedp.Title(&title).Do(ctx); err != nil {
-				return err
+			// If this was the last attempt, fall back to HTTP
+			if attempt == maxRetries {
+				s.logger.Warn().
+					Int("total_attempts", attempt+1).
+					Msg("Phase 5: All retry attempts blocked, falling back to HTTP")
+
+				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, startTime)
 			}
 
-			// Get final URL
-			if err := chromedp.Location(&finalURL).Do(ctx); err != nil {
-				return err
-			}
+			// Otherwise, continue to next attempt with new proxy
+			lastError = fmt.Errorf("blocking detected: %s", attemptResult.blockResult.BlockType)
+			continue
+		}
 
-			// Take screenshot if requested
-			if opts.Screenshot || opts.ScreenshotMode == "auto" || opts.ScreenshotMode == "always" {
-				if err := chromedp.FullScreenshot(&screenshotData, 90).Do(ctx); err != nil {
-					s.logger.Warn().Err(err).Msg("Failed to take screenshot")
-				}
-			}
+		// Success! Extract results
+		s.logger.Info().
+			Int("attempt", attempt).
+			Msg("Phase 5: Scrape attempt successful")
 
-			return nil
-		}),
-	)
+		html = attemptResult.html
+		screenshotData = attemptResult.screenshotData
+		title = attemptResult.title
+		finalURL = attemptResult.finalURL
+		successfulAttempt = true
 
-	if chromeErr != nil {
-		// Chrome failed, try HTTP fallback
+		// Mark proxy as successful if applicable
+		if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
+			s.proxy.MarkSuccess()
+			s.logger.Info().
+				Msg("Proxy marked as successful")
+		}
+
+		// Break out of retry loop
+		break
+	}
+
+	// If all attempts failed, fall back to HTTP
+	if !successfulAttempt {
 		s.logger.Warn().
-			Str("url", urlStr).
-			Err(chromeErr).
-			Msg("Chrome scraping failed, attempting HTTP fallback")
+			Err(lastError).
+			Int("total_attempts", maxRetries+1).
+			Msg("Phase 5: All scrape attempts failed, falling back to HTTP")
+
+		// Use a default UA for HTTP fallback
+		userAgent := opts.UserAgent
+		if userAgent == "" && s.uaRotator != nil {
+			userAgent = s.uaRotator.Get()
+		}
+		if userAgent == "" {
+			userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+		}
 
 		return s.httpFallback(ctx, urlStr, userAgent, startTime)
 	}
 
-	// Detect blocking if enabled
-	if s.browserCfg.BlockDetection {
-		blockResult, err := browser.DetectBlocking(ctx)
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to detect blocking (non-critical)")
-		} else if blockResult.IsBlocked {
-			s.logger.Warn().
-				Str("block_type", string(blockResult.BlockType)).
-				Str("details", blockResult.Details).
-				Float64("confidence", blockResult.Confidence).
-				Msg("Block detected, marking proxy as failed and attempting HTTP fallback")
-
-			// Mark current proxy as failed (if proxy enabled)
-			// This proxy won't be used for future requests
-			if s.proxy != nil && s.proxy.IsEnabled() {
-				s.proxy.MarkFailure(fmt.Errorf("blocking detected: %s", blockResult.BlockType))
-				s.logger.Info().
-					Msg("Current proxy marked as failed, will use different proxy for next request")
-			}
-
-			// Fall back to HTTP for this request
-			// Future requests will use different (better) proxies
-			return s.httpFallback(ctx, urlStr, userAgent, startTime)
-		}
-	}
 
 	duration := time.Since(startTime)
 
