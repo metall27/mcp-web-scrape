@@ -874,6 +874,7 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 // - https://github.com/owner/repo/releases → https://api.github.com/repos/owner/repo/releases?per_page=5
 // - https://github.com/owner/repo/releases?releases=10 → https://api.github.com/repos/owner/repo/releases?per_page=10
 // - https://github.com/owner/repo/issues?q=is:issue+term → https://api.github.com/search/issues?q=repo:owner/repo+is:issue+term
+// - https://github.com/owner/repo/commit/sha → https://api.github.com/repos/owner/repo/commits/sha
 func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
 	// GitHub releases page → API with flexible result count
 	if strings.Contains(urlStr, "/releases") && !strings.Contains(urlStr, ".atom") {
@@ -908,6 +909,14 @@ func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
 
 			return fmt.Sprintf("https://api.github.com/search/%s?q=%s&per_page=10", itemType, searchQuery)
 		}
+	}
+
+	// GitHub commit page → API
+	if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/commit/([a-f0-9]+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		sha := matches[3]
+		return fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", owner, repo, sha)
 	}
 
 	// GitHub repo page → API
