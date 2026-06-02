@@ -919,6 +919,14 @@ func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
 		return fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", owner, repo, sha)
 	}
 
+	// GitHub commits list page → API
+	if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/commits/([^/]+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		branch := matches[3]
+		return fmt.Sprintf("https://api.github.com/repos/%s/%s/commits?sha=%s&per_page=10", owner, repo, branch)
+	}
+
 	// GitHub repo page → API
 	if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
 		owner := matches[1]
@@ -1375,6 +1383,67 @@ func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAge
 				FromCache:   false,
 				Method:      methodLabel,
 			}, nil
+		}
+	}
+
+	// Try to parse as commit object (single commit)
+	var commitObject map[string]interface{}
+	if err := json.Unmarshal(body, &commitObject); err == nil {
+		// Check if this looks like a commit object (has "sha" and "commit" fields)
+		if _, hasSha := commitObject["sha"]; hasSha {
+			if _, hasCommit := commitObject["commit"]; hasCommit {
+				markdown = s.convertCommitToMarkdown(commitObject)
+				methodLabel = fmt.Sprintf("%s Commit API", platform)
+
+				s.logger.Info().
+					Str("platform", platform).
+					Int("markdown_size", len(markdown)).
+					Msg("Single commit converted to Markdown")
+
+				return &Result{
+					HTML:        markdown,
+					URL:         urlStr,
+					FinalURL:    urlStr,
+					StatusCode:  resp.StatusCode,
+					ContentType: "text/markdown",
+					Duration:    time.Since(startTime),
+					SizeBytes:   len(markdown),
+					Format:      "markdown",
+					FromCache:   false,
+					Method:      methodLabel,
+				}, nil
+			}
+		}
+	}
+
+	// Try to parse as commits list (array)
+	var commitsList []map[string]interface{}
+	if err := json.Unmarshal(body, &commitsList); err == nil {
+		// Check if first item looks like a commit (has "sha" field)
+		if len(commitsList) > 0 {
+			if _, hasSha := commitsList[0]["sha"]; hasSha {
+				markdown = s.convertCommitsListToMarkdown(commitsList)
+				methodLabel = fmt.Sprintf("%s Commits API", platform)
+
+				s.logger.Info().
+					Int("commits_count", len(commitsList)).
+					Int("markdown_size", len(markdown)).
+					Str("platform", platform).
+					Msg("Commits list converted to Markdown")
+
+				return &Result{
+					HTML:        markdown,
+					URL:         urlStr,
+					FinalURL:    urlStr,
+					StatusCode:  resp.StatusCode,
+					ContentType: "text/markdown",
+					Duration:    time.Since(startTime),
+					SizeBytes:   len(markdown),
+					Format:      "markdown",
+					FromCache:   false,
+					Method:      methodLabel,
+				}, nil
+			}
 		}
 	}
 
@@ -1938,6 +2007,127 @@ func (s *ChromeScraper) convertGenericReleasesToMarkdown(releases []map[string]i
 	}
 
 	// Add token estimate
+	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
+	return markdown.String()
+}
+
+// convertCommitToMarkdown converts a single commit object to Markdown format
+func (s *ChromeScraper) convertCommitToMarkdown(commit map[string]interface{}) string {
+	var markdown strings.Builder
+
+	// SHA
+	if sha, ok := commit["sha"].(string); ok {
+		markdown.WriteString(fmt.Sprintf("# Commit %s\n\n", sha[:8]))
+	}
+
+	// Commit data (nested object)
+	if commitData, ok := commit["commit"].(map[string]interface{}); ok {
+		// Author
+		if author, ok := commitData["author"].(map[string]interface{}); ok {
+			if name, ok := author["name"].(string); ok {
+				markdown.WriteString(fmt.Sprintf("**Author:** %s", name))
+				if email, ok := author["email"].(string); ok {
+					markdown.WriteString(fmt.Sprintf(" <%s>", email))
+				}
+				if date, ok := author["date"].(string); ok && len(date) > 10 {
+					markdown.WriteString(fmt.Sprintf("\n**Date:** %s", date[:10]))
+				}
+				markdown.WriteString("\n\n")
+			}
+		}
+
+		// Message
+		if message, ok := commitData["message"].(string); ok {
+			maxMessageLength := 500
+			if len(message) > maxMessageLength {
+				message = message[:maxMessageLength] + "..."
+			}
+			markdown.WriteString(fmt.Sprintf("**Message:**\n\n%s\n\n", message))
+		}
+	}
+
+	// URL (html_url or web_url)
+	if htmlURL, ok := commit["html_url"].(string); ok {
+		markdown.WriteString(fmt.Sprintf("**URL:** %s\n\n", htmlURL))
+	} else if webURL, ok := commit["web_url"].(string); ok {
+		markdown.WriteString(fmt.Sprintf("**URL:** %s\n\n", webURL))
+	}
+
+	// Stats (files changed, additions, deletions)
+	if stats, ok := commit["stats"].(map[string]interface{}); ok {
+		if total, ok := stats["total"].(float64); ok {
+			markdown.WriteString(fmt.Sprintf("**Files changed:** %d\n\n", int(total)))
+		}
+		if additions, ok := stats["additions"].(float64); ok {
+			markdown.WriteString(fmt.Sprintf("**Additions:** +%d\n", int(additions)))
+		}
+		if deletions, ok := stats["deletions"].(float64); ok {
+			markdown.WriteString(fmt.Sprintf(" **Deletions:** -%d\n\n", int(deletions)))
+		}
+	}
+
+	// Token estimate
+	markdown.WriteString(fmt.Sprintf("\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
+	return markdown.String()
+}
+
+// convertCommitsListToMarkdown converts a list of commits to Markdown format
+func (s *ChromeScraper) convertCommitsListToMarkdown(commits []map[string]interface{}) string {
+	if len(commits) == 0 {
+		return "# No commits found"
+	}
+
+	var markdown strings.Builder
+	markdown.WriteString(fmt.Sprintf("# %d Commits\n\n", len(commits)))
+
+	for i, commit := range commits {
+		// SHA
+		var sha string
+		if shaValue, ok := commit["sha"].(string); ok {
+			sha = shaValue
+			markdown.WriteString(fmt.Sprintf("## %s", sha[:8]))
+		} else {
+			markdown.WriteString(fmt.Sprintf("## Commit #%d", i+1))
+		}
+
+		// URL
+		if htmlURL, ok := commit["html_url"].(string); ok {
+			markdown.WriteString(fmt.Sprintf(" | [View](%s)", htmlURL))
+		} else if webURL, ok := commit["web_url"].(string); ok {
+			markdown.WriteString(fmt.Sprintf(" | [View](%s)", webURL))
+		}
+		markdown.WriteString("\n\n")
+
+		// Commit message (from nested commit object)
+		if commitData, ok := commit["commit"].(map[string]interface{}); ok {
+			// Author
+			if author, ok := commitData["author"].(map[string]interface{}); ok {
+				if name, ok := author["name"].(string); ok {
+					markdown.WriteString(fmt.Sprintf("**Author:** %s", name))
+					if date, ok := author["date"].(string); ok && len(date) > 10 {
+						markdown.WriteString(fmt.Sprintf(" | %s", date[:10]))
+					}
+					markdown.WriteString("\n\n")
+				}
+			}
+
+			// Message (truncated)
+			if message, ok := commitData["message"].(string); ok {
+				maxMessageLength := 200
+				if len(message) > maxMessageLength {
+					message = message[:maxMessageLength] + "..."
+				}
+				markdown.WriteString(fmt.Sprintf("**Message:**\n\n%s\n\n", message))
+			}
+		}
+
+		// Separator
+		if i < len(commits)-1 {
+			markdown.WriteString("---\n\n")
+		}
+	}
+
+	// Token estimate
 	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
 	return markdown.String()
 }
