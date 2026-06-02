@@ -331,11 +331,11 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		}
 
 		// Standard mode: Convert to API with flexible results
-		githubURL := s.convertGitHubURL(urlStr)
+		platformURL := s.convertPlatformURL(urlStr)
 		s.logger.Info().
 			Str("original_url", urlStr).
-			Str("github_url", githubURL).
-			Msg("🔄 Converted GitHub URL to API endpoint")
+			Str("platform_url", platformURL).
+			Msg("🔄 Converted platform URL to API endpoint")
 
 		// Get User-Agent for HTTP fallback
 		userAgent := opts.UserAgent
@@ -346,7 +346,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
 		}
 
-		return s.githubAPIFallback(toolCtx, githubURL, userAgent, startTime)
+		return s.platformAPIFallback(toolCtx, platformURL, userAgent, startTime)
 	}
 
 	// 3. Phase 5: Full Retry Loop Implementation
@@ -929,6 +929,145 @@ func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
 	return urlStr
 }
 
+// convertGitLabURL converts GitLab URLs to API endpoints for better scraping
+// GitLab API uses URL-encoded project paths (owner%2Frepo format)
+// Examples:
+// - https://gitlab.com/owner/repo → https://gitlab.com/api/v4/projects/owner%2Frepo
+// - https://gitlab.com/owner/repo/-/commit/sha → https://gitlab.com/api/v4/projects/owner%2Frepo/repository/commits/sha
+// - https://gitlab.com/owner/repo/-/releases → https://gitlab.com/api/v4/projects/owner%2Frepo/releases
+func (s *ChromeScraper) convertGitLabURL(urlStr string) string {
+	// Extract base domain for self-hosted GitLab instances
+	baseDomain := "gitlab.com"
+	if matches := regexp.MustCompile(`https://([^/]+)/`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		if matches[1] != "gitlab.com" {
+			baseDomain = matches[1]
+		}
+	}
+
+	// Helper function to encode project path for GitLab API
+	encodeProjectPath := func(owner, repo string) string {
+		return fmt.Sprintf("%s%%2F%s", owner, repo) // URL encode slash
+	}
+
+	// GitLab commit page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/commit/([a-f0-9]+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		sha := matches[3]
+		projectPath := encodeProjectPath(owner, repo)
+		return fmt.Sprintf("https://%s/api/v4/projects/%s/repository/commits/%s", baseDomain, projectPath, sha)
+	}
+
+	// GitLab releases page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/releases`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		projectPath := encodeProjectPath(owner, repo)
+		return fmt.Sprintf("https://%s/api/v4/projects/%s/releases", baseDomain, projectPath)
+	}
+
+	// GitLab issues page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/issues`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		projectPath := encodeProjectPath(owner, repo)
+		return fmt.Sprintf("https://%s/api/v4/projects/%s/issues", baseDomain, projectPath)
+	}
+
+	// GitLab merge requests page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/merge_requests`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		projectPath := encodeProjectPath(owner, repo)
+		return fmt.Sprintf("https://%s/api/v4/projects/%s/merge_requests", baseDomain, projectPath)
+	}
+
+	// GitLab repo page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		projectPath := encodeProjectPath(owner, repo)
+		return fmt.Sprintf("https://%s/api/v4/projects/%s", baseDomain, projectPath)
+	}
+
+	return urlStr
+}
+
+// convertGiteaURL converts Gitea URLs to API endpoints for better scraping
+// Gitea API is similar to GitHub but with some differences
+// Examples:
+// - https://gitea.com/owner/repo → https://gitea.com/api/v1/repos/owner/repo
+// - https://gitea.com/owner/repo/commit/sha → https://gitea.com/api/v1/repos/owner/repo/git/commits/sha
+// - https://gitea.com/owner/repo/releases → https://gitea.com/api/v1/repos/owner/repo/releases
+func (s *ChromeScraper) convertGiteaURL(urlStr string) string {
+	// Extract base domain for self-hosted Gitea instances
+	baseDomain := "gitea.com"
+	if matches := regexp.MustCompile(`https://([^/]+)/`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		if matches[1] != "gitea.com" && matches[1] != "gitea.io" {
+			baseDomain = matches[1]
+		}
+	}
+
+	// Gitea commit page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/commit/([a-f0-9]+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		sha := matches[3]
+		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/git/commits/%s", baseDomain, owner, repo, sha)
+	}
+
+	// Gitea releases page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/releases`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases", baseDomain, owner, repo)
+	}
+
+	// Gitea issues page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/issues`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues", baseDomain, owner, repo)
+	}
+
+	// Gitea pulls page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/pulls`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/pulls", baseDomain, owner, repo)
+	}
+
+	// Gitea repo page → API
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s", baseDomain, owner, repo)
+	}
+
+	return urlStr
+}
+
+// convertPlatformURL is a unified function that detects the platform and converts URLs to API endpoints
+// Supports GitHub, GitLab, and Gitea (including self-hosted instances)
+func (s *ChromeScraper) convertPlatformURL(urlStr string) string {
+	// Detect platform and call appropriate conversion function
+	if strings.Contains(urlStr, "github.com") {
+		return s.convertGitHubURL(urlStr)
+	}
+
+	if strings.Contains(urlStr, "gitlab.com") || regexp.MustCompile(`https://[^/]+/[^/]+/[^/]+/-/`).MatchString(urlStr) {
+		return s.convertGitLabURL(urlStr)
+	}
+
+	// Check for common Gitea instances or Gitea-specific URL patterns
+	if strings.Contains(urlStr, "gitea.com") || strings.Contains(urlStr, "gitea.io") ||
+		regexp.MustCompile(`https://[^/]+/[^/]+/[^/]+/(issues|pulls)`).MatchString(urlStr) {
+		return s.convertGiteaURL(urlStr)
+	}
+
+	return urlStr
+}
+
 // httpFallback performs HTTP fallback when Chrome fails
 func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
 	// Phase 4: HTTP Fallback - Use standard HTTP client for better compatibility
@@ -1107,9 +1246,31 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 	}, nil
 }
 
-// githubAPIFallback performs optimized GitHub API scraping
-func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
-	s.logger.Info().Msg("Phase 4: Using GitHub API with JSON response for optimal token usage")
+// platformAPIFallback performs optimized platform API scraping for GitHub, GitLab, and Gitea
+func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
+	// Detect platform from URL
+	var platform, acceptHeader, authPrefix string
+
+	if strings.Contains(urlStr, "api.github.com") {
+		platform = "GitHub"
+		acceptHeader = "application/vnd.github.v3+json"
+		authPrefix = "token"
+	} else if strings.Contains(urlStr, "gitlab.com") || strings.Contains(urlStr, "/api/v4/") {
+		platform = "GitLab"
+		acceptHeader = "application/json"
+		authPrefix = "Bearer"
+	} else if strings.Contains(urlStr, "gitea.com") || strings.Contains(urlStr, "gitea.io") || strings.Contains(urlStr, "/api/v1/") {
+		platform = "Gitea"
+		acceptHeader = "application/json"
+		authPrefix = "token"
+	} else {
+		// Default to GitHub for backwards compatibility
+		platform = "GitHub"
+		acceptHeader = "application/vnd.github.v3+json"
+		authPrefix = "token"
+	}
+
+	s.logger.Info().Str("platform", platform).Msg("Phase 4: Using platform API with JSON response")
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -1123,27 +1284,39 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create GitHub API request: %w", err)
+		return nil, fmt.Errorf("failed to create %s API request: %w", platform, err)
 	}
 
-	// Set headers for GitHub API
+	// Set headers for platform API
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("Accept", acceptHeader)
 
-	// Add GitHub token if available (increases rate limit from 60/hour to 5000/hour)
-	if s.githubCfg.Token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("token %s", s.githubCfg.Token))
-		s.logger.Debug().Msg("Using GitHub token for API request")
+	// Add platform token if available
+	var token string
+	switch platform {
+	case "GitHub":
+		token = s.githubCfg.Token
+	case "GitLab":
+		// GitLab token support could be added here if needed
+		// token = s.gitlabCfg.Token
+	case "Gitea":
+		// Gitea token support could be added here if needed
+		// token = s.giteaCfg.Token
+	}
+
+	if token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("%s %s", authPrefix, token))
+		s.logger.Debug().Str("platform", platform).Msg("Using platform token for API request")
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GitHub API request failed: %w", err)
+		return nil, fmt.Errorf("%s API request failed: %w", platform, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("GitHub API failed with status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%s API failed with status %d", platform, resp.StatusCode)
 	}
 
 	// Handle gzip compression
@@ -1160,14 +1333,15 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read GitHub API response: %w", err)
+		return nil, fmt.Errorf("failed to read %s API response: %w", platform, err)
 	}
 
 	s.logger.Info().
 		Int("raw_size", len(body)).
-		Msg("GitHub API response received")
+		Str("platform", platform).
+		Msg("Platform API response received")
 
-	// Detect response type: search results or releases
+	// Detect response type: search results, releases, or other
 	var markdown string
 	var methodLabel string
 
@@ -1176,13 +1350,18 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 	if err := json.Unmarshal(body, &searchResults); err == nil {
 		if items, ok := searchResults["items"].([]interface{}); ok {
 			// This is a search response
-			markdown = s.convertGitHubSearchToMarkdown(items)
-			methodLabel = "GitHub Search API"
+			if platform == "GitHub" {
+				markdown = s.convertGitHubSearchToMarkdown(items)
+			} else {
+				markdown = s.convertGenericSearchToMarkdown(items)
+			}
+			methodLabel = fmt.Sprintf("%s Search API", platform)
 
 			s.logger.Info().
 				Int("results_count", len(items)).
 				Int("markdown_size", len(markdown)).
-				Msg("GitHub search results converted to Markdown")
+				Str("platform", platform).
+				Msg("Search results converted to Markdown")
 
 			return &Result{
 				HTML:        markdown,
@@ -1200,9 +1379,9 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 	}
 
 	// Try to parse as releases (array)
-	var githubReleases []map[string]interface{}
-	if err := json.Unmarshal(body, &githubReleases); err != nil {
-		s.logger.Warn().Err(err).Msg("Failed to parse GitHub API JSON, returning raw JSON")
+	var releases []map[string]interface{}
+	if err := json.Unmarshal(body, &releases); err != nil {
+		s.logger.Warn().Err(err).Str("platform", platform).Msg("Failed to parse API JSON, returning raw JSON")
 		// If parsing fails, return the raw JSON
 		return &Result{
 			HTML:        string(body),
@@ -1214,18 +1393,23 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 			SizeBytes:   len(body),
 			Format:      "json",
 			FromCache:   false,
-			Method:      "GitHub API",
+			Method:      fmt.Sprintf("%s API", platform),
 		}, nil
 	}
 
-	// Convert GitHub API releases to Markdown
-	markdown = s.convertGitHubReleasesToMarkdown(githubReleases)
-	methodLabel = "GitHub API"
+	// Convert platform API releases to Markdown
+	if platform == "GitHub" {
+		markdown = s.convertGitHubReleasesToMarkdown(releases)
+	} else {
+		markdown = s.convertGenericReleasesToMarkdown(releases)
+	}
+	methodLabel = fmt.Sprintf("%s API", platform)
 
 	s.logger.Info().
-		Int("releases_count", len(githubReleases)).
+		Int("releases_count", len(releases)).
 		Int("markdown_size", len(markdown)).
-		Msg("GitHub API releases converted to Markdown")
+		Str("platform", platform).
+		Msg("Platform API releases converted to Markdown")
 
 	return &Result{
 		HTML:        markdown,
@@ -1237,7 +1421,7 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 		SizeBytes:   len(markdown),
 		Format:      "markdown",
 		FromCache:   false,
-		Method:      "GitHub API",
+		Method:      methodLabel,
 	}, nil
 }
 
@@ -1599,6 +1783,162 @@ func (s *ChromeScraper) convertGitHubSearchToMarkdown(items []interface{}) strin
 	// Add token estimate
 	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
 
+	return markdown.String()
+}
+
+// convertGenericSearchToMarkdown converts generic search results (GitLab, Gitea) to Markdown format
+func (s *ChromeScraper) convertGenericSearchToMarkdown(items []interface{}) string {
+	if len(items) == 0 {
+		return "# No results found"
+	}
+
+	var markdown strings.Builder
+
+	markdown.WriteString(fmt.Sprintf("# Found %d items\n\n", len(items)))
+
+	for i, item := range items {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Title
+		if title, ok := itemMap["title"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("## %s\n\n", title))
+		} else if name, ok := itemMap["name"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("## %s\n\n", name))
+		}
+
+		// State (open/closed)
+		if state, ok := itemMap["state"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Status:** %s\n\n", strings.Title(state)))
+		}
+
+		// URL (web_url for GitLab, html_url for others)
+		if webURL, ok := itemMap["web_url"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**URL:** %s\n\n", webURL))
+		} else if htmlURL, ok := itemMap["html_url"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**URL:** %s\n\n", htmlURL))
+		}
+
+		// Author (author.username for GitLab, user.login for others)
+		if author, ok := itemMap["author"].(map[string]interface{}); ok {
+			if username, ok := author["username"].(string); ok {
+				markdown.WriteString(fmt.Sprintf("**Author:** @%s\n\n", username))
+			}
+		} else if user, ok := itemMap["user"].(map[string]interface{}); ok {
+			if login, ok := user["login"].(string); ok {
+				markdown.WriteString(fmt.Sprintf("**Author:** @%s\n\n", login))
+			}
+		}
+
+		// Created/Updated dates
+		if createdAt, ok := itemMap["created_at"].(string); ok {
+			if len(createdAt) > 10 {
+				markdown.WriteString(fmt.Sprintf("**Created:** %s", createdAt[:10]))
+			}
+		}
+		if updatedAt, ok := itemMap["updated_at"].(string); ok {
+			if len(updatedAt) > 10 {
+				markdown.WriteString(fmt.Sprintf(" | **Updated:** %s", updatedAt[:10]))
+			}
+		}
+		markdown.WriteString("\n\n")
+
+		// Description (truncated)
+		if description, ok := itemMap["description"].(string); ok && description != "" {
+			maxDescLength := 300
+			if len(description) > maxDescLength {
+				description = description[:maxDescLength] + "..."
+			}
+			markdown.WriteString(fmt.Sprintf("**Description** (truncated):\n\n%s\n\n", description))
+		}
+
+		// Separator
+		if i < len(items)-1 {
+			markdown.WriteString("---\n\n")
+		}
+	}
+
+	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
+	return markdown.String()
+}
+
+// convertGenericReleasesToMarkdown converts generic releases (GitLab, Gitea) to Markdown format
+func (s *ChromeScraper) convertGenericReleasesToMarkdown(releases []map[string]interface{}) string {
+	if len(releases) == 0 {
+		return "# No releases found"
+	}
+
+	var markdown strings.Builder
+	markdown.WriteString(fmt.Sprintf("# %d Releases\n\n", len(releases)))
+
+	for i, release := range releases {
+		// Release name/tag
+		var releaseName string
+		if name, ok := release["name"].(string); ok && name != "" {
+			releaseName = name
+		} else if tagName, ok := release["tag_name"].(string); ok {
+			releaseName = tagName
+		} else if tag, ok := release["tag"].(string); ok {
+			releaseName = tag
+		}
+
+		markdown.WriteString(fmt.Sprintf("## %s\n\n", releaseName))
+
+		// Tag name
+		if tagName, ok := release["tag_name"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Tag:** `%s`\n\n", tagName))
+		} else if tag, ok := release["tag"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Tag:** `%s`\n\n", tag))
+		}
+
+		// Published date
+		if publishedAt, ok := release["published_at"].(string); ok && len(publishedAt) > 10 {
+			markdown.WriteString(fmt.Sprintf("**Published:** %s\n\n", publishedAt[:10]))
+		} else if createdAt, ok := release["created_at"].(string); ok && len(createdAt) > 10 {
+			markdown.WriteString(fmt.Sprintf("**Created:** %s\n\n", createdAt[:10]))
+		}
+
+		// Author (for GitLab)
+		if author, ok := release["author"].(map[string]interface{}); ok {
+			if username, ok := author["username"].(string); ok {
+				markdown.WriteString(fmt.Sprintf("**Author:** @%s\n\n", username))
+			}
+		}
+
+		// Release notes (truncated for efficiency)
+		var body string
+		if description, ok := release["description"].(string); ok {
+			body = description
+		} else if notes, ok := release["notes"].(string); ok {
+			body = notes
+		} else if bodyText, ok := release["body"].(string); ok {
+			body = bodyText
+		}
+
+		if body != "" {
+			maxBodyLength := 500 // Adaptive length
+			if len(releases) > 5 {
+				maxBodyLength = 200 // Shorter for many releases
+			}
+
+			if len(body) > maxBodyLength {
+				body = body[:maxBodyLength] + "..."
+				markdown.WriteString(fmt.Sprintf("**Release Notes** (truncated):\n\n%s\n\n", body))
+			} else {
+				markdown.WriteString(fmt.Sprintf("**Release Notes:**\n\n%s\n\n", body))
+			}
+		}
+
+		// Separator between releases
+		if i < len(releases)-1 {
+			markdown.WriteString("---\n\n")
+		}
+	}
+
+	// Add token estimate
+	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
 	return markdown.String()
 }
 
