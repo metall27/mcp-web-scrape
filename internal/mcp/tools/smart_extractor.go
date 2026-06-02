@@ -56,6 +56,12 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 }
 
 func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
+	// Log what parameters were received for debugging
+	t.logger.Debug().
+		Interface("received_args", args).
+		Interface("arg_keys", getMapKeys(args)).
+		Msg("smart_extract called with args")
+
 	// Validate input parameters
 	if args == nil {
 		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string). Example: smart_extract(html=\"<html>...</html>\", mode=\"general\")")
@@ -63,11 +69,21 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 
 	html, ok := args["html"].(string)
 	if !ok {
+		// Check if client might be using a different parameter name
+		if len(args) == 0 {
+			return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string) - but received NO parameters. You must call it with: smart_extract(html=\"<html>content</html>\", mode=\"general\")")
+		}
+
+		// Log what we received instead
+		t.logger.Warn().
+			Interface("received_args", args).
+			Msg("smart_extract called without 'html' parameter")
+
 		// Provide helpful error message with example
 		if htmlVal, exists := args["html"]; exists {
 			return nil, fmt.Errorf("smart_extract 'html' parameter must be a string, got %T. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")", htmlVal)
 		}
-		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string) - the HTML content to extract from. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")")
+		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string) - the HTML content to extract from. Received: %v. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")", getMapKeys(args))
 	}
 
 	// Validate html is not empty
@@ -518,4 +534,13 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// getMapKeys extracts keys from a map for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
