@@ -162,7 +162,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Get content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Returns Markdown by default (75% smaller, optimized for LLMs). Automatically optimizes content and takes screenshots for large pages. Auto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
+			"Get content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Returns Markdown by default (75% smaller, optimized for LLMs).\n\nGitHub Optimization:\n- Latest releases (default): Shows 5 recent releases (~750 tokens) - BEST for \"what's new?\" questions\n- All releases catalog: Add ?mode=catalog to see ALL releases with metadata (~5,500 tokens) - BEST for \"which release added X?\" questions\n- Flexible detail: Add ?releases=10 for detailed version history (~900 tokens)\n\nExample usage:\n- scrape_with_js?url=https://github.com/owner/repo/releases\n- scrape_with_js?url=https://github.com/owner/repo/releases?mode=catalog\n- scrape_with_js?url=https://github.com/owner/repo/releases?releases=10\n\nAuto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
 		schema,
 		handler,
 	)
