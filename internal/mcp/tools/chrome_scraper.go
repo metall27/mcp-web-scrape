@@ -850,9 +850,11 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 // - Default: last 5 releases (balanced)
 // - ?releases=10: last 10 releases (detailed)
 // - ?releases=all: all releases (expensive but complete)
+// - Issues/Pulls search: converted to GitHub Search API
 // Examples:
 // - https://github.com/owner/repo/releases → https://api.github.com/repos/owner/repo/releases?per_page=5
 // - https://github.com/owner/repo/releases?releases=10 → https://api.github.com/repos/owner/repo/releases?per_page=10
+// - https://github.com/owner/repo/issues?q=is:issue+term → https://api.github.com/search/issues?q=repo:owner/repo+is:issue+term
 func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
 	// GitHub releases page → API with flexible result count
 	if strings.Contains(urlStr, "/releases") && !strings.Contains(urlStr, ".atom") {
@@ -869,6 +871,23 @@ func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
 			}
 
 			return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%s", owner, repo, releaseCount)
+		}
+	}
+
+	// GitHub issues/pulls search → Search API
+	if (strings.Contains(urlStr, "/issues?") || strings.Contains(urlStr, "/pulls?")) &&
+		strings.Contains(urlStr, "q=") {
+		if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/(issues|pulls)\?q=([^&]+)(?:&.*)?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
+			owner := matches[1]
+			repo := matches[2]
+			itemType := matches[3] // "issues" or "pulls"
+			query := matches[4]
+
+			// Build search query for GitHub API
+			// Convert URL query format to API format
+			searchQuery := fmt.Sprintf("repo:%s/%s+%s", owner, repo, query)
+
+			return fmt.Sprintf("https://api.github.com/search/%s?q=%s&per_page=10", itemType, searchQuery)
 		}
 	}
 
@@ -1114,7 +1133,39 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 		Int("raw_size", len(body)).
 		Msg("GitHub API response received")
 
-	// Parse GitHub API JSON response
+	// Detect response type: search results or releases
+	var markdown string
+	var methodLabel string
+
+	// Try to parse as search results (contains "items" field)
+	var searchResults map[string]interface{}
+	if err := json.Unmarshal(body, &searchResults); err == nil {
+		if items, ok := searchResults["items"].([]interface{}); ok {
+			// This is a search response
+			markdown = s.convertGitHubSearchToMarkdown(items)
+			methodLabel = "GitHub Search API"
+
+			s.logger.Info().
+				Int("results_count", len(items)).
+				Int("markdown_size", len(markdown)).
+				Msg("GitHub search results converted to Markdown")
+
+			return &Result{
+				HTML:        markdown,
+				URL:         urlStr,
+				FinalURL:    urlStr,
+				StatusCode:  resp.StatusCode,
+				ContentType: "text/markdown",
+				Duration:    time.Since(startTime),
+				SizeBytes:   len(markdown),
+				Format:      "markdown",
+				FromCache:   false,
+				Method:      methodLabel,
+			}, nil
+		}
+	}
+
+	// Try to parse as releases (array)
 	var githubReleases []map[string]interface{}
 	if err := json.Unmarshal(body, &githubReleases); err != nil {
 		s.logger.Warn().Err(err).Msg("Failed to parse GitHub API JSON, returning raw JSON")
@@ -1134,7 +1185,8 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 	}
 
 	// Convert GitHub API releases to Markdown
-	markdown := s.convertGitHubReleasesToMarkdown(githubReleases)
+	markdown = s.convertGitHubReleasesToMarkdown(githubReleases)
+	methodLabel = "GitHub API"
 
 	s.logger.Info().
 		Int("releases_count", len(githubReleases)).
@@ -1386,5 +1438,117 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+// convertGitHubSearchToMarkdown converts GitHub Search API results to Markdown format
+// Handles issues and pull requests search results
+func (s *ChromeScraper) convertGitHubSearchToMarkdown(items []interface{}) string {
+	if len(items) == 0 {
+		return "# No results found"
+	}
+
+	var markdown strings.Builder
+
+	// Determine item type (issue or pull request)
+	itemType := "items"
+	if len(items) > 0 {
+		if item, ok := items[0].(map[string]interface{}); ok {
+			if _, hasPullURL := item["pull_request"]; hasPullURL {
+				itemType = "pull requests"
+			} else {
+				itemType = "issues"
+			}
+		}
+	}
+
+	markdown.WriteString(fmt.Sprintf("# Found %d %s\n\n", len(items), itemType))
+
+	for i, item := range items {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Item number
+		itemNum := i + 1
+		markdown.WriteString(fmt.Sprintf("## %s #%d\n", strings.Title(itemType), itemNum))
+
+		// Title
+		if title, ok := itemMap["title"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Title:** %s\n\n", title))
+		}
+
+		// State (open/closed)
+		if state, ok := itemMap["state"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Status:** %s", strings.Title(state)))
+			if htmlURL, ok := itemMap["html_url"].(string); ok {
+				markdown.WriteString(fmt.Sprintf(" | **URL:** %s", htmlURL))
+			}
+			markdown.WriteString("\n\n")
+		}
+
+		// Number
+		if number, ok := itemMap["number"].(float64); ok {
+			markdown.WriteString(fmt.Sprintf("**Number:** #%d\n\n", int(number)))
+		}
+
+		// Author
+		if user, ok := itemMap["user"].(map[string]interface{}); ok {
+			if login, ok := user["login"].(string); ok {
+				markdown.WriteString(fmt.Sprintf("**Author:** @%s\n\n", login))
+			}
+		}
+
+		// Labels
+		if labels, ok := itemMap["labels"].([]interface{}); ok && len(labels) > 0 {
+			markdown.WriteString("**Labels:** ")
+			for j, label := range labels {
+				if labelMap, ok := label.(map[string]interface{}); ok {
+					if name, ok := labelMap["name"].(string); ok {
+						if j > 0 {
+							markdown.WriteString(", ")
+						}
+						markdown.WriteString(fmt.Sprintf("`%s`", name))
+					}
+				}
+			}
+			markdown.WriteString("\n\n")
+		}
+
+		// Created/Updated dates
+		if createdAt, ok := itemMap["created_at"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Created:** %s", createdAt[:10]))
+			if updatedAt, ok := itemMap["updated_at"].(string); ok {
+				markdown.WriteString(fmt.Sprintf(" | **Updated:** %s", updatedAt[:10]))
+			}
+			markdown.WriteString("\n\n")
+		}
+
+		// Body/description (truncated)
+		if body, ok := itemMap["body"].(string); ok && body != "" {
+			maxBodyLength := 300
+			if len(body) > maxBodyLength {
+				body = body[:maxBodyLength] + "..."
+				markdown.WriteString(fmt.Sprintf("**Description** (truncated):\n\n%s\n\n", body))
+			} else {
+				markdown.WriteString(fmt.Sprintf("**Description:**\n\n%s\n\n", body))
+			}
+		}
+
+		// Comments count
+		if comments, ok := itemMap["comments"].(float64); ok && comments > 0 {
+			markdown.WriteString(fmt.Sprintf("**Comments:** %d\n\n", int(comments)))
+		}
+
+		// Separator
+		if i < len(items)-1 {
+			markdown.WriteString("---\n\n")
+		}
+	}
+
+	// Add token estimate
+	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
+
+	return markdown.String()
 }
 
