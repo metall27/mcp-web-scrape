@@ -386,6 +386,16 @@ func (s *StealthActions) InjectAntiDetectionScripts(fingerprint BrowserFingerpri
 			return fmt.Errorf("failed to inject anti-detection scripts: %w", err)
 		}
 
+		// Inject ADVANCED anti-fingerprinting methods for GitHub
+		advancedStealth := NewAdvancedStealth()
+		advancedScript := advancedStealth.AdvancedAntiDetectionScript()
+
+		var advResult interface{}
+		err = chromedp.Evaluate(advancedScript, &advResult).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to inject advanced anti-detection scripts: %w", err)
+		}
+
 		return nil
 	})
 }

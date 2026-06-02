@@ -1,13 +1,17 @@
 package tools
 
 import (
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
@@ -285,6 +289,64 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		}
 	}
 
+	// 2.5. GitHub HTTP Fallback (before Chrome retry loop)
+	// GitHub uses advanced bot detection that defeats Chrome headless scraping
+	// Use special GitHub endpoints that work without authentication
+	if strings.Contains(urlStr, "github.com") && !hasActions {
+		s.logger.Info().
+			Str("url", urlStr).
+			Msg("🎯 GitHub detected - using intelligent GitHub API mode")
+
+		// Check if smart catalog mode is requested
+		if strings.Contains(urlStr, "?mode=catalog") || strings.Contains(urlStr, "&mode=catalog") {
+			s.logger.Info().Msg("📋 Smart catalog mode: Building release catalog for intelligent LLM selection")
+
+			catalog, err := s.githubSmartCatalog(urlStr)
+			if err != nil {
+				return nil, fmt.Errorf("github catalog failed: %w", err)
+			}
+
+			// Convert catalog to markdown
+			catalogMD := s.buildCatalogMarkdown(catalog)
+
+			s.logger.Info().
+				Int("releases_total", catalog.TotalCount).
+				Int("catalog_size", len(catalogMD)).
+				Msg("GitHub release catalog created for LLM selection")
+
+			return &Result{
+				HTML:        catalogMD,
+				URL:         urlStr,
+				FinalURL:    urlStr,
+				StatusCode:  200,
+				ContentType: "text/markdown",
+				Duration:    time.Since(startTime),
+				SizeBytes:   len(catalogMD),
+				Format:      "markdown",
+				FromCache:   false,
+				Method:      "GitHub Catalog",
+			}, nil
+		}
+
+		// Standard mode: Convert to API with flexible results
+		githubURL := s.convertGitHubURL(urlStr)
+		s.logger.Info().
+			Str("original_url", urlStr).
+			Str("github_url", githubURL).
+			Msg("🔄 Converted GitHub URL to API endpoint")
+
+		// Get User-Agent for HTTP fallback
+		userAgent := opts.UserAgent
+		if userAgent == "" && s.uaRotator != nil {
+			userAgent = s.uaRotator.Get()
+		}
+		if userAgent == "" {
+			userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+		}
+
+		return s.githubAPIFallback(toolCtx, githubURL, userAgent, startTime)
+	}
+
 	// 3. Phase 5: Full Retry Loop Implementation
 	// Attempt 1 → Block Detected → New Proxy → Retry 2 → Block Detected → New Proxy → Retry 3
 
@@ -557,9 +619,8 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
-			// Note: Full HTTP+JS UA sync via CDP requires complex CDP integration
-			// Current approach: JS UA rotation + accept HTTP header limitation
-			// This is acceptable for many sites; proxy rotation handles blocked IPs
+			// NOTE: HTTP User-Agent is set at allocator level during browser pool creation
+			// This sync ensures JS navigator.userAgent matches HTTP headers
 
 			var result interface{}
 			err := chromedp.Evaluate(fmt.Sprintf(`
@@ -574,7 +635,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 			} else {
 				s.logger.Debug().
 					Str("user_agent", userAgent).
-					Msg("User-Agent set in JS context")
+					Msg("User-Agent synchronized in JS context")
 			}
 
 			// Phase 3: Extended Stealth - Inject anti-detection scripts
@@ -672,13 +733,66 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 // buildNavigationTask создает единую задачу навигации для stealth/non-stealth режимов
 func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *browser.StealthActions) chromedp.Action {
 	navigationAction := chromedp.ActionFunc(func(ctx context.Context) error {
-		s.logger.Info().Msg("🌐 Starting FAST navigation...")
+		s.logger.Info().Msg("🌐 Starting navigation...")
 		startTime := time.Now()
 
-		// Load URL directly without waiting for page load events
-		var result interface{}
-		if err := chromedp.Evaluate(fmt.Sprintf(`window.location.href = %q;`, urlStr), &result).Do(ctx); err != nil {
-			s.logger.Error().Err(err).Msg("❌ URL change failed")
+		// CRITICAL: Clear ALL session data before navigation to prevent session conflicts
+		// This fixes GitHub "signed in with another tab" errors by:
+		// 1. Clearing all cookies
+		// 2. Clearing localStorage
+		// 3. Clearing sessionStorage
+		if err := chromedp.ActionFunc(func(ctx context.Context) error {
+			// Clear all cookies via CDP
+			if err := network.ClearBrowserCookies().Do(ctx); err != nil {
+				s.logger.Debug().Err(err).Msg("Failed to clear browser cookies (non-critical)")
+			} else {
+				s.logger.Debug().Msg("✅ Cleared browser cookies")
+			}
+
+			// Clear localStorage and sessionStorage via JS
+			var result interface{}
+			if err := chromedp.Evaluate(`
+				(() => {
+					// Clear localStorage
+					try {
+						localStorage.clear();
+					} catch(e) {
+						console.log('Failed to clear localStorage:', e);
+					}
+
+					// Clear sessionStorage
+					try {
+						sessionStorage.clear();
+					} catch(e) {
+						console.log('Failed to clear sessionStorage:', e);
+					}
+
+					// Clear all cookies via JS for current domain
+					document.cookie.split(";").forEach(function(c) {
+						document.cookie = c.trim().split("=")[0] +
+							'=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/';
+					});
+
+					return true;
+				})()
+			`, &result).Do(ctx); err != nil {
+				s.logger.Debug().Err(err).Msg("Failed to clear storage via JS (non-critical)")
+			} else {
+				s.logger.Debug().Msg("✅ Cleared localStorage/sessionStorage/cookies")
+			}
+
+			return nil
+		}).Do(ctx); err != nil {
+			s.logger.Debug().Err(err).Msg("Failed to execute storage clearing (non-critical)")
+		}
+
+		// Add small delay to ensure storage is fully cleared before navigation
+		time.Sleep(100 * time.Millisecond)
+
+		// Use standard chromedp.Navigate instead of window.location.href
+		// This is more reliable and avoids session conflicts with anti-bot systems
+		if err := chromedp.Navigate(urlStr).Do(ctx); err != nil {
+			s.logger.Error().Err(err).Msg("❌ Navigation failed")
 			return err
 		}
 
@@ -731,48 +845,59 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 	return navigationAction
 }
 
+// convertGitHubURL converts GitHub URLs to API endpoints for better scraping
+// Supports flexible optimization through query parameters:
+// - Default: last 5 releases (balanced)
+// - ?releases=10: last 10 releases (detailed)
+// - ?releases=all: all releases (expensive but complete)
+// Examples:
+// - https://github.com/owner/repo/releases → https://api.github.com/repos/owner/repo/releases?per_page=5
+// - https://github.com/owner/repo/releases?releases=10 → https://api.github.com/repos/owner/repo/releases?per_page=10
+func (s *ChromeScraper) convertGitHubURL(urlStr string) string {
+	// GitHub releases page → API with flexible result count
+	if strings.Contains(urlStr, "/releases") && !strings.Contains(urlStr, ".atom") {
+		if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/releases`).FindStringSubmatch(urlStr); len(matches) > 0 {
+			owner := matches[1]
+			repo := matches[2]
+
+			// Check if user specified release count in URL
+			releaseCount := "5" // Default: balanced approach
+			if matches := regexp.MustCompile(`[?&]releases=(\d+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+				releaseCount = matches[1]
+			} else if matches := regexp.MustCompile(`[?&]releases=all`).FindStringSubmatch(urlStr); len(matches) > 0 {
+				releaseCount = "100" // Get all available releases
+			}
+
+			return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%s", owner, repo, releaseCount)
+		}
+	}
+
+	// GitHub repo page → API
+	if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		return fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo)
+	}
+
+	return urlStr
+}
+
 // httpFallback performs HTTP fallback when Chrome fails
 func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
-	// Phase 4: TLS Fingerprinting - Use TLS-aware HTTP client instead of standard http.Client
-	s.logger.Info().Msg("Phase 4: Using TLS-aware HTTP client with Chrome fingerprint")
+	// Phase 4: HTTP Fallback - Use standard HTTP client for better compatibility
+	// For GitHub, we use standard HTTP client to avoid TLS fingerprinting issues
+	isGitHub := strings.Contains(urlStr, "github.com")
 
-	// Create TLS client with Chrome fingerprint
-	tlsConfig := tlshttp.DefaultTLSClientConfig
-	tlsConfig.RandomizeExtensions = true // Enable JA4 protection
-
-	tlsClient, err := tlshttp.NewTLSClient(tlsConfig)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("Failed to create TLS client, falling back to standard HTTP")
-		// Fallback to standard HTTP client
-		tlsClient = nil
+	if isGitHub {
+		s.logger.Info().Msg("Phase 4: Using standard HTTP client for GitHub (avoiding TLS fingerprinting)")
+	} else {
+		s.logger.Info().Msg("Phase 4: Using TLS-aware HTTP client with Chrome fingerprint")
 	}
 
 	var client *http.Client
-	if tlsClient != nil {
-		client = tlsClient.GetHttpClient()
 
-		// Log fingerprint info
-		fingerprintInfo := tlsClient.GetFingerprintInfo()
-		s.logger.Info().
-			Interface("fingerprint", fingerprintInfo).
-			Msg("TLS fingerprinting enabled")
-
-		// Add proxy to TLS client if enabled
-		if s.proxy != nil && s.proxy.IsEnabled() {
-			// Get next proxy
-			selectedProxy, proxyErr := s.proxy.GetNext()
-			if proxyErr == nil && selectedProxy != nil {
-				if err := tlsClient.SetProxy(selectedProxy.URL); err != nil {
-					s.logger.Warn().Err(err).Msg("Failed to set proxy for TLS client")
-				} else {
-					s.logger.Info().
-						Str("proxy", selectedProxy.URL).
-						Msg("Using proxy with TLS fingerprinting")
-				}
-			}
-		}
-	} else {
-		// Fallback to standard HTTP client
+	if isGitHub {
+		// Use standard HTTP client for GitHub to avoid TLS fingerprinting detection
 		client = &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -788,8 +913,56 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 			client.Transport = &http.Transport{
 				Proxy: s.proxy.GetProxyFunc(),
 			}
+			s.logger.Info().Msg("Using proxy for GitHub HTTP client")
+		}
+	} else {
+		// Use TLS-aware client for non-GitHub sites
+		tlsConfig := tlshttp.DefaultTLSClientConfig
+		tlsConfig.RandomizeExtensions = true // Enable JA4 protection
+
+		tlsClient, err := tlshttp.NewTLSClient(tlsConfig)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to create TLS client, falling back to standard HTTP")
+			// Fallback to standard HTTP client
+			client = &http.Client{
+				Timeout: 30 * time.Second,
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+					if len(via) >= 10 {
+						return fmt.Errorf("too many redirects")
+					}
+					return nil
+				},
+			}
+
+			// Add proxy to standard HTTP client if enabled
+			if s.proxy != nil && s.proxy.IsEnabled() {
+				client.Transport = &http.Transport{
+					Proxy: s.proxy.GetProxyFunc(),
+				}
+			}
+		} else {
+			client = tlsClient.GetHttpClient()
+
+			// Log fingerprint info
+			fingerprintInfo := tlsClient.GetFingerprintInfo()
 			s.logger.Info().
-				Msg("Using proxy for standard HTTP fallback")
+				Interface("fingerprint", fingerprintInfo).
+				Msg("TLS fingerprinting enabled")
+
+			// Add proxy to TLS client if enabled
+			if s.proxy != nil && s.proxy.IsEnabled() {
+				// Get next proxy
+				selectedProxy, proxyErr := s.proxy.GetNext()
+				if proxyErr == nil && selectedProxy != nil {
+					if err := tlsClient.SetProxy(selectedProxy.URL); err != nil {
+						s.logger.Warn().Err(err).Msg("Failed to set proxy for TLS client")
+					} else {
+						s.logger.Info().
+							Str("proxy", selectedProxy.URL).
+							Msg("Using proxy with TLS fingerprinting")
+					}
+				}
+			}
 		}
 	}
 
@@ -802,7 +975,12 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+
+	// For GitHub, don't request compression to avoid decompression issues
+	if !isGitHub {
+		req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	}
+
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
@@ -827,7 +1005,20 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 		s.proxy.MarkSuccess()
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Handle gzip compression for GitHub responses
+	var bodyReader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to create gzip reader, trying uncompressed read")
+		} else {
+			defer gzipReader.Close()
+			bodyReader = gzipReader
+			s.logger.Debug().Msg("Decompressing gzipped response")
+		}
+	}
+
+	body, err := io.ReadAll(bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read HTTP response: %w", err)
 	}
@@ -867,5 +1058,333 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 		FromCache:   false,
 		Method:      "HTTP Fallback",
 	}, nil
+}
+
+// githubAPIFallback performs optimized GitHub API scraping
+func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
+	s.logger.Info().Msg("Phase 4: Using GitHub API with JSON response for optimal token usage")
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GitHub API request: %w", err)
+	}
+
+	// Set headers for GitHub API
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GitHub API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("GitHub API failed with status %d", resp.StatusCode)
+	}
+
+	// Handle gzip compression
+	var bodyReader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to create gzip reader")
+		} else {
+			defer gzipReader.Close()
+			bodyReader = gzipReader
+		}
+	}
+
+	body, err := io.ReadAll(bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read GitHub API response: %w", err)
+	}
+
+	s.logger.Info().
+		Int("raw_size", len(body)).
+		Msg("GitHub API response received")
+
+	// Parse GitHub API JSON response
+	var githubReleases []map[string]interface{}
+	if err := json.Unmarshal(body, &githubReleases); err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to parse GitHub API JSON, returning raw JSON")
+		// If parsing fails, return the raw JSON
+		return &Result{
+			HTML:        string(body),
+			URL:         urlStr,
+			FinalURL:    urlStr,
+			StatusCode:  resp.StatusCode,
+			ContentType: "application/json",
+			Duration:    time.Since(startTime),
+			SizeBytes:   len(body),
+			Format:      "json",
+			FromCache:   false,
+			Method:      "GitHub API",
+		}, nil
+	}
+
+	// Convert GitHub API releases to Markdown
+	markdown := s.convertGitHubReleasesToMarkdown(githubReleases)
+
+	s.logger.Info().
+		Int("releases_count", len(githubReleases)).
+		Int("markdown_size", len(markdown)).
+		Msg("GitHub API releases converted to Markdown")
+
+	return &Result{
+		HTML:        markdown,
+		URL:         urlStr,
+		FinalURL:    urlStr,
+		StatusCode:  resp.StatusCode,
+		ContentType: "text/markdown",
+		Duration:    time.Since(startTime),
+		SizeBytes:   len(markdown),
+		Format:      "markdown",
+		FromCache:   false,
+		Method:      "GitHub API",
+	}, nil
+}
+
+// convertGitHubReleasesToMarkdown converts GitHub API releases to Markdown format
+// Supports smart optimization based on release count
+func (s *ChromeScraper) convertGitHubReleasesToMarkdown(releases []map[string]interface{}) string {
+	if len(releases) == 0 {
+		return "# No releases found"
+	}
+
+	// Adaptive release notes length based on total releases
+	maxBodyLength := 500 // Default for 5 releases
+	if len(releases) > 5 {
+		maxBodyLength = 200 // Shorter for many releases
+	}
+	if len(releases) > 10 {
+		maxBodyLength = 100 // Very short for many releases
+	}
+	if len(releases) <= 3 {
+		maxBodyLength = 1000 // Longer for few releases
+	}
+
+	var markdown strings.Builder
+
+	// Add optimization warning if many releases
+	if len(releases) > 10 {
+		markdown.WriteString(fmt.Sprintf("> ⚠️ **Token Optimization:** Showing %d releases (release notes truncated to %d chars each)\n\n", len(releases), maxBodyLength))
+	} else if len(releases) > 5 {
+		markdown.WriteString(fmt.Sprintf("> 📊 **Detailed View:** Showing %d releases\n\n", len(releases)))
+	}
+
+	markdown.WriteString(fmt.Sprintf("# Latest %d Releases\n\n", len(releases)))
+
+	for i, release := range releases {
+		// Release number (reverse order for display)
+		releaseNum := len(releases) - i
+		markdown.WriteString(fmt.Sprintf("## Release %d: %s\n\n", releaseNum, release["name"]))
+
+		// Tag name
+		if tag, ok := release["tag_name"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Tag:** `%s`\n\n", tag))
+		}
+
+		// Release date
+		if date, ok := release["published_at"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Published:** %s\n\n", date[:10]))
+		}
+
+		// Author
+		if author, ok := release["author"].(map[string]interface{}); ok {
+			if login, ok := author["login"].(string); ok {
+				markdown.WriteString(fmt.Sprintf("**Author:** @%s\n\n", login))
+			}
+		}
+
+		// Release notes/body (with adaptive length)
+		if body, ok := release["body"].(string); ok && body != "" {
+			if len(body) > maxBodyLength {
+				body = body[:maxBodyLength] + "..."
+				markdown.WriteString(fmt.Sprintf("**Release Notes** (truncated):\\n\\n%s\\n\\n", body))
+			} else {
+				markdown.WriteString(fmt.Sprintf("**Release Notes:**\\n\\n%s\\n\\n", body))
+			}
+		}
+
+		// Assets (downloads) - show limited info for many releases
+		if assets, ok := release["assets"].([]interface{}); ok && len(assets) > 0 {
+			if len(releases) > 10 {
+				// Just show count for many releases
+				markdown.WriteString(fmt.Sprintf("**Downloads:** %d files available\\n\\n", len(assets)))
+			} else {
+				// Show full details for fewer releases
+				markdown.WriteString("**Downloads:**\\n\\n")
+				for j, asset := range assets {
+					if assetMap, ok := asset.(map[string]interface{}); ok {
+						if name, ok := assetMap["name"].(string); ok {
+							markdown.WriteString(fmt.Sprintf("%d. `%s`\\n", j+1, name))
+						}
+						if size, ok := assetMap["size"].(float64); ok {
+							markdown.WriteString(fmt.Sprintf("   Size: %.1f MB\\n", size/(1024*1024)))
+						}
+						if downloadCount, ok := assetMap["download_count"].(float64); ok {
+							markdown.WriteString(fmt.Sprintf("   Downloads: %d\\n\\n", int(downloadCount)))
+						}
+					}
+				}
+			}
+		}
+
+		// Separator
+		if i < len(releases)-1 {
+			markdown.WriteString("---\\n\\n")
+		}
+	}
+
+	// Add token estimate for many releases
+	if len(releases) > 10 {
+		markdown.WriteString(fmt.Sprintf("\\n\\n---\\n\\n*Estimated: ~%d tokens*\\n", len(markdown.String())/4))
+	}
+
+	return markdown.String()
+}
+
+// ReleaseMetadata contains minimal information for release selection
+type ReleaseMetadata struct {
+	Index       int    `json:"index"`        // Release number (1 = latest)
+	TagName     string `json:"tag_name"`     // v0.9.6
+	Name        string `json:"name"`         // Release name
+	Date        string `json:"date"`         // 2026-06-01
+	Author      string `json:"author"`       // @username
+	HasNotes    bool   `json:"has_notes"`    // Whether release has notes
+	AssetsCount int    `json:"assets_count"` // Number of download files
+	Preview     string `json:"preview"`      // First 100 chars of notes
+}
+
+// SmartGitHubResponse represents the intelligent two-phase GitHub response
+type SmartGitHubResponse struct {
+	Phase        string             `json:"phase"` // "catalog" or "detailed"
+	TotalCount   int                `json:"total_count"`
+	Releases     []ReleaseMetadata `json:"releases"`
+	DetailedData map[string]string `json:"detailed_data,omitempty"` // tag_name -> full markdown
+	TokensSaved  int                `json:"tokens_saved"`
+}
+
+// githubSmartCatalog creates a release catalog for intelligent LLM selection
+// Phase 1: Get all releases with metadata (minimal tokens)
+// Phase 2: LLM requests specific releases, load detailed content
+func (s *ChromeScraper) githubSmartCatalog(urlStr string) (*SmartGitHubResponse, error) {
+	// Extract owner/repo from URL
+	var owner, repo string
+	if matches := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/releases`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		owner = matches[1]
+		repo = matches[2]
+	} else {
+		return nil, fmt.Errorf("invalid GitHub URL format")
+	}
+
+	// Phase 1: Get ALL releases (metadata only, very compact)
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=100", owner, repo)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GitHub API catalog failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var releases []map[string]interface{}
+	json.Unmarshal(body, &releases)
+
+	// Build compact catalog
+	catalog := &SmartGitHubResponse{
+		Phase:      "catalog",
+		TotalCount: len(releases),
+		Releases:   make([]ReleaseMetadata, len(releases)),
+	}
+
+	for i, release := range releases {
+		metadata := ReleaseMetadata{Index: len(releases) - i}
+
+		if tag, ok := release["tag_name"].(string); ok {
+			metadata.TagName = tag
+		}
+		if name, ok := release["name"].(string); ok {
+			metadata.Name = name
+		}
+		if date, ok := release["published_at"].(string); ok {
+			metadata.Date = date[:10]
+		}
+		if author, ok := release["author"].(map[string]interface{}); ok {
+			if login, ok := author["login"].(string); ok {
+				metadata.Author = "@" + login
+			}
+		}
+		if body, ok := release["body"].(string); ok {
+			metadata.HasNotes = len(body) > 0
+			if len(body) > 0 {
+				metadata.Preview = truncateString(body, 100)
+			}
+		}
+		if assets, ok := release["assets"].([]interface{}); ok {
+			metadata.AssetsCount = len(assets)
+		}
+
+		catalog.Releases[i] = metadata
+	}
+
+	return catalog, nil
+}
+
+// buildCatalogMarkdown creates a compact release catalog for LLM selection
+func (s *ChromeScraper) buildCatalogMarkdown(catalog *SmartGitHubResponse) string {
+	var md strings.Builder
+
+	md.WriteString(fmt.Sprintf("# GitHub Release Catalog: %d releases available\n\n", catalog.TotalCount))
+	md.WriteString("> 🤖 **Smart Mode:** Review this catalog first, then request detailed release notes for specific versions.\n\n")
+
+	for _, release := range catalog.Releases {
+		md.WriteString(fmt.Sprintf("## Release %d: %s\n", release.Index, release.Name))
+		md.WriteString(fmt.Sprintf("**Tag:** `%s` | **Date:** %s | **Author:** %s\n", release.TagName, release.Date, release.Author))
+
+		if release.AssetsCount > 0 {
+			md.WriteString(fmt.Sprintf("**Downloads:** %d files\n", release.AssetsCount))
+		}
+
+		if release.HasNotes && release.Preview != "" {
+			md.WriteString(fmt.Sprintf("**Preview:** %s...\n", release.Preview))
+		} else if !release.HasNotes {
+			md.WriteString("**Notes:** (No release notes)\n")
+		}
+
+		md.WriteString("\n")
+	}
+
+	md.WriteString("\n---\n\n")
+	md.WriteString("📋 **Available Commands:**\n")
+	md.WriteString("- Request details: \"Tell me about release [index/tag]\"\n")
+	md.WriteString("- Compare releases: \"Compare releases [index] and [index]\"\n")
+	md.WriteString("- Latest changes: \"What's new in the latest releases?\"\n")
+
+	return md.String()
+}
+
+// truncateString safely truncates a string
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
 }
 

@@ -25,6 +25,7 @@ type Pool struct {
 	// Configuration
 	maxTabs      int
 	allocOptions []chromedp.ExecAllocatorOption
+	isolatedMode bool  // Use isolated browser instances
 }
 
 type Config struct {
@@ -35,6 +36,7 @@ type Config struct {
 	NoSandbox     bool
 	ViewportWidth int
 	ViewportHeight int
+	IsolatedMode bool  // Use isolated browser instances instead of shared pool (expensive but avoids session conflicts)
 }
 
 func New(cfg Config) (*Pool, error) {
@@ -77,6 +79,7 @@ func New(cfg Config) (*Pool, error) {
 		logger:       cfg.Logger,
 		maxTabs:      cfg.MaxTabs,
 		allocOptions: allocOpts,
+		isolatedMode: cfg.IsolatedMode,
 	}
 
 	cfg.Logger.Info().
@@ -120,24 +123,58 @@ func (p *Pool) GetContext(parent context.Context) (context.Context, context.Canc
 
 CreateTab:
 	// Create new context from allocator with custom error handler
-	taskCtx, cancel := chromedp.NewContext(p.allocator,
-		chromedp.WithErrorf(func(format string, v ...interface{}) {
-			// Filter out noisy chromedp errors for unhandled events
-			msg := fmt.Sprintf(format, v...)
-			if !shouldLogChromedpError(msg) {
-				return
-			}
-			p.logger.Error().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
-		}),
-		chromedp.WithLogf(func(format string, v ...interface{}) {
-			// Filter debug messages
-			msg := fmt.Sprintf(format, v...)
-			if !shouldLogChromedpError(msg) {
-				return
-			}
-			p.logger.Debug().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
-		}),
-	)
+	// NOTE: In isolated mode, create new allocator for each request to avoid session conflicts
+	var taskCtx context.Context
+	var cancel context.CancelFunc
+
+	if p.isolatedMode {
+		// Create isolated browser instance for this request (expensive but avoids session conflicts)
+		p.logger.Debug().Msg("Creating isolated browser instance")
+		isoAllocCtx, isoAllocCancel := chromedp.NewExecAllocator(context.Background(), p.allocOptions...)
+
+		taskCtx, cancel = chromedp.NewContext(isoAllocCtx,
+			chromedp.WithErrorf(func(format string, v ...interface{}) {
+				msg := fmt.Sprintf(format, v...)
+				if !shouldLogChromedpError(msg) {
+					return
+				}
+				p.logger.Error().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
+			}),
+			chromedp.WithLogf(func(format string, v ...interface{}) {
+				msg := fmt.Sprintf(format, v...)
+				if !shouldLogChromedpError(msg) {
+					return
+				}
+				p.logger.Debug().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
+			}),
+		)
+
+		// Store allocator cancel for cleanup (note: this will be called when tab is cancelled)
+		go func() {
+			<-taskCtx.Done()
+			isoAllocCancel() // Clean up isolated allocator
+		}()
+	} else {
+		// Shared pool mode - reuse existing allocator
+		taskCtx, cancel = chromedp.NewContext(p.allocator,
+			chromedp.WithErrorf(func(format string, v ...interface{}) {
+				// Filter out noisy chromedp errors for unhandled events
+				msg := fmt.Sprintf(format, v...)
+				if !shouldLogChromedpError(msg) {
+					return
+				}
+				p.logger.Error().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
+			}),
+			chromedp.WithLogf(func(format string, v ...interface{}) {
+				// Filter debug messages
+				msg := fmt.Sprintf(format, v...)
+				if !shouldLogChromedpError(msg) {
+					return
+				}
+				p.logger.Debug().Str("source", "chromedp").Msg(fmt.Sprintf(format, v...))
+			}),
+		)
+	}
 
 	atomic.AddInt32(&p.activeTabs, 1)
 	atomic.AddInt64(&p.totalTabs, 1)
