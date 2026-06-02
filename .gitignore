@@ -15,6 +15,7 @@ test_build
 # Temporary test files
 test_*.go
 test_*.md
+test_*.sh
 
 # Output of the go coverage tool
 *.out
