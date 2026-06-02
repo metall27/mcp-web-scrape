@@ -984,8 +984,14 @@ func (s *ChromeScraper) convertGitLabURL(urlStr string) string {
 		return fmt.Sprintf("%s%%2F%s", owner, repo) // URL encode slash
 	}
 
+	// Remove domain to get path (for proper regex matching)
+	path := urlStr
+	if matches := regexp.MustCompile(`https://[^/]+(/.*)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		path = matches[1]
+	}
+
 	// GitLab commit page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/commit/([a-f0-9]+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/commit/([a-f0-9]+)`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		sha := matches[3]
@@ -994,7 +1000,7 @@ func (s *ChromeScraper) convertGitLabURL(urlStr string) string {
 	}
 
 	// GitLab releases page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/releases`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/releases`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		projectPath := encodeProjectPath(owner, repo)
@@ -1002,7 +1008,7 @@ func (s *ChromeScraper) convertGitLabURL(urlStr string) string {
 	}
 
 	// GitLab issues page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/issues`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/issues`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		projectPath := encodeProjectPath(owner, repo)
@@ -1010,7 +1016,7 @@ func (s *ChromeScraper) convertGitLabURL(urlStr string) string {
 	}
 
 	// GitLab merge requests page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/merge_requests`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/-/merge_requests`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		projectPath := encodeProjectPath(owner, repo)
@@ -1018,7 +1024,7 @@ func (s *ChromeScraper) convertGitLabURL(urlStr string) string {
 	}
 
 	// GitLab repo page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/?$`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		projectPath := encodeProjectPath(owner, repo)
@@ -1043,37 +1049,55 @@ func (s *ChromeScraper) convertGiteaURL(urlStr string) string {
 		}
 	}
 
+	// Remove domain to get path (for proper regex matching)
+	path := urlStr
+	if matches := regexp.MustCompile(`https://[^/]+(/.*)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+		path = matches[1]
+	}
+
 	// Gitea commit page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/commit/([a-f0-9]+)`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/commit/([a-f0-9]+)`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		sha := matches[3]
 		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/git/commits/%s", baseDomain, owner, repo, sha)
 	}
 
+	// Gitea commits list → API (check before generic repo pattern)
+	// Matches: /commits, /commits/, /commits/master, /commits/main
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/commits/?([^/]+)?`).FindStringSubmatch(path); len(matches) > 0 {
+		owner := matches[1]
+		repo := matches[2]
+		branch := matches[3]
+		if branch == "" {
+			branch = "master" // default branch
+		}
+		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/commits?sha=%s&limit=10", baseDomain, owner, repo, branch)
+	}
+
 	// Gitea releases page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/releases`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/releases`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases", baseDomain, owner, repo)
 	}
 
 	// Gitea issues page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/issues`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/issues`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues", baseDomain, owner, repo)
 	}
 
 	// Gitea pulls page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/pulls`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/pulls`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s/pulls", baseDomain, owner, repo)
 	}
 
-	// Gitea repo page → API
-	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/?$`).FindStringSubmatch(urlStr); len(matches) > 0 {
+	// Gitea repo page → API (check LAST, as it's most generic)
+	if matches := regexp.MustCompile(`([^/]+)/([^/]+)/?$`).FindStringSubmatch(path); len(matches) > 0 {
 		owner := matches[1]
 		repo := matches[2]
 		return fmt.Sprintf("https://%s/api/v1/repos/%s/%s", baseDomain, owner, repo)
@@ -1476,10 +1500,44 @@ func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAge
 		}
 	}
 
+	// Try to parse as repo object (single repository)
+	var repoObject map[string]interface{}
+	if err := json.Unmarshal(body, &repoObject); err == nil {
+		// Check if this looks like a repo object (has "name" and "owner" but NOT "sha" or "message")
+		if _, hasName := repoObject["name"]; hasName {
+			if _, hasOwner := repoObject["owner"]; hasOwner {
+				if _, noSha := repoObject["sha"]; !noSha {
+					if _, noMessage := repoObject["message"]; !noMessage {
+						markdown = s.convertRepoToMarkdown(repoObject)
+						methodLabel = fmt.Sprintf("%s Repo API", platform)
+
+						s.logger.Info().
+							Str("platform", platform).
+							Int("markdown_size", len(markdown)).
+							Msg("Repository object converted to Markdown")
+
+						return &Result{
+							HTML:        markdown,
+							URL:         urlStr,
+							FinalURL:    urlStr,
+							StatusCode:  resp.StatusCode,
+							ContentType: "text/markdown",
+							Duration:    time.Since(startTime),
+							SizeBytes:   len(markdown),
+							Format:      "markdown",
+							FromCache:   false,
+							Method:      methodLabel,
+						}, nil
+					}
+				}
+			}
+		}
+	}
+
 	// Try to parse as releases (array)
 	var releases []map[string]interface{}
 	if err := json.Unmarshal(body, &releases); err != nil {
-		s.logger.Warn().Err(err).Str("platform", platform).Msg("Failed to parse API JSON, returning raw JSON")
+		s.logger.Warn().Err(err).Str("platform", platform).Msg("Failed to parse API JSON as releases, returning raw JSON")
 		// If parsing fails, return the raw JSON
 		return &Result{
 			HTML:        string(body),
@@ -2158,6 +2216,89 @@ func (s *ChromeScraper) convertCommitsListToMarkdown(commits []map[string]interf
 
 	// Token estimate
 	markdown.WriteString(fmt.Sprintf("\n\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
+	return markdown.String()
+}
+
+// convertRepoToMarkdown converts a repository object to Markdown format
+func (s *ChromeScraper) convertRepoToMarkdown(repo map[string]interface{}) string {
+	var markdown strings.Builder
+
+	// Repository name and owner
+	if name, ok := repo["name"].(string); ok {
+		markdown.WriteString(fmt.Sprintf("# %s\n\n", name))
+	}
+
+	if owner, ok := repo["owner"].(map[string]interface{}); ok {
+		if ownerName, ok := owner["login"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("**Owner:** @%s\n\n", ownerName))
+		}
+	}
+
+	// Description
+	if description, ok := repo["description"].(string); ok && description != "" {
+		markdown.WriteString(fmt.Sprintf("**Description:**\n\n%s\n\n", description))
+	}
+
+	// URL (html_url or web_url)
+	if htmlURL, ok := repo["html_url"].(string); ok {
+		markdown.WriteString(fmt.Sprintf("**URL:** %s\n\n", htmlURL))
+	} else if webURL, ok := repo["web_url"].(string); ok {
+		markdown.WriteString(fmt.Sprintf("**URL:** %s\n\n", webURL))
+	}
+
+	// Stars, forks, open issues
+	if stars, ok := repo["stargazers_count"].(float64); ok {
+		markdown.WriteString(fmt.Sprintf("**⭐ Stars:** %d\n", int(stars)))
+	}
+	if forks, ok := repo["forks_count"].(float64); ok {
+		markdown.WriteString(fmt.Sprintf("**🍴 Forks:** %d\n", int(forks)))
+	}
+	if openIssues, ok := repo["open_issues_count"].(float64); ok {
+		markdown.WriteString(fmt.Sprintf("**📋 Open Issues:** %d\n", int(openIssues)))
+	}
+	if watchers, ok := repo["watchers_count"].(float64); ok {
+		markdown.WriteString(fmt.Sprintf("**👀 Watchers:** %d\n", int(watchers)))
+	}
+
+	// Language
+	if language, ok := repo["language"].(string); ok && language != "" {
+		markdown.WriteString(fmt.Sprintf("\n**Language:** %s\n", language))
+	}
+
+	// Created/Updated dates
+	if createdAt, ok := repo["created_at"].(string); ok && len(createdAt) > 10 {
+		markdown.WriteString(fmt.Sprintf("\n**Created:** %s", createdAt[:10]))
+	}
+	if updatedAt, ok := repo["updated_at"].(string); ok && len(updatedAt) > 10 {
+		markdown.WriteString(fmt.Sprintf(" | **Updated:** %s", updatedAt[:10]))
+	}
+
+	// License
+	if license, ok := repo["license"].(map[string]interface{}); ok {
+		if licenseName, ok := license["name"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("\n**License:** %s", licenseName))
+		} else if licenseKey, ok := license["key"].(string); ok {
+			markdown.WriteString(fmt.Sprintf("\n**License:** %s", licenseKey))
+		}
+	}
+
+	markdown.WriteString("\n\n")
+
+	// Homepage
+	if homepage, ok := repo["homepage"].(string); ok && homepage != "" {
+		markdown.WriteString(fmt.Sprintf("**Homepage:** %s\n\n", homepage))
+	}
+
+	// Is fork/archived
+	if isFork, ok := repo["fork"].(bool); ok && isFork {
+		markdown.WriteString("**⚠️ This is a fork**\n\n")
+	}
+	if isArchived, ok := repo["archived"].(bool); ok && isArchived {
+		markdown.WriteString("**📦 This repository is archived**\n\n")
+	}
+
+	// Token estimate
+	markdown.WriteString(fmt.Sprintf("\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
 	return markdown.String()
 }
 

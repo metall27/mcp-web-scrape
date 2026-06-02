@@ -56,9 +56,23 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 }
 
 func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
+	// Validate input parameters
+	if args == nil {
+		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string). Example: smart_extract(html=\"<html>...</html>\", mode=\"general\")")
+	}
+
 	html, ok := args["html"].(string)
 	if !ok {
-		return nil, fmt.Errorf("html is required and must be a string")
+		// Provide helpful error message with example
+		if htmlVal, exists := args["html"]; exists {
+			return nil, fmt.Errorf("smart_extract 'html' parameter must be a string, got %T. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")", htmlVal)
+		}
+		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string) - the HTML content to extract from. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")")
+	}
+
+	// Validate html is not empty
+	if strings.TrimSpace(html) == "" {
+		return nil, fmt.Errorf("smart_extract 'html' parameter cannot be empty. Please provide the HTML content you want to extract information from")
 	}
 
 	mode := "general"
