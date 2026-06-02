@@ -228,6 +228,10 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
 	startTime := time.Now()
 
+	s.logger.Info().
+		Str("url", urlStr).
+		Msg("🚀 Starting scrape for URL")
+
 	// Apply tool-level timeout for scraping operations
 	toolTimeout := s.browserCfg.ToolTimeout
 	if toolTimeout == 0 {
@@ -294,10 +298,33 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	// 2.5. GitHub HTTP Fallback (before Chrome retry loop)
 	// GitHub uses advanced bot detection that defeats Chrome headless scraping
 	// Use special GitHub endpoints that work without authentication
-	if strings.Contains(urlStr, "github.com") && !hasActions {
+	// 2.5. Platform HTTP Fallback (before Chrome retry loop)
+	// GitHub, GitLab, and Gitea use advanced bot detection that defeats Chrome headless scraping
+	// Use special API endpoints that work without authentication
+	isGitHub := strings.Contains(urlStr, "github.com")
+	isGitea := regexp.MustCompile(`gitea\.[^/]+|gitea\.(com|io)`).MatchString(urlStr)
+	isGitLab := strings.Contains(urlStr, "gitlab.com") || regexp.MustCompile(`https://[^/]+/[^/]+/[^/]+/-/`).MatchString(urlStr)
+
+	s.logger.Info().
+		Str("url", urlStr).
+		Bool("is_github", isGitHub).
+		Bool("is_gitea", isGitea).
+		Bool("is_gitlab", isGitLab).
+		Bool("has_actions", hasActions).
+		Msg("🔍 Platform detection debug")
+
+	if (isGitHub || isGitea || isGitLab) && !hasActions {
+		platform := "GitHub"
+		if isGitea {
+			platform = "Gitea"
+		} else if isGitLab {
+			platform = "GitLab"
+		}
+
 		s.logger.Info().
 			Str("url", urlStr).
-			Msg("🎯 GitHub detected - using intelligent GitHub API mode")
+			Str("platform", platform).
+			Msg("🎯 Platform detected - using intelligent API mode")
 
 		// Check if smart catalog mode is requested
 		if strings.Contains(urlStr, "?mode=catalog") || strings.Contains(urlStr, "&mode=catalog") {
@@ -1068,8 +1095,10 @@ func (s *ChromeScraper) convertPlatformURL(urlStr string) string {
 	}
 
 	// Check for common Gitea instances or Gitea-specific URL patterns
+	// This includes official Gitea (gitea.com, gitea.io) and self-hosted instances
 	if strings.Contains(urlStr, "gitea.com") || strings.Contains(urlStr, "gitea.io") ||
-		regexp.MustCompile(`https://[^/]+/[^/]+/[^/]+/(issues|pulls)`).MatchString(urlStr) {
+		regexp.MustCompile(`gitea\.[^/]+`).MatchString(urlStr) || // Matches gitea.example.com
+		regexp.MustCompile(`https://[^/]+/[^/]+/[^/]+/(issues|pulls|releases|commit)`).MatchString(urlStr) {
 		return s.convertGiteaURL(urlStr)
 	}
 

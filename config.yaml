@@ -46,6 +46,13 @@ rag:
   max_retries: 3                 # Retry attempts for RAG requests
   retry_delay: 2                 # Seconds between retries
 
+github:
+  token: ""  # GitHub personal access token (optional, but recommended)
+             # Increases API rate limit from 60/hour to 5000/hour
+             # Get token: https://github.com/settings/tokens
+             # Required scopes: public_repo (for public repos) or repo (for private)
+             # Can also be set via GITHUB_TOKEN environment variable
+
 user_agent:
   enabled: true                  # Enable User-Agent rotation
   custom_user_agents: []         # Add custom UAs here if needed
@@ -62,7 +69,7 @@ rate_limit:
   burst_size: 20
 
 cache:
-  enabled: true
+  enabled: false  # Disabled for testing Gitea integration
   ttl: 15m  # default TTL
   ttl_by_type:
     text/html: 5m                # HTML быстро устаревает
@@ -73,5 +80,5 @@ cache:
   cleanup_interval: 10m
 
 log:
-  level: info  # debug, info, warn, error
+  level: debug  # debug, info, warn, error
   pretty: true
