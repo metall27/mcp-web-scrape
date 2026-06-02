@@ -140,6 +140,11 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
+	// Override GitHub token from environment variable if set
+	if ghToken := v.GetString("GITHUB_TOKEN"); ghToken != "" {
+		config.GitHub.Token = ghToken
+	}
+
 	return config, nil
 }
 

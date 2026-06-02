@@ -1,0 +1,85 @@
+server:
+  host: 0.0.0.0
+  port: 8192
+  read_timeout: 120s  # Increased to accommodate long-running scrape operations
+  write_timeout: 120s  # Increased to accommodate long-running scrape operations
+
+mcp:
+  endpoint: /mcp
+  api_key_header: X-API-Key
+
+scraping:
+  user_agent: "MCP-Web-Scrape/1.0"
+  timeout: 30s
+  max_redirects: 10
+  max_body_size: 10485760  # 10MB
+  allowed_domains: []  # Empty means all domains allowed
+
+browser:
+  enabled: true
+  timeout: 30s
+  wait_time: 1s
+  viewport_width: 1920
+  viewport_height: 1080
+  headless: true
+  block_images: false
+  disable_gpu: true
+  no_sandbox: true
+  max_tabs: 10
+  polling:
+    max_attempts: 60               # Maximum polling attempts for body detection (6 seconds total)
+    interval: 100ms                # Polling interval between attempts
+    timeout: 6s                    # Total timeout for polling operations
+  tool_timeout: 120s               # Tool-level timeout for scraping operations
+  block_detection: true            # Enable Cloudflare/captcha detection (triggers HTTP fallback)
+  max_retries: 2                   # Maximum retries with different proxies on blocking (0 = no retry)
+
+search:
+  provider: duckduckgo  # duckduckgo, brave, bing
+  api_key: ""  # Required for brave/bing
+  max_results: 10
+  safe_search: true
+
+rag:
+  base_url: https://rag.0x27.ru  # RAG service URL
+  enabled: false                 # Disabled until RAG server is stable
+  max_retries: 3                 # Retry attempts for RAG requests
+  retry_delay: 2                 # Seconds between retries
+
+github:
+  token: "YOUR_GITHUB_TOKEN_HERE"  # GitHub personal access token (optional, but recommended)
+                                  # Increases API rate limit from 60/hour to 5000/hour
+                                  # Get token: https://github.com/settings/tokens
+                                  # Required scopes: public_repo (for public repos) or repo (for private)
+                                  # Can also be set via GITHUB_TOKEN environment variable
+                                  # IMPORTANT: Replace this with your actual token or use env var
+
+user_agent:
+  enabled: true                  # Enable User-Agent rotation
+  custom_user_agents: []         # Add custom UAs here if needed
+
+proxy:
+  enabled: false                 # Enable proxy rotation (disabled by default)
+  proxies: []                    # List of proxy URLs: ["http://user:pass@host:port", "socks5://host:port"]
+  test_on_startup: false         # Test proxies on startup
+  test_timeout: 10               # Proxy test timeout in seconds
+
+rate_limit:
+  enabled: true
+  requests_per_second: 10.0
+  burst_size: 20
+
+cache:
+  enabled: true
+  ttl: 15m  # default TTL
+  ttl_by_type:
+    text/html: 5m                # HTML быстро устаревает
+    application/json: 10m        # API ответы
+    text/css: 1h                 # CSS статику
+    application/javascript: 1h   # JS статику
+    image/*: 1h                  # Изображения
+  cleanup_interval: 10m
+
+log:
+  level: info  # debug, info, warn, error
+  pretty: true

@@ -31,6 +31,7 @@ go.work
 Thumbs.db
 
 # Config
+config.yaml
 config.local.yaml
 .env
 .env.local
