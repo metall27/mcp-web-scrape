@@ -6,9 +6,15 @@
 *.dylib
 mcp-web-scrape
 server
+main
+test_build
 
 # Test binary, built with `go test -c`
 *.test
+
+# Temporary test files
+test_*.go
+test_*.md
 
 # Output of the go coverage tool
 *.out
