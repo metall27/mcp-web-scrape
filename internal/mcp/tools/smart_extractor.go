@@ -3,22 +3,26 @@ package tools
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
+	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
+	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
 	"github.com/rs/zerolog"
 )
 
 type SmartExtractorTool struct {
 	*BaseTool
-	logger zerolog.Logger
+	logger     zerolog.Logger
+	cache      *cache.Cache
+	uaRotator  *useragent.Rotator
+	proxy      *proxy.Rotator
+	httpScraper *HTTPScraper
 }
 
-func NewSmartExtractorTool() *SmartExtractorTool {
+func NewSmartExtractorTool(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *SmartExtractorTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -50,7 +54,11 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 		tool := &SmartExtractorTool{
-			logger: logger.Get(),
+			logger:      logger.Get(),
+			cache:       cache,
+			uaRotator:   uaRotator,
+			proxy:       proxy,
+			httpScraper: NewHTTPScraper(cache, uaRotator, proxy),
 		}
 		return tool.execute(ctx, args)
 	}
@@ -570,36 +578,25 @@ func getMapKeys(m map[string]interface{}) []string {
 	return keys
 }
 
-// scrapeURL performs a simple HTTP GET request to fetch HTML content
+// scrapeURL performs HTTP scraping to fetch HTML content using existing infrastructure
 func (t *SmartExtractorTool) scrapeURL(ctx context.Context, urlStr string) (string, error) {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	t.logger.Info().Str("url", urlStr).Msg("smart_extract scraping URL")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	// Use HTTP scraper with caching and proper headers
+	result, err := t.httpScraper.Scrape(ctx, urlStr, Options{
+		OutputFormat: "html", // Get raw HTML for extraction
+	})
+
 	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
+		return "", fmt.Errorf("HTTP scraping failed: %w", err)
 	}
 
-	// Set realistic headers
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	t.logger.Info().
+		Str("url", urlStr).
+		Int("html_size", len(result.HTML)).
+		Str("method", result.Method).
+		Bool("from_cache", result.FromCache).
+		Msg("smart_extract successfully scraped URL")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	return string(body), nil
+	return result.HTML, nil
 }

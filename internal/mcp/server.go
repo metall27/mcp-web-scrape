@@ -99,7 +99,7 @@ func (s *Server) registerDefaultTools() error {
 		tools.NewScrapeTool(s.cache, s.uaRotator, s.proxyRotator), // Fast HTTP scraping for static pages
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
-		tools.NewSmartExtractorTool(),   // Content extraction
+		tools.NewSmartExtractorTool(s.cache, s.uaRotator, s.proxyRotator), // Content extraction with URL support
 	)
 
 	for _, tool := range defaultTools {
