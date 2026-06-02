@@ -3,8 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/rs/zerolog"
@@ -21,7 +24,11 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 		"properties": map[string]interface{}{
 			"html": map[string]interface{}{
 				"type":        "string",
-				"description": "HTML content to extract from",
+				"description": "HTML content to extract from (use this OR url)",
+			},
+			"url": map[string]interface{}{
+				"type":        "string",
+				"description": "URL to scrape and extract from (tool will download content automatically - use this OR html)",
 			},
 			"mode": map[string]interface{}{
 				"type":        "string",
@@ -35,7 +42,10 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 				"default":     10,
 			},
 		},
-		"required": []string{"html"},
+		"oneOf": []map[string]interface{}{
+			{"required": []string{"html"}},
+			{"required": []string{"url"}},
+		},
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
@@ -48,7 +58,7 @@ func NewSmartExtractorTool() *SmartExtractorTool {
 	return &SmartExtractorTool{
 		BaseTool: NewBaseTool(
 			"smart_extract",
-			"Extracts key information FROM ALREADY SCRAPED content to save tokens. Use AFTER scrape_with_js when content is too large (>10KB). Modes: news=headlines, tech=API/docs, finance=reports, legal=docs, medical=health, clean_text=main content, links=URLs. IMPORTANT: For large responses, always use smart_extract to get key facts before answering.",
+			"Extracts key information from web content to save tokens. Two ways to use: 1) Pass 'url' parameter (tool will scrape automatically) - RECOMMENDED for convenience, or 2) Pass 'html' parameter (use AFTER scrape_with_js when content is already scraped). Modes: news=headlines, tech=API/docs, finance=reports, legal=docs, medical=health, clean_text=main content, links=URLs. IMPORTANT: For large responses, always use smart_extract to get key facts before answering.",
 			schema,
 			handler,
 		),
@@ -64,26 +74,41 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 
 	// Validate input parameters
 	if args == nil {
-		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string). Example: smart_extract(html=\"<html>...</html>\", mode=\"general\")")
+		return nil, fmt.Errorf("smart_extract requires either 'html' or 'url' parameter. Example: smart_extract(url=\"https://example.com\", mode=\"general\")")
 	}
 
-	html, ok := args["html"].(string)
-	if !ok {
-		// Check if client might be using a different parameter name
+	var html string
+	var err error
+
+	// Check if url parameter is provided
+	if urlStr, ok := args["url"].(string); ok {
+		t.logger.Info().Str("url", urlStr).Msg("smart_extract called with url parameter, will scrape first")
+
+		// Use the unified scraper to get content
+		html, err = t.scrapeURL(ctx, urlStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scrape URL: %w", err)
+		}
+
+		t.logger.Info().
+			Str("url", urlStr).
+			Int("html_length", len(html)).
+			Msg("Successfully scraped URL for smart_extract")
+	} else if htmlVal, ok := args["html"].(string); ok {
+		// HTML parameter provided directly
+		html = htmlVal
+	} else {
+		// Neither url nor html provided
 		if len(args) == 0 {
-			return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string) - but received NO parameters. You must call it with: smart_extract(html=\"<html>content</html>\", mode=\"general\")")
+			return nil, fmt.Errorf("smart_extract requires either 'html' or 'url' parameter. Example: smart_extract(url=\"https://example.com\", mode=\"general\") or smart_extract(html=\"<html>content</html>\", mode=\"general\")")
 		}
 
 		// Log what we received instead
 		t.logger.Warn().
 			Interface("received_args", args).
-			Msg("smart_extract called without 'html' parameter")
+			Msg("smart_extract called without 'html' or 'url' parameter")
 
-		// Provide helpful error message with example
-		if htmlVal, exists := args["html"]; exists {
-			return nil, fmt.Errorf("smart_extract 'html' parameter must be a string, got %T. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")", htmlVal)
-		}
-		return nil, fmt.Errorf("smart_extract requires an 'html' parameter (string) - the HTML content to extract from. Received: %v. Example: smart_extract(html=\"<html>content</html>\", mode=\"general\")", getMapKeys(args))
+		return nil, fmt.Errorf("smart_extract requires either 'html' or 'url' parameter - received: %v. Example: smart_extract(url=\"https://example.com\", mode=\"general\")", getMapKeys(args))
 	}
 
 	// Validate html is not empty
@@ -543,4 +568,38 @@ func getMapKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// scrapeURL performs a simple HTTP GET request to fetch HTML content
+func (t *SmartExtractorTool) scrapeURL(ctx context.Context, urlStr string) (string, error) {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	// Set realistic headers
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return string(body), nil
 }
