@@ -98,6 +98,7 @@ func main() {
 			BurstSize:         cfg.RateLimit.BurstSize,
 			Enabled:           cfg.RateLimit.Enabled,
 		},
+		GitHub: cfg.GitHub,
 		Cache:       cacheInstance,
 		BrowserPool: browserPool,
 		RAG:         cfg.RAG,

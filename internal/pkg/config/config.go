@@ -19,6 +19,7 @@ type Config struct {
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Log       LogConfig       `mapstructure:"log"`
+	GitHub    GitHubConfig    `mapstructure:"github"`
 }
 
 type ServerConfig struct {
@@ -97,6 +98,10 @@ type RateLimitConfig struct {
 	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
 	BurstSize         int     `mapstructure:"burst_size"`
 	Enabled           bool    `mapstructure:"enabled"`
+}
+
+type GitHubConfig struct {
+	Token string `mapstructure:"token"` // GitHub personal access token for API requests
 }
 
 type CacheConfig struct {

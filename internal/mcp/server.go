@@ -42,6 +42,7 @@ type Config struct {
 	Browser         config.BrowserConfig
 	UARotator       *useragent.Rotator
 	ProxyRotator    *proxy.Rotator
+	GitHub          config.GitHubConfig
 }
 
 type RateLimitConfig struct {
@@ -94,7 +95,7 @@ func (s *Server) registerDefaultTools() error {
 
 	// Always register these tools
 	defaultTools = append(defaultTools,
-		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator), // FALLBACK: Scrape only if rag_search empty
+		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator, s.config.GitHub), // FALLBACK: Scrape only if rag_search empty
 		tools.NewScrapeTool(s.cache, s.uaRotator, s.proxyRotator), // Fast HTTP scraping for static pages
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing

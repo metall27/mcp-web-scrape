@@ -195,7 +195,7 @@ func TestHTTPScraperInterface(t *testing.T) {
 }
 
 func TestChromeScraperInterface(t *testing.T) {
-	scraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil)
+	scraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
 
 	if scraper.Name() != "Chrome" {
 		t.Errorf("Expected name 'Chrome', got '%s'", scraper.Name())
@@ -212,7 +212,7 @@ func TestChromeScraperInterface(t *testing.T) {
 
 func TestUnifiedScraperInterface(t *testing.T) {
 	httpScraper := NewHTTPScraper(nil, nil, nil)
-	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, nil, nil)
+	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
 
 	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper})
 

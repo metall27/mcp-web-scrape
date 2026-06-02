@@ -22,10 +22,11 @@ type ScrapeJSTool struct {
 	scraper    *ChromeScraper
 	cache      *cache.Cache
 	ragConfig  config.RAGConfig
+	githubCfg  config.GitHubConfig
 	logger     zerolog.Logger
 }
 
-func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator) *ScrapeJSTool {
+func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator, githubCfg config.GitHubConfig) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -145,20 +146,22 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 		tool := &ScrapeJSTool{
-			cache:     cache,
-			ragConfig: ragConfig,
-			logger:    logger.Get(),
+			cache:      cache,
+			ragConfig:  ragConfig,
+			githubCfg:  githubCfg,
+			logger:     logger.Get(),
 		}
-		tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator)
+		tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
 		return tool.Execute(ctx, args)
 	}
 
 	tool := &ScrapeJSTool{
 		cache:     cache,
 		ragConfig: ragConfig,
+		githubCfg: githubCfg,
 		logger:    logger.Get(),
 	}
-	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator)
+	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",

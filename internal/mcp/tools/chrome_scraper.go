@@ -26,14 +26,15 @@ import (
 
 // ChromeScraper скрапер для динамических сайтов (JavaScript)
 type ChromeScraper struct {
-	cache        *cache.Cache
-	browserPool  *browser.Pool
-	ragConfig    config.RAGConfig
-	browserCfg   config.BrowserConfig
-	uaRotator    *useragent.Rotator
-	proxy        *proxy.Rotator
-	converter    *converter.Converter
-	logger       zerolog.Logger
+	cache       *cache.Cache
+	browserPool *browser.Pool
+	ragConfig   config.RAGConfig
+	browserCfg  config.BrowserConfig
+	uaRotator   *useragent.Rotator
+	proxy       *proxy.Rotator
+	converter   *converter.Converter
+	githubCfg   config.GitHubConfig
+	logger      zerolog.Logger
 }
 
 // scrapeContext holds the context for a single scrape attempt (Phase 5: Retry Loop)
@@ -46,7 +47,7 @@ type scrapeContext struct {
 }
 
 // NewChromeScraper создает новый ChromeScraper
-func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator) *ChromeScraper {
+func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator, githubCfg config.GitHubConfig) *ChromeScraper {
 	return &ChromeScraper{
 		cache:       cache,
 		browserPool: browserPool,
@@ -55,6 +56,7 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 		uaRotator:   uaRotator,
 		proxy:       proxy,
 		converter:   converter.New(),
+		githubCfg:   githubCfg,
 		logger:      logger.Get(),
 	}
 }
@@ -381,8 +383,14 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			continue
 		}
 
-		// Ensure browser context is cleaned up after this attempt
-		defer scrapeCtx.browserCancel()
+		// CRITICAL: Clean up browser context at the end of each iteration
+		// NOT using defer here to prevent resource accumulation in retry loop
+		cleanupNeeded := true
+		defer func() {
+			if cleanupNeeded {
+				scrapeCtx.browserCancel()
+			}
+		}()
 
 		// Perform scrape attempt
 		attemptResult := s.scrapeAttempt(toolCtx, urlStr, scrapeCtx, opts)
@@ -401,6 +409,9 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			}
 
 			lastError = attemptResult.err
+			// Clean up before continuing to next iteration
+			scrapeCtx.browserCancel()
+			cleanupNeeded = false
 			continue
 		}
 
@@ -426,11 +437,17 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 					Int("total_attempts", attempt+1).
 					Msg("Phase 5: All retry attempts blocked, falling back to HTTP")
 
+				// Clean up before returning
+				scrapeCtx.browserCancel()
+				cleanupNeeded = false
 				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, startTime)
 			}
 
 			// Otherwise, continue to next attempt with new proxy
 			lastError = fmt.Errorf("blocking detected: %s", attemptResult.blockResult.BlockType)
+			// Clean up before continuing to next iteration
+			scrapeCtx.browserCancel()
+			cleanupNeeded = false
 			continue
 		}
 
@@ -452,7 +469,9 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				Msg("Proxy marked as successful")
 		}
 
-		// Break out of retry loop
+		// Clean up before breaking out of loop
+		scrapeCtx.browserCancel()
+		cleanupNeeded = false
 		break
 	}
 
@@ -1102,6 +1121,12 @@ func (s *ChromeScraper) githubAPIFallback(ctx context.Context, urlStr, userAgent
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
+	// Add GitHub token if available (increases rate limit from 60/hour to 5000/hour)
+	if s.githubCfg.Token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("token %s", s.githubCfg.Token))
+		s.logger.Debug().Msg("Using GitHub token for API request")
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GitHub API request failed: %w", err)
@@ -1349,15 +1374,31 @@ func (s *ChromeScraper) githubSmartCatalog(urlStr string) (*SmartGitHubResponse,
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
+	// Add GitHub token if available (increases rate limit from 60/hour to 5000/hour)
+	if s.githubCfg.Token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("token %s", s.githubCfg.Token))
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GitHub API catalog failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	// Check response status
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("GitHub API catalog failed with status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read GitHub API catalog response: %w", err)
+	}
+
 	var releases []map[string]interface{}
-	json.Unmarshal(body, &releases)
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return nil, fmt.Errorf("failed to parse GitHub API catalog JSON: %w", err)
+	}
 
 	// Build compact catalog
 	catalog := &SmartGitHubResponse{
