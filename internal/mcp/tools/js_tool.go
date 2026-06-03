@@ -151,8 +151,9 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			githubCfg:  githubCfg,
 			logger:     logger.Get(),
 		}
-		chromeScraper := NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
-		tool.scraper = NewRetryScraper(chromeScraper, DefaultRetryConfig)
+		// ChromeScraper has its own retry loop and HTTP fallback
+		// No need for RetryScraper wrapper
+		tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
 		return tool.Execute(ctx, args)
 	}
 
@@ -162,8 +163,9 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 		githubCfg: githubCfg,
 		logger:    logger.Get(),
 	}
-	chromeScraper := NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
-	tool.scraper = NewRetryScraper(chromeScraper, DefaultRetryConfig)
+	// ChromeScraper has its own retry loop and HTTP fallback
+	// No need for RetryScraper wrapper
+	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
