@@ -80,7 +80,8 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		userAgent = s.uaRotator.Get()
 	}
 	if userAgent == "" {
-		userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+		// Use real Chrome UA instead of MCP-Web-Scrape
+		userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 	}
 	scrapeCtx.userAgent = userAgent
 
@@ -385,7 +386,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			userAgent = s.uaRotator.Get()
 		}
 		if userAgent == "" {
-			userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 		}
 
 		return s.platformAPIFallback(toolCtx, platformURL, userAgent, startTime)
@@ -530,7 +531,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			userAgent = s.uaRotator.Get()
 		}
 		if userAgent == "" {
-			userAgent = "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)"
+			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 		}
 
 		return s.httpFallback(ctx, urlStr, userAgent, startTime)

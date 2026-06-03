@@ -155,7 +155,7 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 	} else if s.uaRotator != nil {
 		req.Header.Set("User-Agent", s.uaRotator.Get())
 	} else {
-		req.Header.Set("User-Agent", "MCP-Web-Scrape/1.0 (+https://github.com/metall/mcp-web-scrape)")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 	}
 
 	// 7. Log request
@@ -455,7 +455,7 @@ func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalU
 	// Set headers for platform APIs
 	if platform == "GitHub" {
 		req.Header.Set("Accept", "application/vnd.github.v3+json")
-		req.Header.Set("User-Agent", "MCP-Web-Scrape/1.0")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 	} else if platform == "GitLab" {
 		req.Header.Set("Accept", "application/json")
 	} else if platform == "Gitea" {
