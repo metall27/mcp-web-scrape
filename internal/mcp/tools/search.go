@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/rs/zerolog"
 )
@@ -174,17 +176,98 @@ func (t *SearchTool) searchDuckDuckGo(ctx context.Context, query string, maxResu
 	return results, nil
 }
 
-func (t *SearchTool) parseDuckDuckGoHTML(html string, maxResults int) []SearchResult {
+func (t *SearchTool) parseDuckDuckGoHTML(htmlContent string, maxResults int) []SearchResult {
 	var results []SearchResult
 
-	// Very basic HTML parsing - in production, use goquery
-	// This is just a placeholder to show the structure
-	// Actual implementation would parse the HTML properly
+	// Parse HTML with goquery
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
+	if err != nil {
+		t.logger.Error().Err(err).Msg("Failed to parse HTML with goquery")
+		return results
+	}
 
-	// For now, return empty results with a note
-	t.logger.Warn().Msg("DuckDuckGo HTML parsing is simplified - use goquery for production")
+	// DuckDuckGo HTML results structure:
+	// Each result is in a div with class "result"
+	// Title: .result__a
+	// URL: .result__a href attribute
+	// Snippet: .result__snippet
+
+	doc.Find(".result").Each(func(i int, s *goquery.Selection) {
+		if len(results) >= maxResults {
+			return
+		}
+
+		// Extract title and URL
+		titleLink := s.Find(".result__a").First()
+		title := strings.TrimSpace(titleLink.Text())
+		url, _ := titleLink.Attr("href")
+
+		// Clean DuckDuckGo redirect URLs if present
+		url = t.cleanDuckDuckGoURL(url)
+
+		// Extract snippet
+		snippet := strings.TrimSpace(s.Find(".result__snippet").First().Text())
+
+		// Only add if we have at least a title and URL
+		if title != "" && url != "" {
+			results = append(results, SearchResult{
+				Title:   title,
+				URL:     url,
+				Snippet: snippet,
+				Source:  "duckduckgo",
+			})
+		}
+	})
+
+	t.logger.Info().
+		Int("extracted", len(results)).
+		Msg("DuckDuckGo results extracted")
 
 	return results
+}
+
+// cleanDuckDuckGoURL removes DuckDuckGo redirect wrapper from URLs
+func (t *SearchTool) cleanDuckDuckGoURL(rawURL string) string {
+	if rawURL == "" {
+		return rawURL
+	}
+
+	// DuckDuckGo uses redirect URLs like:
+	// /l/?uddg=https://example.com&...
+	// https://duckduckgo.com/l/?uddg=https://example.com&...
+
+	// Parse the URL to extract query parameters
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+
+	// Check if this is a DuckDuckGo redirect URL
+	if parsedURL.Host == "duckduckgo.com" && parsedURL.Path == "/l/" {
+		// Extract the 'uddg' parameter which contains the real URL
+		uddgValue := parsedURL.Query().Get("uddg")
+		if uddgValue != "" {
+			return uddgValue
+		}
+	}
+
+	// Also handle relative URLs: /l/?uddg=...
+	if strings.HasPrefix(rawURL, "/l/?uddg=") {
+		parsedURL, err = url.Parse("https://duckduckgo.com" + rawURL)
+		if err == nil {
+			uddgValue := parsedURL.Query().Get("uddg")
+			if uddgValue != "" {
+				return uddgValue
+			}
+		}
+	}
+
+	// Handle URLs that start with // (protocol-relative)
+	if strings.HasPrefix(rawURL, "//") {
+		return "https:" + rawURL
+	}
+
+	return rawURL
 }
 
 // Brave Search API
