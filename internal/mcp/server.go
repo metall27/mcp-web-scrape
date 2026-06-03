@@ -97,6 +97,7 @@ func (s *Server) registerDefaultTools() error {
 	defaultTools = append(defaultTools,
 		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator, s.config.GitHub), // FALLBACK: Scrape only if rag_search empty
 		tools.NewScrapeTool(s.cache, s.uaRotator, s.proxyRotator), // Fast HTTP scraping for static pages
+		tools.NewDiagnosticURLTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator, s.config.GitHub), // Diagnostic tool
 		tools.NewSearchTool(),           // Web search
 		tools.NewParseHTMLTool(),        // HTML parsing
 		tools.NewSmartExtractorTool(s.cache, s.uaRotator, s.proxyRotator), // Content extraction with URL support

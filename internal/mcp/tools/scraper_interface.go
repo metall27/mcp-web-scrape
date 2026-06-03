@@ -10,7 +10,7 @@ import (
 // Scraper интерфейс для всех скраперов
 type Scraper interface {
 	// Scrape выполняет скрапинг URL
-	Scrape(ctx context.Context, url string, opts Options) (*Result, error)
+	Scrape(ctx context.Context, url string, opts Options) (*Result, *ScrapeError)
 
 	// Name возвращает название скрапера
 	Name() string
@@ -61,7 +61,20 @@ type Options struct {
 	Actions []browser.Action
 }
 
-// Result общий результат для всех скраперов
+// ScrapeError подробная информация об ошибке скрапинга
+type ScrapeError struct {
+	Code     string   // "timeout", "blocked", "empty_response", "captcha"
+	Message  string   // Человекочитаемое сообщение
+	Hints    []string // Подсказки: ["try_screenshot", "diagnostic_url"]
+	CanRetry bool     // Можно ли делать retry
+}
+
+// Error реализует error interface
+func (e *ScrapeError) Error() string {
+	return e.Message
+}
+
+// Result общий результат для всех скраперов (только успешные случаи)
 type Result struct {
 	// Content
 	HTML string

@@ -225,7 +225,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 
 
 // Scrape реализует интерфейс Scraper
-func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
+func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, *ScrapeError) {
 	startTime := time.Now()
 
 	s.logger.Info().
@@ -243,12 +243,22 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 
 	// 0. Validate browser pool (CRITICAL for Chrome scraper)
 	if s.browserPool == nil {
-		return nil, fmt.Errorf("browser pool is not initialized - Chrome scraping is not available in this environment")
+		return nil, &ScrapeError{
+			Code:     "browser_not_available",
+			Message:  "Browser pool is not initialized - Chrome scraping is not available in this environment",
+			Hints:    []string{"use_http_scraper"},
+			CanRetry: false,
+		}
 	}
 
 	// 1. Validate URL
 	if _, err := ValidateURL(urlStr); err != nil {
-		return nil, err
+		return nil, &ScrapeError{
+			Code:     "invalid_url",
+			Message:  err.Error(),
+			Hints:    []string{},
+			CanRetry: false,
+		}
 	}
 
 	// 2. Check cache (bypass if actions present)
@@ -332,7 +342,12 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 
 			catalog, err := s.githubSmartCatalog(urlStr)
 			if err != nil {
-				return nil, fmt.Errorf("github catalog failed: %w", err)
+				return nil, &ScrapeError{
+					Code:     "catalog_error",
+					Message:  fmt.Sprintf("GitHub catalog failed: %v", err),
+					Hints:    []string{"retry", "try_without_catalog"},
+					CanRetry: true,
+				}
 			}
 
 			// Convert catalog to markdown
@@ -1130,7 +1145,7 @@ func (s *ChromeScraper) convertPlatformURL(urlStr string) string {
 }
 
 // httpFallback performs HTTP fallback when Chrome fails
-func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
+func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, *ScrapeError) {
 	// Phase 4: HTTP Fallback - Use standard HTTP client for better compatibility
 	// For GitHub, we use standard HTTP client to avoid TLS fingerprinting issues
 	isGitHub := strings.Contains(urlStr, "github.com")
@@ -1215,7 +1230,12 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, &ScrapeError{
+			Code:     "request_error",
+			Message:  fmt.Sprintf("Failed to create HTTP request: %v", err),
+			Hints:    []string{},
+			CanRetry: false,
+		}
 	}
 
 	// Set realistic browser headers
@@ -1236,7 +1256,12 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 		if s.proxy != nil && s.proxy.IsEnabled() {
 			s.proxy.MarkFailure(err)
 		}
-		return nil, fmt.Errorf("HTTP fallback also failed: %w", err)
+		return nil, &ScrapeError{
+			Code:     "http_error",
+			Message:  fmt.Sprintf("HTTP fallback failed: %v", err),
+			Hints:    []string{"retry", "try_screenshot"},
+			CanRetry: true,
+		}
 	}
 	defer resp.Body.Close()
 
@@ -1244,7 +1269,12 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 		if s.proxy != nil && s.proxy.IsEnabled() {
 			s.proxy.MarkFailure(fmt.Errorf("HTTP %d", resp.StatusCode))
 		}
-		return nil, fmt.Errorf("HTTP fallback failed with status %d", resp.StatusCode)
+		return nil, &ScrapeError{
+			Code:     "http_error",
+			Message:  fmt.Sprintf("HTTP fallback failed with status %d", resp.StatusCode),
+			Hints:    []string{"retry", "check_url"},
+			CanRetry: true,
+		}
 	}
 
 	// Mark proxy as successful
@@ -1267,7 +1297,12 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read HTTP response: %w", err)
+		return nil, &ScrapeError{
+			Code:     "read_error",
+			Message:  fmt.Sprintf("Failed to read HTTP response: %v", err),
+			Hints:    []string{"retry"},
+			CanRetry: true,
+		}
 	}
 
 	// Check if response is too small
@@ -1308,7 +1343,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 }
 
 // platformAPIFallback performs optimized platform API scraping for GitHub, GitLab, and Gitea
-func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
+func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, *ScrapeError) {
 	// Detect platform from URL
 	var platform, acceptHeader, authPrefix string
 
@@ -1345,7 +1380,12 @@ func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAge
 
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create %s API request: %w", platform, err)
+		return nil, &ScrapeError{
+			Code:     "request_error",
+			Message:  fmt.Sprintf("Failed to create %s API request: %v", platform, err),
+			Hints:    []string{},
+			CanRetry: false,
+		}
 	}
 
 	// Set headers for platform API
@@ -1372,12 +1412,22 @@ func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAge
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s API request failed: %w", platform, err)
+		return nil, &ScrapeError{
+			Code:     "api_timeout",
+			Message:  fmt.Sprintf("%s API request failed: %v", platform, err),
+			Hints:    []string{"retry", "try_screenshot"},
+			CanRetry: true,
+		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s API failed with status %d", platform, resp.StatusCode)
+		return nil, &ScrapeError{
+			Code:     "api_error",
+			Message:  fmt.Sprintf("%s API failed with status %d", platform, resp.StatusCode),
+			Hints:    []string{"retry"},
+			CanRetry: true,
+		}
 	}
 
 	// Handle gzip compression
@@ -1394,7 +1444,12 @@ func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAge
 
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s API response: %w", platform, err)
+		return nil, &ScrapeError{
+			Code:     "read_error",
+			Message:  fmt.Sprintf("Failed to read %s API response: %v", platform, err),
+			Hints:    []string{"retry"},
+			CanRetry: true,
+		}
 	}
 
 	s.logger.Info().

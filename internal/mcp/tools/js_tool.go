@@ -19,7 +19,7 @@ import (
 
 type ScrapeJSTool struct {
 	*BaseTool
-	scraper    *ChromeScraper
+	scraper    Scraper
 	cache      *cache.Cache
 	ragConfig  config.RAGConfig
 	githubCfg  config.GitHubConfig
@@ -151,7 +151,8 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			githubCfg:  githubCfg,
 			logger:     logger.Get(),
 		}
-		tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
+		chromeScraper := NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
+		tool.scraper = NewRetryScraper(chromeScraper, DefaultRetryConfig)
 		return tool.Execute(ctx, args)
 	}
 
@@ -161,11 +162,12 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 		githubCfg: githubCfg,
 		logger:    logger.Get(),
 	}
-	tool.scraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
+	chromeScraper := NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
+	tool.scraper = NewRetryScraper(chromeScraper, DefaultRetryConfig)
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-			"Get content from URLs using headless Chrome. Works with all websites including GitHub, documentation, blogs, news. Returns Markdown by default (75% smaller, optimized for LLMs).\n\nGitHub Optimization:\n- Latest releases (default): Shows 5 recent releases (~750 tokens) - BEST for \"what's new?\" questions\n- All releases catalog: Add ?mode=catalog to see ALL releases with metadata (~5,500 tokens) - BEST for \"which release added X?\" questions\n- Flexible detail: Add ?releases=10 for detailed version history (~900 tokens)\n\nExample usage:\n- scrape_with_js?url=https://github.com/owner/repo/releases\n- scrape_with_js?url=https://github.com/owner/repo/releases?mode=catalog\n- scrape_with_js?url=https://github.com/owner/repo/releases?releases=10\n\nAuto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
+			"Full JavaScript rendering for dynamic sites. Returns HTML/Markdown. Use for: SPAs, dashboards, GitHub, interactive content.\n\nFeatures:\n- Automatic retry for timeout/empty errors (max 3 attempts with exponential backoff)\n- Smart error detection: timeout, blocked, captcha, partial content\n- Returns diagnostic hints when scraping fails\n\nError recovery:\n- If timeout occurs: automatic retry with increasing delays (1s, 2s, 3s)\n- If blocked: returns hints to try screenshot or proxy\n- If persistent errors: returns diagnostic suggestions\n\nGitHub Optimization:\n- Latest releases (default): Shows 5 recent releases (~750 tokens) - BEST for \"what's new?\" questions\n- All releases catalog: Add ?mode=catalog to see ALL releases with metadata (~5,500 tokens) - BEST for \"which release added X?\" questions\n- Flexible detail: Add ?releases=10 for detailed version history (~900 tokens)\n\nExample usage:\n- scrape_with_js?url=https://github.com/owner/repo/releases\n- scrape_with_js?url=https://github.com/owner/repo/releases?mode=catalog\n- scrape_with_js?url=https://github.com/owner/repo/releases?releases=10\n\nAuto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
 		schema,
 		handler,
 	)

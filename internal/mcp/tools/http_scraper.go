@@ -37,14 +37,19 @@ func NewHTTPScraper(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *pro
 }
 
 // Scrape реализует интерфейс Scraper
-func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
+func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, *ScrapeError) {
 	startTime := time.Now()
 
 	s.logger.Info().Msg("🚨 HTTPScraper.Scrape CALLED")
 
 	// 1. Validate URL
 	if _, err := ValidateURL(urlStr); err != nil {
-		return nil, err
+		return nil, &ScrapeError{
+			Code:     "invalid_url",
+			Message:  err.Error(),
+			Hints:    []string{},
+			CanRetry: false,
+		}
 	}
 
 	// 2. Check cache
@@ -132,7 +137,12 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 	// 5. Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ScrapeError{
+			Code:     "request_error",
+			Message:  fmt.Sprintf("Failed to create request: %v", err),
+			Hints:    []string{},
+			CanRetry: false,
+		}
 	}
 
 	// 6. Set headers
@@ -160,7 +170,21 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 		if s.proxy != nil && s.proxy.IsEnabled() {
 			s.proxy.MarkFailure(err)
 		}
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
+		// Check if timeout
+		if ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.DeadlineExceeded {
+			return nil, &ScrapeError{
+				Code:     "timeout",
+				Message:  "HTTP request timeout",
+				Hints:    []string{"try_screenshot", "diagnostic_url"},
+				CanRetry: true,
+			}
+		}
+		return nil, &ScrapeError{
+			Code:     "network_error",
+			Message:  fmt.Sprintf("HTTP request failed: %v", err),
+			Hints:    []string{"check_connectivity", "retry"},
+			CanRetry: true,
+		}
 	}
 	defer resp.Body.Close()
 
@@ -169,7 +193,21 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 		if s.proxy != nil && s.proxy.IsEnabled() {
 			s.proxy.MarkFailure(fmt.Errorf("HTTP %d", resp.StatusCode))
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		// Check for blocking
+		if resp.StatusCode == 403 || resp.StatusCode == 429 {
+			return nil, &ScrapeError{
+				Code:     "blocked",
+				Message:  fmt.Sprintf("HTTP %d: %s (possibly rate limited or blocked)", resp.StatusCode, resp.Status),
+				Hints:    []string{"try_screenshot", "use_proxy"},
+				CanRetry: false,
+			}
+		}
+		return nil, &ScrapeError{
+			Code:     "http_error",
+			Message:  fmt.Sprintf("HTTP %d: %s", resp.StatusCode, resp.Status),
+			Hints:    []string{"check_url", "retry"},
+			CanRetry: true,
+		}
 	}
 
 	// Mark proxy as successful
@@ -180,7 +218,12 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 	// 10. Read body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, &ScrapeError{
+			Code:     "read_error",
+			Message:  fmt.Sprintf("Failed to read response body: %v", err),
+			Hints:    []string{"retry"},
+			CanRetry: true,
+		}
 	}
 
 	// 11. Get content type
@@ -392,7 +435,7 @@ func (s *HTTPScraper) convertPlatformURL(urlStr string) string {
 }
 
 // platformAPIFallback performs platform-specific API scraping for GitHub, GitLab, and Gitea
-func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalURL, platform string, startTime time.Time) (*Result, error) {
+func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalURL, platform string, startTime time.Time) (*Result, *ScrapeError) {
 	// Create HTTP client for API request
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -401,7 +444,12 @@ func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalU
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create API request: %w", err)
+		return nil, &ScrapeError{
+			Code:     "request_error",
+			Message:  fmt.Sprintf("Failed to create API request: %v", err),
+			Hints:    []string{},
+			CanRetry: false,
+		}
 	}
 
 	// Set headers for platform APIs
@@ -422,19 +470,34 @@ func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalU
 	// Execute request
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
+		return nil, &ScrapeError{
+			Code:     "api_timeout",
+			Message:  fmt.Sprintf("API request failed: %v", err),
+			Hints:    []string{"retry", "try_screenshot"},
+			CanRetry: true,
+		}
 	}
 	defer resp.Body.Close()
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read API response: %w", err)
+		return nil, &ScrapeError{
+			Code:     "read_error",
+			Message:  fmt.Sprintf("Failed to read API response: %v", err),
+			Hints:    []string{"retry"},
+			CanRetry: true,
+		}
 	}
 
 	// Check for API errors
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("%s API failed with status %d", platform, resp.StatusCode)
+		return nil, &ScrapeError{
+			Code:     "api_error",
+			Message:  fmt.Sprintf("%s API failed with status %d", platform, resp.StatusCode),
+			Hints:    []string{"retry"},
+			CanRetry: true,
+		}
 	}
 
 	// Parse JSON response

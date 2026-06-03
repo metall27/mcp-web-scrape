@@ -14,7 +14,7 @@ import (
 
 type ScrapeTool struct {
 	*BaseTool
-	scraper   *HTTPScraper
+	scraper   Scraper
 	cache     *cache.Cache
 	uaRotator *useragent.Rotator
 	proxy     *proxy.Rotator
@@ -54,14 +54,15 @@ func NewScrapeTool(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *prox
 			proxy:     proxy,
 			logger:    logger.Get(),
 		}
-		tool.scraper = NewHTTPScraper(cache, uaRotator, proxy)
+		httpScraper := NewHTTPScraper(cache, uaRotator, proxy)
+		tool.scraper = NewRetryScraper(httpScraper, DefaultRetryConfig)
 		return tool.execute(ctx, args)
 	}
 
 	return &ScrapeTool{
 		BaseTool: NewBaseTool(
 			"scrape_url",
-			"Fast HTTP scraping without JavaScript. Use for simple static pages, blogs, news sites. For dynamic sites (GitHub, dashboards, SPA) use scrape_with_js instead. Automatically optimizes HTML to reduce tokens. Returns: url, status_code, html (20-50KB), size_bytes, duration_ms",
+			"Fast HTTP for static pages. Use for: blogs, news, documentation, simple HTML sites. Automatic retry for transient errors.\n\nFeatures:\n- Automatic retry for timeout/empty errors (max 3 attempts with exponential backoff)\n- Smart error detection: timeout, blocked, network errors\n- Returns diagnostic hints when scraping fails\n\nError recovery:\n- If timeout occurs: automatic retry with increasing delays (1s, 2s, 3s)\n- If blocked: returns hints to try screenshot or proxy\n- If persistent errors: returns diagnostic suggestions\n\nFor dynamic sites (GitHub, dashboards, SPA) use scrape_with_js instead. Automatically optimizes HTML to reduce tokens. Returns: url, status_code, html (20-50KB), size_bytes, duration_ms",
 			schema,
 			handler,
 		),
