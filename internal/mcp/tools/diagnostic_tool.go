@@ -15,8 +15,13 @@ import (
 
 type DiagnosticURLTool struct {
 	*BaseTool
-	httpScraper  *HTTPScraper
-	chromeScraper *ChromeScraper
+	cache         *cache.Cache
+	browserPool   *browser.Pool
+	ragConfig     config.RAGConfig
+	browserCfg    config.BrowserConfig
+	uaRotator     *useragent.Rotator
+	proxyRotator  *proxy.Rotator
+	githubCfg     config.GitHubConfig
 }
 
 func NewDiagnosticURLTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator, githubCfg config.GitHubConfig) *DiagnosticURLTool {
@@ -38,12 +43,18 @@ func NewDiagnosticURLTool(cache *cache.Cache, browserPool *browser.Pool, ragConf
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 		tool := &DiagnosticURLTool{}
-		tool.httpScraper = NewHTTPScraper(cache, uaRotator, proxyRotator)
-		tool.chromeScraper = NewChromeScraper(cache, browserPool, ragConfig, browserCfg, uaRotator, proxyRotator, githubCfg)
 		return tool.Execute(ctx, args)
 	}
 
-	tool := &DiagnosticURLTool{}
+	tool := &DiagnosticURLTool{
+		cache:         cache,
+		browserPool:   browserPool,
+		ragConfig:     ragConfig,
+		browserCfg:    browserCfg,
+		uaRotator:     uaRotator,
+		proxyRotator:  proxyRotator,
+		githubCfg:     githubCfg,
+	}
 
 	tool.BaseTool = NewBaseTool(
 		"diagnostic_url",
@@ -64,17 +75,15 @@ func (t *DiagnosticURLTool) Execute(ctx context.Context, args map[string]interfa
 		}, nil
 	}
 
-	userAgent := ""
-	if ua, ok := args["user_agent"].(string); ok {
-		userAgent = ua
-	}
+	// Create scrapers for diagnostic (they need to be created per request)
+	// Note: We use the configuration stored when tool was created
+	httpScraper := NewHTTPScraper(t.cache, t.uaRotator, t.proxyRotator)
+	chromeScraper := NewChromeScraper(t.cache, t.browserPool, t.ragConfig, t.browserCfg, t.uaRotator, t.proxyRotator, t.githubCfg)
 
 	// Run diagnostic
 	startTime := time.Now()
-	result := DiagnosticURL(ctx, t.httpScraper, t.chromeScraper, url)
+	result := DiagnosticURL(ctx, httpScraper, chromeScraper, url)
 	duration := time.Since(startTime)
-
-	_ = userAgent // TODO: pass userAgent to scrapers in DiagnosticURL
 
 	// Build response
 	response := map[string]interface{}{
