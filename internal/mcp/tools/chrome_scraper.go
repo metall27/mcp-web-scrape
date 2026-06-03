@@ -1265,15 +1265,35 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		if s.proxy != nil && s.proxy.IsEnabled() {
-			s.proxy.MarkFailure(err)
+		// TLS client failed - try simple HTTPScraper as last resort
+		s.logger.Warn().Err(err).Msg("TLS client failed, trying simple HTTP client")
+
+		// Use existing HTTPScraper for compatibility
+		httpScraper := NewHTTPScraper(s.cache, s.uaRotator, s.proxy)
+		result, scrapeErr := httpScraper.Scrape(ctx, urlStr, Options{
+			Timeout:    30 * time.Second,
+			UserAgent: userAgent,
+		})
+
+		if scrapeErr != nil {
+			if s.proxy != nil && s.proxy.IsEnabled() {
+				s.proxy.MarkFailure(scrapeErr)
+			}
+			return nil, &ScrapeError{
+				Code:     "http_fallback_failed",
+				Message:  fmt.Sprintf("Both TLS and simple HTTP failed: TLS=%v, Simple=%v", err, scrapeErr.Message),
+				Hints:    append([]string{"try_screenshot"}, scrapeErr.Hints...),
+				CanRetry: false, // Already tried both methods
+			}
 		}
-		return nil, &ScrapeError{
-			Code:     "http_error",
-			Message:  fmt.Sprintf("HTTP fallback failed: %v", err),
-			Hints:    []string{"retry", "try_screenshot"},
-			CanRetry: true,
-		}
+
+		// Success with simple HTTP
+		s.logger.Info().
+			Int("size", len(result.HTML)).
+			Msg("✅ Successfully scraped with simple HTTP fallback")
+
+		result.Method = "HTTP (simple fallback)"
+		return result, nil
 	}
 	defer resp.Body.Close()
 
