@@ -14,6 +14,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
+	"github.com/metall/mcp-web-scrape/internal/pkg/domain"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/openapi"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
@@ -88,6 +89,19 @@ func main() {
 			Msg("Proxy rotator initialized")
 	}
 
+	// Initialize site method learner
+	methodLearner := domain.NewMethodLearner(domain.Config{
+		Enabled:    cfg.SiteMethod.Enabled,
+		StorageDir: cfg.SiteMethod.StorageDir,
+	})
+	if cfg.SiteMethod.Enabled {
+		log.Info().
+			Str("storage_dir", cfg.SiteMethod.StorageDir).
+			Msg("Site method learning enabled")
+	} else {
+		log.Info().Msg("Site method learning disabled")
+	}
+
 	// Create MCP server
 	mcpServer, err := mcp.New(mcp.Config{
 		ProtocolVersion: "2024-11-05",
@@ -98,13 +112,14 @@ func main() {
 			BurstSize:         cfg.RateLimit.BurstSize,
 			Enabled:           cfg.RateLimit.Enabled,
 		},
-		GitHub: cfg.GitHub,
-		Cache:       cacheInstance,
-		BrowserPool: browserPool,
-		RAG:         cfg.RAG,
-		Browser:     cfg.Browser,
-		UARotator:   uaRotator,
-		ProxyRotator: proxyRotator,
+		GitHub:        cfg.GitHub,
+		Cache:         cacheInstance,
+		BrowserPool:   browserPool,
+		RAG:           cfg.RAG,
+		Browser:       cfg.Browser,
+		UARotator:     uaRotator,
+		ProxyRotator:  proxyRotator,
+		MethodLearner: methodLearner,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create MCP server")

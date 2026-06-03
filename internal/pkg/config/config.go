@@ -8,18 +8,19 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	MCP       MCPConfig       `mapstructure:"mcp"`
-	Scraping  ScrapingConfig  `mapstructure:"scraping"`
-	Browser   BrowserConfig   `mapstructure:"browser"`
-	Search    SearchConfig    `mapstructure:"search"`
-	RAG       RAGConfig       `mapstructure:"rag"`
-	UserAgent UserAgentConfig `mapstructure:"user_agent"`
-	Proxy     ProxyConfig     `mapstructure:"proxy"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
-	Cache     CacheConfig     `mapstructure:"cache"`
-	Log       LogConfig       `mapstructure:"log"`
-	GitHub    GitHubConfig    `mapstructure:"github"`
+	Server         ServerConfig         `mapstructure:"server"`
+	MCP            MCPConfig            `mapstructure:"mcp"`
+	Scraping       ScrapingConfig       `mapstructure:"scraping"`
+	Browser        BrowserConfig        `mapstructure:"browser"`
+	Search         SearchConfig         `mapstructure:"search"`
+	RAG            RAGConfig            `mapstructure:"rag"`
+	UserAgent      UserAgentConfig      `mapstructure:"user_agent"`
+	Proxy          ProxyConfig          `mapstructure:"proxy"`
+	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
+	Cache          CacheConfig          `mapstructure:"cache"`
+	Log            LogConfig            `mapstructure:"log"`
+	GitHub         GitHubConfig         `mapstructure:"github"`
+	SiteMethod     SiteMethodConfig     `mapstructure:"site_method"`
 }
 
 type ServerConfig struct {
@@ -114,6 +115,11 @@ type CacheConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Pretty bool   `mapstructure:"pretty"`
+}
+
+type SiteMethodConfig struct {
+	Enabled    bool   `mapstructure:"enabled"`     // Save site method preferences
+	StorageDir string `mapstructure:"storage_dir"` // Directory for YAML file (default: ./data)
 }
 
 func Load(configPath string) (*Config, error) {
@@ -226,4 +232,8 @@ func setDefaults(v *viper.Viper) {
 	// Log defaults
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.pretty", true)
+
+	// Site method learning defaults
+	v.SetDefault("site_method.enabled", false)               // Disabled by default
+	v.SetDefault("site_method.storage_dir", "./data")        // Default storage directory
 }

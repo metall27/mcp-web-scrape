@@ -10,6 +10,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
+	"github.com/metall/mcp-web-scrape/internal/pkg/domain"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
@@ -19,16 +20,17 @@ import (
 )
 
 type Server struct {
-	config       Config
-	logger       zerolog.Logger
-	cache        *cache.Cache
-	browserPool  *browser.Pool
-	uaRotator    *useragent.Rotator
-	proxyRotator *proxy.Rotator
-	rateLimiter  *rate.Limiter
-	tools        map[string]tools.Tool
-	toolsOrder   []string // Preserve registration order
-	serverInfo   ServerInfo
+	config        Config
+	logger        zerolog.Logger
+	cache         *cache.Cache
+	browserPool   *browser.Pool
+	uaRotator     *useragent.Rotator
+	proxyRotator  *proxy.Rotator
+	rateLimiter   *rate.Limiter
+	methodLearner *domain.MethodLearner
+	tools         map[string]tools.Tool
+	toolsOrder    []string // Preserve registration order
+	serverInfo    ServerInfo
 }
 
 type Config struct {
@@ -43,6 +45,7 @@ type Config struct {
 	UARotator       *useragent.Rotator
 	ProxyRotator    *proxy.Rotator
 	GitHub          config.GitHubConfig
+	MethodLearner   *domain.MethodLearner
 }
 
 type RateLimitConfig struct {
@@ -53,15 +56,16 @@ type RateLimitConfig struct {
 
 func New(cfg Config) (*Server, error) {
 	s := &Server{
-		config:       cfg,
-		logger:       logger.Get(),
-		cache:        cfg.Cache,
-		browserPool:  cfg.BrowserPool,
-		uaRotator:    cfg.UARotator,
-		proxyRotator: cfg.ProxyRotator,
-		serverInfo:   ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
-		tools:        make(map[string]tools.Tool),
-		toolsOrder:   []string{},
+		config:        cfg,
+		logger:        logger.Get(),
+		cache:         cfg.Cache,
+		browserPool:   cfg.BrowserPool,
+		uaRotator:     cfg.UARotator,
+		proxyRotator:  cfg.ProxyRotator,
+		methodLearner: cfg.MethodLearner,
+		serverInfo:    ServerInfo{Name: cfg.ServerName, Version: cfg.ServerVersion},
+		tools:         make(map[string]tools.Tool),
+		toolsOrder:    []string{},
 	}
 
 	// Setup rate limiter

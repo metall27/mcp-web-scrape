@@ -31,6 +31,8 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       # Cache directory
       - mcp-cache:/app/cache
+      # Site method learning data
+      - ./data:/app/data
       # Chrome shared memory (критично для headless Chrome)
       - chrome-shm:/dev/shm
 
@@ -86,12 +88,15 @@ services:
     labels:
       - "com.mcp-web-scrape.version=1.0"
       - "com.mcp-web-scrape.phase=5-complete"
+      - "com.mcp-web-scrape.site-method-learning=true"
       - "com.mcp-web-scrape.production-ready=true"
 
 volumes:
   mcp-cache:
     driver: local
   chrome-shm:
+    driver: local
+  site-methods-data:
     driver: local
 
 networks:

@@ -1,0 +1,40 @@
+# Example site methods YAML file
+# This file demonstrates the format of site_method learning data
+# When enabled, the system will automatically create/update this file
+
+domains:
+  wowhead.com:
+    domain: wowhead.com
+    preferred_method: "HTTP"
+    determined_at: "2026-06-03T17:31:33Z"
+    success_count: 5
+    failure_count: 1
+    last_attempt: "2026-06-03T17:35:00Z"
+
+  github.com:
+    domain: github.com
+    preferred_method: "Chrome"
+    determined_at: "2026-06-03T18:00:00Z"
+    success_count: 10
+    failure_count: 0
+    last_attempt: "2026-06-03T18:05:00Z"
+
+  twitter.com:
+    domain: twitter.com
+    preferred_method: "Chrome"
+    determined_at: "2026-06-03T19:00:00Z"
+    success_count: 8
+    failure_count: 2
+    last_attempt: "2026-06-03T19:10:00Z"
+
+# How it works:
+# 1. System automatically learns which method works best for each domain
+# 2. After 3+ successful attempts with a method, it becomes "preferred"
+# 3. Future requests to the same domain will use the preferred method first
+# 4. If failure rate exceeds 70%, the preference is reset
+# 5. Data older than 7 days is considered stale and ignored
+
+# To enable site method learning, add to your config.yaml:
+# site_method:
+#   enabled: true
+#   storage_dir: "./data"  # Where to store this file

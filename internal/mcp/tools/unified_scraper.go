@@ -3,34 +3,58 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
+	"github.com/metall/mcp-web-scrape/internal/pkg/domain"
 	"github.com/rs/zerolog"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 )
 
 // UnifiedScraper автоматический выбор лучшего метода скрапинга
 type UnifiedScraper struct {
-	scrapers []Scraper
-	logger   zerolog.Logger
+	scrapers      []Scraper
+	logger        zerolog.Logger
+	methodLearner *domain.MethodLearner
 }
 
 // NewUnifiedScraper создает новый UnifiedScraper
-func NewUnifiedScraper(scrapers []Scraper) *UnifiedScraper {
+func NewUnifiedScraper(scrapers []Scraper, methodLearner *domain.MethodLearner) *UnifiedScraper {
 	return &UnifiedScraper{
-		scrapers: scrapers,
-		logger:   logger.Get(),
+		scrapers:      scrapers,
+		logger:        logger.Get(),
+		methodLearner: methodLearner,
 	}
 }
 
 // Scrape автоматически выбирает лучший метод
 func (s *UnifiedScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+	// Extract domain for method learning
+	domain := s.extractDomain(url)
+
 	// 1. Определить требования
 	needsJS := s.needsJavaScript(url, opts)
 	needsActions := len(opts.Actions) > 0
 
-	// 2. Выбрать скрапер
-	selectedScraper := s.selectScraper(needsJS, needsActions)
+	// 2. Проверить если есть learned preference
+	var selectedScraper Scraper
+	if s.methodLearner != nil && !needsActions {
+		if preferredMethod, exists := s.methodLearner.GetPreferredMethod(domain); exists {
+			s.logger.Info().
+				Str("url", url).
+				Str("domain", domain).
+				Str("learned_method", preferredMethod).
+				Msg("Using learned method preference")
+
+			// Find scraper with preferred method
+			selectedScraper = s.findScraperByName(preferredMethod)
+		}
+	}
+
+	// 3. Если нет learned preference, использовать стандартную логику
+	if selectedScraper == nil {
+		selectedScraper = s.selectScraper(needsJS, needsActions)
+	}
 
 	s.logger.Info().
 		Str("url", url).
@@ -39,14 +63,24 @@ func (s *UnifiedScraper) Scrape(ctx context.Context, url string, opts Options) (
 		Bool("needs_actions", needsActions).
 		Msg("Auto-selected scraper")
 
-	// 3. Выполнить скрапинг
+	// 4. Выполнить скрапинг
 	result, err := selectedScraper.Scrape(ctx, url, opts)
 	if err != nil {
-		// 4. Fallback: попробовать следующий скрапер
-		return s.tryFallback(ctx, url, opts, selectedScraper, err)
+		// Record failure
+		if s.methodLearner != nil {
+			s.methodLearner.RecordFailure(domain, selectedScraper.Name())
+		}
+
+		// 5. Fallback: попробовать следующий скрапер
+		return s.tryFallback(ctx, url, opts, domain, selectedScraper, err)
 	}
 
-	// 5. Добавить метаданные о выбранном методе
+	// 6. Record success
+	if s.methodLearner != nil && result != nil {
+		s.methodLearner.RecordSuccess(domain, selectedScraper.Name())
+	}
+
+	// 7. Добавить метаданные о выбранном методе
 	if result != nil {
 		result.Method = selectedScraper.Name()
 	}
@@ -154,7 +188,7 @@ func (s *UnifiedScraper) needsJavaScript(url string, opts Options) bool {
 }
 
 // tryFallback пробует следующий скрапер при ошибке
-func (s *UnifiedScraper) tryFallback(ctx context.Context, url string, opts Options, failedScraper Scraper, originalErr error) (*Result, error) {
+func (s *UnifiedScraper) tryFallback(ctx context.Context, url string, opts Options, domain string, failedScraper Scraper, originalErr error) (*Result, error) {
 	for _, scraper := range s.scrapers {
 		if scraper.Name() != failedScraper.Name() {
 			s.logger.Warn().
@@ -170,10 +204,40 @@ func (s *UnifiedScraper) tryFallback(ctx context.Context, url string, opts Optio
 					Str("url", url).
 					Str("fallback_scraper", scraper.Name()).
 					Msg("Fallback scraper succeeded")
+
+				// Record success for fallback method
+				if s.methodLearner != nil {
+					s.methodLearner.RecordSuccess(domain, scraper.Name())
+				}
+
 				return result, nil
+			} else {
+				// Record failure for fallback method
+				if s.methodLearner != nil {
+					s.methodLearner.RecordFailure(domain, scraper.Name())
+				}
 			}
 		}
 	}
 
 	return nil, fmt.Errorf("all scrapers failed for %s: %w", url, originalErr)
+}
+
+// extractDomain извлекает домен из URL для method learning
+func (s *UnifiedScraper) extractDomain(urlStr string) string {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// findScraperByName находит скрапер по имени
+func (s *UnifiedScraper) findScraperByName(name string) Scraper {
+	for _, scraper := range s.scrapers {
+		if scraper.Name() == name {
+			return scraper
+		}
+	}
+	return nil
 }

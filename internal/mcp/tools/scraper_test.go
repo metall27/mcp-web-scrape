@@ -214,7 +214,7 @@ func TestUnifiedScraperInterface(t *testing.T) {
 	httpScraper := NewHTTPScraper(nil, nil, nil)
 	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
 
-	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper})
+	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil)
 
 	if unified.Name() != "Unified" {
 		t.Errorf("Expected name 'Unified', got '%s'", unified.Name())

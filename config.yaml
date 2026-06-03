@@ -82,3 +82,7 @@ cache:
 log:
   level: debug  # debug, info, warn, error
   pretty: true
+
+site_method:
+  enabled: false                 # Enable site method learning (disabled by default)
+  storage_dir: "./data"          # Directory for site_methods.yaml file
