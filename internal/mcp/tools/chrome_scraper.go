@@ -850,14 +850,26 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 		// Add small delay to ensure storage is fully cleared before navigation
 		time.Sleep(100 * time.Millisecond)
 
-		// Use standard chromedp.Navigate instead of window.location.href
-		// This is more reliable and avoids session conflicts with anti-bot systems
-		if err := chromedp.Navigate(urlStr).Do(ctx); err != nil {
+		// Navigate with timeout to prevent hanging on slow sites
+		// chromedp.Navigate waits for full page load which can take 60+ seconds
+		navTimeout := 30 * time.Second
+		navCtx, navCancel := context.WithTimeout(ctx, navTimeout)
+		defer navCancel()
+
+		navStart := time.Now()
+		if err := chromedp.Navigate(urlStr).Do(navCtx); err != nil {
+			if navCtx.Err() == context.DeadlineExceeded {
+				s.logger.Error().
+					Dur("nav_timeout", navTimeout).
+					Dur("actual_duration", time.Since(navStart)).
+					Msg("❌ Navigation timeout - site too slow or unresponsive")
+				return fmt.Errorf("navigation timeout after %v", navTimeout)
+			}
 			s.logger.Error().Err(err).Msg("❌ Navigation failed")
 			return err
 		}
 
-		s.logger.Info().Dur("url_change_duration", time.Since(startTime)).Msg("✅ URL changed, waiting for body...")
+		s.logger.Info().Dur("nav_duration", time.Since(navStart)).Dur("url_change_duration", time.Since(startTime)).Msg("✅ Navigation complete")
 
 		// Wait for body to appear using configurable polling
 		startTime = time.Now()
