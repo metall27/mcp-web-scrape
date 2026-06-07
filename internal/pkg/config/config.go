@@ -42,6 +42,13 @@ type ScrapingConfig struct {
 	MaxRedirects     int           `mapstructure:"max_redirects"`
 	MaxBodySize      int64         `mapstructure:"max_body_size"`
 	AllowedDomains   []string      `mapstructure:"allowed_domains"`
+	Timeouts         TimeoutConfig `mapstructure:"timeouts"` // Fast-fail timeout configuration
+}
+
+// TimeoutConfig конфигурация агрессивных таймаутов для улучшения UX
+type TimeoutConfig struct {
+	FirstScraperTimeout time.Duration `mapstructure:"first_scraper_timeout"` // Fast timeout for first scraper attempt (e.g., 5s)
+	FallbackTimeout     time.Duration `mapstructure:"fallback_timeout"`      // Aggressive timeout for fallback attempts (e.g., 15s)
 }
 
 type BrowserConfig struct {
@@ -170,6 +177,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scraping.timeout", 30*time.Second)
 	v.SetDefault("scraping.max_redirects", 10)
 	v.SetDefault("scraping.max_body_size", 10*1024*1024) // 10MB
+
+	// Fast-fail timeout defaults
+	v.SetDefault("scraping.timeouts.first_scraper_timeout", 5*time.Second)   // 5s fast fail for first attempt
+	v.SetDefault("scraping.timeouts.fallback_timeout", 15*time.Second)       // 15s aggressive fallback
 
 	// Browser defaults
 	v.SetDefault("browser.enabled", true)

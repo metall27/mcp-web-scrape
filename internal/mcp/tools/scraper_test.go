@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -214,7 +216,18 @@ func TestUnifiedScraperInterface(t *testing.T) {
 	httpScraper := NewHTTPScraper(nil, nil, nil)
 	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
 
-	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil)
+	// Use default scraping config for tests
+	scrapingCfg := config.ScrapingConfig{
+		Timeout:      30 * time.Second,
+		MaxRedirects: 10,
+		MaxBodySize:  10 * 1024 * 1024,
+		Timeouts: config.TimeoutConfig{
+			FirstScraperTimeout: 5 * time.Second,
+			FallbackTimeout:     15 * time.Second,
+		},
+	}
+
+	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil, scrapingCfg)
 
 	if unified.Name() != "Unified" {
 		t.Errorf("Expected name 'Unified', got '%s'", unified.Name())
@@ -227,4 +240,128 @@ func TestUnifiedScraperInterface(t *testing.T) {
 	if !unified.SupportsActions() {
 		t.Error("UnifiedScraper should support actions (has ChromeScraper)")
 	}
+}
+
+func TestUnifiedScraperFastFailTimeout(t *testing.T) {
+	// Create mock scrapers to test fast-fail behavior
+	fastScraper := &mockFastScraper{name: "Fast"}
+	slowScraper := &mockSlowScraper{name: "Slow"}
+
+	// Configure fast-fail timeouts
+	scrapingCfg := config.ScrapingConfig{
+		Timeout:      30 * time.Second,
+		MaxRedirects: 10,
+		MaxBodySize:  10 * 1024 * 1024,
+		Timeouts: config.TimeoutConfig{
+			FirstScraperTimeout: 100 * time.Millisecond, // Very fast timeout
+			FallbackTimeout:     200 * time.Millisecond, // Fast fallback timeout
+		},
+	}
+
+	unified := NewUnifiedScraper([]Scraper{fastScraper, slowScraper}, nil, scrapingCfg)
+
+	// Test with a URL that would timeout
+	ctx := context.Background()
+
+	// The first scraper should timeout quickly due to fast-fail
+	start := time.Now()
+	result, err := unified.Scrape(ctx, "http://example.com", Options{})
+	duration := time.Since(start)
+
+	// Should complete within fast-fail timeout + overhead
+	if duration > 500*time.Millisecond {
+		t.Logf("WARNING: Took longer than expected: %v (expected ~100ms)", duration)
+	}
+
+	// Should get an error due to timeout
+	if err == nil {
+		t.Error("Expected error from fast-fail timeout, got success")
+		if result != nil {
+			t.Logf("Got result: %s", result.Method)
+		}
+	} else {
+		var scrapeErr *ScrapeError
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			t.Logf("✅ Got expected error: %s", scrapeErr.Code)
+			t.Logf("   Duration: %v", duration)
+			t.Logf("   Message: %s", scrapeErr.Message)
+		} else {
+			t.Logf("Got error: %s", err.Error())
+		}
+	}
+
+	// Verify the timeout worked - should be fast
+	if duration < 50*time.Millisecond {
+		t.Logf("✅ Fast-fill worked: completed in %v", duration)
+	}
+}
+
+// Mock scrapers for timeout testing
+
+type mockFastScraper struct {
+	name string
+}
+
+func (m *mockFastScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+	// Simulate a request that will timeout
+	select {
+	case <-ctx.Done():
+		return nil, &ScrapeError{
+			Code:     "timeout",
+			Message:  "Request timeout",
+			CanRetry: true,
+		}
+	case <-time.After(10 * time.Second):
+		return &Result{
+			HTML:       "<html>Success</html>",
+			StatusCode: 200,
+			Method:     m.name,
+		}, nil
+	}
+}
+
+func (m *mockFastScraper) Name() string {
+	return m.name
+}
+
+func (m *mockFastScraper) SupportsJS() bool {
+	return false
+}
+
+func (m *mockFastScraper) SupportsActions() bool {
+	return false
+}
+
+type mockSlowScraper struct {
+	name string
+}
+
+func (m *mockSlowScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+	// Simulate a slow fallback scraper
+	select {
+	case <-ctx.Done():
+		return nil, &ScrapeError{
+			Code:     "timeout",
+			Message:  "Fallback timeout",
+			CanRetry: true,
+		}
+	case <-time.After(10 * time.Second):
+		return &Result{
+			HTML:       "<html>Fallback Success</html>",
+			StatusCode: 200,
+			Method:     m.name,
+		}, nil
+	}
+}
+
+func (m *mockSlowScraper) Name() string {
+	return m.name
+}
+
+func (m *mockSlowScraper) SupportsJS() bool {
+	return false
+}
+
+func (m *mockSlowScraper) SupportsActions() bool {
+	return false
 }

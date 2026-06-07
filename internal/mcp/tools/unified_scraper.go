@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/domain"
 	"github.com/rs/zerolog"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
@@ -16,14 +17,16 @@ type UnifiedScraper struct {
 	scrapers      []Scraper
 	logger        zerolog.Logger
 	methodLearner *domain.MethodLearner
+	config        config.ScrapingConfig // Конфигурация скрапинга
 }
 
 // NewUnifiedScraper создает новый UnifiedScraper
-func NewUnifiedScraper(scrapers []Scraper, methodLearner *domain.MethodLearner) *UnifiedScraper {
+func NewUnifiedScraper(scrapers []Scraper, methodLearner *domain.MethodLearner, cfg config.ScrapingConfig) *UnifiedScraper {
 	return &UnifiedScraper{
 		scrapers:      scrapers,
 		logger:        logger.Get(),
 		methodLearner: methodLearner,
+		config:        cfg,
 	}
 }
 
@@ -63,16 +66,43 @@ func (s *UnifiedScraper) Scrape(ctx context.Context, url string, opts Options) (
 		Bool("needs_actions", needsActions).
 		Msg("Auto-selected scraper")
 
-	// 4. Выполнить скрапинг
-	result, err := selectedScraper.Scrape(ctx, url, opts)
+	// 4. Выполнить скрапинг с возможным fast-fail timeout
+	scrapeCtx := ctx
+
+	// Определить если это первый скрапер (простой запрос без JS/actions и первый в списке)
+	isFirstScraper := (!needsJS && !needsActions && len(s.scrapers) > 0 && selectedScraper.Name() == s.scrapers[0].Name())
+
+	// Применить fast timeout для первого скрапера
+	if isFirstScraper && s.config.Timeouts.FirstScraperTimeout > 0 {
+		fastCtx, fastCancel := context.WithTimeout(ctx, s.config.Timeouts.FirstScraperTimeout)
+		defer fastCancel()
+		scrapeCtx = fastCtx
+
+		s.logger.Debug().
+			Str("timeout", s.config.Timeouts.FirstScraperTimeout.String()).
+			Msg("Applied fast-fail timeout for first scraper")
+	}
+
+	result, err := selectedScraper.Scrape(scrapeCtx, url, opts)
 	if err != nil {
 		// Record failure
 		if s.methodLearner != nil {
 			s.methodLearner.RecordFailure(domain, selectedScraper.Name())
 		}
 
-		// 5. Fallback: попробовать следующий скрапер
-		return s.tryFallback(ctx, url, opts, domain, selectedScraper, err)
+		// 5. Fallback: попробовать следующий скрапер с агрессивным timeout
+		fallbackCtx := ctx
+		if s.config.Timeouts.FallbackTimeout > 0 {
+			fallbackCtxNew, fallbackCancel := context.WithTimeout(ctx, s.config.Timeouts.FallbackTimeout)
+			defer fallbackCancel()
+			fallbackCtx = fallbackCtxNew
+
+			s.logger.Debug().
+				Str("timeout", s.config.Timeouts.FallbackTimeout.String()).
+				Msg("Applied aggressive timeout for fallback attempt")
+		}
+
+		return s.tryFallback(fallbackCtx, url, opts, domain, selectedScraper, err)
 	}
 
 	// 6. Record success
