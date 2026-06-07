@@ -251,8 +251,8 @@ func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
 	versionRegex := regexp.MustCompile(`(?:v|version)?\s*(\d+\.\d+(?:\.\d+)?)`)
 	versions := versionRegex.FindAllString(html, 10)
 
-	// Extract document structure
-	headingsRegex := regexp.MustCompile(`<(h[1-6])[^>]*>(.+?)</\1>`)
+	// Extract document structure (Go regex doesn't support backreferences)
+	headingsRegex := regexp.MustCompile(`<(h[1-6])[^>]*>(.+?)</h[1-6]>`)
 	headings := headingsRegex.FindAllStringSubmatch(html, -1)
 
 	var sections []map[string]interface{}
