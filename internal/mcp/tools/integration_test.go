@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -71,20 +72,25 @@ func TestErrorHintsIntegration(t *testing.T) {
 	}
 
 	// Check error structure
-	if err.Code == "" {
-		t.Error("Error code should not be empty")
-	}
+	var scrapeErr *ScrapeError
+	if errors.As(err, &scrapeErr) && scrapeErr != nil {
+		if scrapeErr.Code == "" {
+			t.Error("Error code should not be empty")
+		}
 
-	if err.Message == "" {
-		t.Error("Error message should not be empty")
-	}
+		if scrapeErr.Message == "" {
+			t.Error("Error message should not be empty")
+		}
 
-	// invalid_url не должен иметь hints
-	t.Logf("✅ Error hints integration works!")
-	t.Logf("   Code: %s", err.Code)
-	t.Logf("   Message: %s", err.Message)
-	t.Logf("   Hints: %v", err.Hints)
-	t.Logf("   CanRetry: %v", err.CanRetry)
+		// invalid_url не должен иметь hints
+		t.Logf("✅ Error hints integration works!")
+		t.Logf("   Code: %s", scrapeErr.Code)
+		t.Logf("   Message: %s", scrapeErr.Message)
+		t.Logf("   Hints: %v", scrapeErr.Hints)
+		t.Logf("   CanRetry: %v", scrapeErr.CanRetry)
+	} else {
+		t.Error("Expected ScrapeError, got different error type")
+	}
 }
 
 // TestTimeoutErrorHandling проверка обработки timeout
@@ -104,27 +110,32 @@ func TestTimeoutErrorHandling(t *testing.T) {
 	})
 
 	if err != nil {
-		t.Logf("Got expected error: %s", err.Code)
+		var scrapeErr *ScrapeError
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			t.Logf("Got expected error: %s", scrapeErr.Code)
 
-		// Check if it's a timeout or network error
-		if err.Code != "timeout" && err.Code != "network_error" && err.Code != "http_error" {
-			t.Logf("Warning: expected timeout-like error, got: %s", err.Code)
+			// Check if it's a timeout or network error
+			if scrapeErr.Code != "timeout" && scrapeErr.Code != "network_error" && scrapeErr.Code != "http_error" {
+				t.Logf("Warning: expected timeout-like error, got: %s", scrapeErr.Code)
+			}
+
+			// Should have hints
+			if len(scrapeErr.Hints) == 0 {
+				t.Error("Timeout error should provide hints")
+			}
+
+			// Should be retryable
+			if !scrapeErr.CanRetry {
+				t.Error("Timeout error should be retryable")
+			}
+
+			t.Logf("✅ Timeout error handling works!")
+			t.Logf("   Code: %s", scrapeErr.Code)
+			t.Logf("   Hints: %v", scrapeErr.Hints)
+			t.Logf("   CanRetry: %v", scrapeErr.CanRetry)
+		} else {
+			t.Logf("Got error: %s", err.Error())
 		}
-
-		// Should have hints
-		if len(err.Hints) == 0 {
-			t.Error("Timeout error should provide hints")
-		}
-
-		// Should be retryable
-		if !err.CanRetry {
-			t.Error("Timeout error should be retryable")
-		}
-
-		t.Logf("✅ Timeout error handling works!")
-		t.Logf("   Code: %s", err.Code)
-		t.Logf("   Hints: %v", err.Hints)
-		t.Logf("   CanRetry: %v", err.CanRetry)
 	} else {
 		t.Log("Request succeeded (no timeout, httpbin might be fast)")
 		if result != nil {

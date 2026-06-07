@@ -220,7 +220,12 @@ func (s *UnifiedScraper) tryFallback(ctx context.Context, url string, opts Optio
 		}
 	}
 
-	return nil, fmt.Errorf("all scrapers failed for %s: %w", url, originalErr)
+	return nil, &ScrapeError{
+		Code:     "all_scrapers_failed",
+		Message:  fmt.Sprintf("All scrapers failed for %s: %s", url, originalErr.Error()),
+		Hints:    []string{"retry", "try_different_method"},
+		CanRetry: true,
+	}
 }
 
 // extractDomain извлекает домен из URL для method learning

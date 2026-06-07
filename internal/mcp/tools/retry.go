@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -39,8 +40,8 @@ func NewRetryScraper(scraper Scraper, config RetryConfig) *RetryScraper {
 }
 
 // Scrape реализует интерфейс Scraper с retry logic
-func (r *RetryScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, *ScrapeError) {
-	var lastErr *ScrapeError
+func (r *RetryScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
+	var lastErr error
 	delay := r.config.InitialDelay
 
 	for attempt := 1; attempt <= r.config.MaxAttempts; attempt++ {
@@ -56,7 +57,8 @@ func (r *RetryScraper) Scrape(ctx context.Context, url string, opts Options) (*R
 		lastErr = err
 
 		// Если retry не разрешен - выходим
-		if !err.CanRetry {
+		var scrapeErr *ScrapeError
+		if err != nil && errors.As(err, &scrapeErr) && scrapeErr != nil && !scrapeErr.CanRetry {
 			return nil, err
 		}
 

@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -226,7 +227,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 
 
 // Scrape реализует интерфейс Scraper
-func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, *ScrapeError) {
+func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
 	startTime := time.Now()
 
 	s.logger.Info().
@@ -1280,10 +1281,16 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 			if s.proxy != nil && s.proxy.IsEnabled() {
 				s.proxy.MarkFailure(scrapeErr)
 			}
+			// Extract ScrapeError details for better error message
+			var httpScrapeErr *ScrapeError
+			hints := []string{"try_screenshot"}
+			if errors.As(scrapeErr, &httpScrapeErr) {
+				hints = append(hints, httpScrapeErr.Hints...)
+			}
 			return nil, &ScrapeError{
 				Code:     "http_fallback_failed",
-				Message:  fmt.Sprintf("Both TLS and simple HTTP failed: TLS=%v, Simple=%v", err, scrapeErr.Message),
-				Hints:    append([]string{"try_screenshot"}, scrapeErr.Hints...),
+				Message:  fmt.Sprintf("Both TLS and simple HTTP failed: TLS=%v, Simple=%v", err, scrapeErr.Error()),
+				Hints:    hints,
 				CanRetry: false, // Already tried both methods
 			}
 		}

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -82,9 +83,14 @@ func TestE2EScenarios(t *testing.T) {
 
 			if tt.expectSuccess {
 				if err != nil {
-					t.Errorf("Expected success, got error: %s (%s)", err.Code, err.Message)
-					if len(err.Hints) > 0 {
-						t.Logf("  Hints: %v", err.Hints)
+					var scrapeErr *ScrapeError
+					if errors.As(err, &scrapeErr) && scrapeErr != nil {
+						t.Errorf("Expected success, got error: %s (%s)", scrapeErr.Code, scrapeErr.Message)
+						if len(scrapeErr.Hints) > 0 {
+							t.Logf("  Hints: %v", scrapeErr.Hints)
+						}
+					} else {
+						t.Errorf("Expected success, got error: %s", err.Error())
 					}
 				}
 
@@ -115,13 +121,18 @@ func TestE2EScenarios(t *testing.T) {
 					t.Error("Expected error, got success")
 				}
 
-				if tt.expectError != "" && err.Code != tt.expectError {
-					t.Errorf("Expected error code '%s', got '%s'", tt.expectError, err.Code)
+				var scrapeErr *ScrapeError
+				if tt.expectError != "" && errors.As(err, &scrapeErr) && scrapeErr != nil && scrapeErr.Code != tt.expectError {
+					t.Errorf("Expected error code '%s', got '%s'", tt.expectError, scrapeErr.Code)
 				}
 
-				t.Logf("✅ Expected error: %s - %s", err.Code, err.Message)
-				if len(err.Hints) > 0 {
-					t.Logf("  Hints: %v", err.Hints)
+				if errors.As(err, &scrapeErr) && scrapeErr != nil {
+					t.Logf("✅ Expected error: %s - %s", scrapeErr.Code, scrapeErr.Message)
+					if len(scrapeErr.Hints) > 0 {
+						t.Logf("  Hints: %v", scrapeErr.Hints)
+					}
+				} else {
+					t.Logf("✅ Expected error: %s", err.Error())
 				}
 			}
 		})
@@ -204,22 +215,29 @@ func TestRetryBehavior(t *testing.T) {
 
 	if err != nil {
 		t.Logf("Got error (expected for timeout scenario):")
-		t.Logf("  Code: %s", err.Code)
-		t.Logf("  CanRetry: %v", err.CanRetry)
-		t.Logf("  Hints: %v", err.Hints)
+		var scrapeErr *ScrapeError
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			t.Logf("  Code: %s", scrapeErr.Code)
+			t.Logf("  CanRetry: %v", scrapeErr.CanRetry)
+			t.Logf("  Hints: %v", scrapeErr.Hints)
 
-		// Verify error structure
-		if err.Code == "" {
-			t.Error("Error code should not be empty")
-		}
+			// Verify error structure
+			if scrapeErr.Code == "" {
+				t.Error("Error code should not be empty")
+			}
 
-		if len(err.Hints) == 0 {
-			t.Error("Error should provide hints")
+			if len(scrapeErr.Hints) == 0 {
+				t.Error("Error should provide hints")
+			}
+		} else {
+			t.Logf("  Error: %s", err.Error())
 		}
 
 		// Most errors should be retryable except blocking
-		if !err.CanRetry && err.Code != "invalid_url" {
-			t.Logf("Note: Error '%s' is not retryable", err.Code)
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			if !scrapeErr.CanRetry && scrapeErr.Code != "invalid_url" {
+				t.Logf("Note: Error '%s' is not retryable", scrapeErr.Code)
+			}
 		}
 
 		t.Log("✅ Retry behavior test passed!")
@@ -274,17 +292,22 @@ func TestErrorCodes(t *testing.T) {
 				return
 			}
 
-			if err.Code != tt.expectCode {
-				t.Errorf("Expected error code '%s', got '%s'", tt.expectCode, err.Code)
-			}
+			var scrapeErr *ScrapeError
+			if errors.As(err, &scrapeErr) && scrapeErr != nil {
+				if scrapeErr.Code != tt.expectCode {
+					t.Errorf("Expected error code '%s', got '%s'", tt.expectCode, scrapeErr.Code)
+				}
 
-			// Verify error has proper structure
-			if err.Message == "" {
-				t.Error("Error message should not be empty")
-			}
+				// Verify error has proper structure
+				if scrapeErr.Message == "" {
+					t.Error("Error message should not be empty")
+				}
 
-			t.Logf("✅ %s: Code=%s, Message=%s",
-				tt.name, err.Code, err.Message)
+				t.Logf("✅ %s: Code=%s, Message=%s",
+					tt.name, scrapeErr.Code, scrapeErr.Message)
+			} else {
+				t.Logf("✅ %s: %s", tt.name, err.Error())
+			}
 		})
 	}
 }

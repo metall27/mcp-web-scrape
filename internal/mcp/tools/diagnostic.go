@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,16 +60,22 @@ func DiagnosticURL(ctx context.Context, httpScraper, chromeScraper Scraper, url 
 	}
 
 	// 2. HTTP failed - анализ ошибки
-	result.Details["http_error_code"] = httpErr.Code
-	result.Details["http_error_message"] = httpErr.Message
+	var httpScrapeErr *ScrapeError
+	if errors.As(httpErr, &httpScrapeErr) {
+		result.Details["http_error_code"] = httpScrapeErr.Code
+		result.Details["http_error_message"] = httpScrapeErr.Message
 
-	if httpErr.Code == "blocked" {
-		result.BlockingDetected = true
-		result.BlockingType = detectBlockingType(httpErr)
-		result.Issue = fmt.Sprintf("Anti-bot protection detected: %s", result.BlockingType)
-		result.SuggestedAction = "use_screenshot_or_chrome"
-		result.SuggestedScraper = "chrome" // Chrome может справиться лучше
-		return result
+		if httpScrapeErr.Code == "blocked" {
+			result.BlockingDetected = true
+			result.BlockingType = detectBlockingType(httpScrapeErr)
+			result.Issue = fmt.Sprintf("Anti-bot protection detected: %s", result.BlockingType)
+			result.SuggestedAction = "use_screenshot_or_chrome"
+			result.SuggestedScraper = "chrome" // Chrome может справиться лучше
+			return result
+		}
+	} else {
+		// Fallback для стандартных ошибок
+		result.Details["http_error"] = httpErr.Error()
 	}
 
 	// 3. Пробовать Chrome scraper (если HTTP failed)
@@ -91,17 +98,22 @@ func DiagnosticURL(ctx context.Context, httpScraper, chromeScraper Scraper, url 
 	}
 
 	// 4. Оба failed
-	result.Details["chrome_error_code"] = chromeErr.Code
-	result.Details["chrome_error_message"] = chromeErr.Message
+	var chromeScrapeErr *ScrapeError
+	if errors.As(chromeErr, &chromeScrapeErr) {
+		result.Details["chrome_error_code"] = chromeScrapeErr.Code
+		result.Details["chrome_error_message"] = chromeScrapeErr.Message
+	} else {
+		result.Details["chrome_error"] = chromeErr.Error()
+	}
 
 	result.Accessible = false
 	result.Issue = "Both HTTP and Chrome scrapers failed"
 
 	// Анализ причин
-	if httpErr.Code == "timeout" && chromeErr.Code == "timeout" {
+	if (httpScrapeErr != nil && httpScrapeErr.Code == "timeout") && (chromeScrapeErr != nil && chromeScrapeErr.Code == "timeout") {
 		result.SuggestedAction = "use_screenshot_or_give_up"
 		result.Details["reason"] = "Both scrapers timed out"
-	} else if httpErr.Code == "blocked" || chromeErr.Code == "blocked" {
+	} else if (httpScrapeErr != nil && httpScrapeErr.Code == "blocked") || (chromeScrapeErr != nil && chromeScrapeErr.Code == "blocked") {
 		result.SuggestedAction = "use_screenshot"
 		result.Details["reason"] = "Blocking detected on both scrapers"
 	} else {

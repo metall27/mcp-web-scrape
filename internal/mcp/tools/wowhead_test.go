@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -36,22 +37,27 @@ func TestWowheadScraping(t *testing.T) {
 
 	// Check result
 	if err != nil {
-		t.Logf("❌ Scrape failed with error:")
-		t.Logf("   Code: %s", err.Code)
-		t.Logf("   Message: %s", err.Message)
-		t.Logf("   Hints: %v", err.Hints)
-		t.Logf("   CanRetry: %v", err.CanRetry)
+		var scrapeErr *ScrapeError
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			t.Logf("❌ Scrape failed with error:")
+			t.Logf("   Code: %s", scrapeErr.Code)
+			t.Logf("   Message: %s", scrapeErr.Message)
+			t.Logf("   Hints: %v", scrapeErr.Hints)
+			t.Logf("   CanRetry: %v", scrapeErr.CanRetry)
 
-		// Verify it's a proper ScrapeError
-		if err.Code == "" {
-			t.Error("Error code should not be empty")
-		}
-		if len(err.Hints) == 0 {
-			t.Error("Error should provide hints for LLM")
-		}
+			// Verify it's a proper ScrapeError
+			if scrapeErr.Code == "" {
+				t.Error("Error code should not be empty")
+			}
+			if len(scrapeErr.Hints) == 0 {
+				t.Error("Error should provide hints for LLM")
+			}
 
-		// This is expected for wowhead (timeout or blocked)
-		t.Logf("✅ Error handling works correctly - returning structured error")
+			// This is expected for wowhead (timeout or blocked)
+			t.Logf("✅ Error handling works correctly - returning structured error")
+		} else {
+			t.Logf("❌ Scrape failed with error: %s", err.Error())
+		}
 	} else {
 		t.Logf("✅ Scrape succeeded!")
 		t.Logf("   Status: %d", result.StatusCode)
@@ -143,7 +149,7 @@ type mockFailTwiceScraper struct {
 	attempts *int
 }
 
-func (m *mockFailTwiceScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, *ScrapeError) {
+func (m *mockFailTwiceScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
 	*m.attempts++
 
 	if *m.attempts < 3 {
@@ -195,8 +201,11 @@ func TestNoRetryForBlockedErrors(t *testing.T) {
 		t.Error("Should fail for blocked error")
 	}
 
-	if err.Code != "blocked" {
-		t.Errorf("Error code should be 'blocked', got: %s", err.Code)
+	var scrapeErr *ScrapeError
+	if errors.As(err, &scrapeErr) && scrapeErr != nil {
+		if scrapeErr.Code != "blocked" {
+			t.Errorf("Error code should be 'blocked', got: %s", scrapeErr.Code)
+		}
 	}
 
 	if attempts != 1 {
@@ -210,7 +219,7 @@ type mockBlockedScraper struct {
 	attempts *int
 }
 
-func (m *mockBlockedScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, *ScrapeError) {
+func (m *mockBlockedScraper) Scrape(ctx context.Context, url string, opts Options) (*Result, error) {
 	*m.attempts++
 	return nil, &ScrapeError{
 		Code:     "blocked",

@@ -10,7 +10,7 @@ import (
 // Scraper интерфейс для всех скраперов
 type Scraper interface {
 	// Scrape выполняет скрапинг URL
-	Scrape(ctx context.Context, url string, opts Options) (*Result, *ScrapeError)
+	Scrape(ctx context.Context, url string, opts Options) (*Result, error)
 
 	// Name возвращает название скрапера
 	Name() string
@@ -71,6 +71,9 @@ type ScrapeError struct {
 
 // Error реализует error interface
 func (e *ScrapeError) Error() string {
+	if e == nil {
+		return "nil scrape error"
+	}
 	return e.Message
 }
 

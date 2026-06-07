@@ -37,7 +37,7 @@ func NewHTTPScraper(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *pro
 }
 
 // Scrape реализует интерфейс Scraper
-func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, *ScrapeError) {
+func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
 	startTime := time.Now()
 
 	s.logger.Info().Msg("🚨 HTTPScraper.Scrape CALLED")

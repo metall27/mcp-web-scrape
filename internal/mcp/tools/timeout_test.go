@@ -2,12 +2,14 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
+	"github.com/rs/zerolog"
 )
 
 // TestNavigationTimeout проверка что navigation timeout работает
@@ -18,6 +20,9 @@ func TestNavigationTimeout(t *testing.T) {
 
 	t.Log("Testing navigation timeout with slow site...")
 
+	// Setup logger for test
+	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
+
 	// Setup browser pool
 	browserCfg := config.BrowserConfig{
 		Headless: true,
@@ -25,16 +30,16 @@ func TestNavigationTimeout(t *testing.T) {
 	}
 
 	browserPool, err := browser.New(browser.Config{
-		Logger:    nil,
-		MaxTabs:   1,
-		Headless:  true,
-		Isolated: true,
+		Logger:       logger,
+		MaxTabs:      1,
+		Headless:     true,
+		IsolatedMode: true,
 	})
 
 	if err != nil {
 		t.Skipf("Failed to create browser pool: %v", err)
 	}
-	defer browserPool.Drain()
+	defer browserPool.Close()
 
 	cache, _ := cache.New(config.CacheConfig{Enabled: false})
 	scraper := NewChromeScraper(cache, browserPool, config.RAGConfig{}, browserCfg, nil, nil, config.GitHubConfig{})
@@ -57,25 +62,30 @@ func TestNavigationTimeout(t *testing.T) {
 	t.Logf("Duration: %v", duration)
 
 	if err != nil {
-		t.Logf("Got error (expected for slow sites):")
-		t.Logf("  Code: %s", err.Code)
-		t.Logf("  Message: %s", err.Message)
-		t.Logf("  CanRetry: %v", err.CanRetry)
-		t.Logf("  Hints: %v", err.Hints)
+		var scrapeErr *ScrapeError
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			t.Logf("Got error (expected for slow sites):")
+			t.Logf("  Code: %s", scrapeErr.Code)
+			t.Logf("  Message: %s", scrapeErr.Message)
+			t.Logf("  CanRetry: %v", scrapeErr.CanRetry)
+			t.Logf("  Hints: %v", scrapeErr.Hints)
 
-		// Verify error structure
-		if err.Code == "" {
-			t.Error("Error code should not be empty")
-		}
+			// Verify error structure
+			if scrapeErr.Code == "" {
+				t.Error("Error code should not be empty")
+			}
 
-		// Check if timeout error
-		if err.Code == "timeout" || err.Code == "navigation_timeout" {
-			t.Logf("✅ Timeout detection works!")
-		}
+			// Check if timeout error
+			if scrapeErr.Code == "timeout" || scrapeErr.Code == "navigation_timeout" {
+				t.Logf("✅ Timeout detection works!")
+			}
 
-		// Should provide hints
-		if len(err.Hints) > 0 {
-			t.Logf("✅ Hints provided: %v", err.Hints)
+			// Should provide hints
+			if len(scrapeErr.Hints) > 0 {
+				t.Logf("✅ Hints provided: %v", scrapeErr.Hints)
+			}
+		} else {
+			t.Logf("Got error: %s", err.Error())
 		}
 	} else {
 		t.Logf("Request succeeded (site was fast enough)")
@@ -100,24 +110,27 @@ func TestChromeScraperTimeoutBehavior(t *testing.T) {
 
 	t.Log("Testing ChromeScraper timeout behavior...")
 
+	// Setup logger for test
+	logger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
+
 	// Setup
 	browserCfg := config.BrowserConfig{
-		Headless:  true,
-		MaxTabs:    1,
+		Headless:    true,
+		MaxTabs:     1,
 		ToolTimeout: 45 * time.Second, // 45s total timeout
 	}
 
 	browserPool, err := browser.New(browser.Config{
-		Logger:    nil,
-		MaxTabs:   1,
-		Headless:  true,
-		Isolated:  true,
+		Logger:       logger,
+		MaxTabs:      1,
+		Headless:     true,
+		IsolatedMode: true,
 	})
 
 	if err != nil {
 		t.Skipf("Failed to create browser pool: %v", err)
 	}
-	defer browserPool.Drain()
+	defer browserPool.Close()
 
 	cache, _ := cache.New(config.CacheConfig{Enabled: false})
 	scraper := NewChromeScraper(cache, browserPool, config.RAGConfig{}, browserCfg, nil, nil, config.GitHubConfig{})
@@ -143,20 +156,25 @@ func TestChromeScraperTimeoutBehavior(t *testing.T) {
 	t.Logf("Duration: %v", duration)
 
 	if err != nil {
-		t.Logf("✅ Got expected error: %s", err.Code)
-		t.Logf("  Message: %s", err.Message)
-		t.Logf("  CanRetry: %v", err.CanRetry)
+		var scrapeErr *ScrapeError
+		if errors.As(err, &scrapeErr) && scrapeErr != nil {
+			t.Logf("✅ Got expected error: %s", scrapeErr.Code)
+			t.Logf("  Message: %s", scrapeErr.Message)
+			t.Logf("  CanRetry: %v", scrapeErr.CanRetry)
 
-		// Should be a recognizable error
-		if err.Code == "" {
-			t.Error("Error code should not be empty")
-		}
+			// Should be a recognizable error
+			if scrapeErr.Code == "" {
+				t.Error("Error code should not be empty")
+			}
 
-		// Should provide recovery hints
-		if len(err.Hints) == 0 {
-			t.Error("Error should provide recovery hints")
+			// Should provide recovery hints
+			if len(scrapeErr.Hints) == 0 {
+				t.Error("Error should provide recovery hints")
+			} else {
+				t.Logf("  Hints: %v", scrapeErr.Hints)
+			}
 		} else {
-			t.Logf("  Hints: %v", err.Hints)
+			t.Logf("Got error: %s", err.Error())
 		}
 	} else {
 		t.Log("Request succeeded (httpbin was fast)")
