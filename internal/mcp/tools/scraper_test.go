@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 )
@@ -225,6 +226,29 @@ func TestUnifiedScraperInterface(t *testing.T) {
 			FirstScraperTimeout: 5 * time.Second,
 			FallbackTimeout:     15 * time.Second,
 		},
+		JSSites: []string{
+			"github.com",
+			"twitter.com",
+			"facebook.com",
+			"react.dev",
+			"vuejs.org",
+			"angular.io",
+			"nextjs.org",
+			"stackoverflow.com",
+			"reddit.com",
+			"youtube.com",
+			"linkedin.com",
+			"instagram.com",
+			"medium.com",
+			"dev.to",
+			"codesandbox.io",
+			"replit.com",
+			"figma.com",
+			"notion.so",
+			"trello.com",
+			"slack.com",
+			"discord.com",
+		},
 	}
 
 	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil, scrapingCfg)
@@ -255,6 +279,11 @@ func TestUnifiedScraperFastFailTimeout(t *testing.T) {
 		Timeouts: config.TimeoutConfig{
 			FirstScraperTimeout: 100 * time.Millisecond, // Very fast timeout
 			FallbackTimeout:     200 * time.Millisecond, // Fast fallback timeout
+		},
+		JSSites: []string{
+			"github.com",
+			"twitter.com",
+			"facebook.com",
 		},
 	}
 
@@ -364,4 +393,157 @@ func (m *mockSlowScraper) SupportsJS() bool {
 
 func (m *mockSlowScraper) SupportsActions() bool {
 	return false
+}
+
+func TestUnifiedScraperJSSitesDetection(t *testing.T) {
+	// Create mock scrapers
+	httpScraper := NewHTTPScraper(nil, nil, nil)
+	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
+
+	// Configure with custom JS sites
+	scrapingCfg := config.ScrapingConfig{
+		Timeout:      30 * time.Second,
+		MaxRedirects: 10,
+		MaxBodySize:  10 * 1024 * 1024,
+		Timeouts: config.TimeoutConfig{
+			FirstScraperTimeout: 5 * time.Second,
+			FallbackTimeout:     15 * time.Second,
+		},
+		JSSites: []string{
+			"github.com",
+			"custom-js-site.com",
+			"react.dev",
+		},
+	}
+
+	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil, scrapingCfg)
+
+	tests := []struct {
+		name          string
+		url           string
+		expectJS      bool
+		reason        string
+	}{
+		{
+			name:     "GitHub URL (in config)",
+			url:      "https://github.com/user/repo",
+			expectJS: true,
+			reason:   "github.com is in jsSites config",
+		},
+		{
+			name:     "Custom JS site (in config)",
+			url:      "https://custom-js-site.com/page",
+			expectJS: true,
+			reason:   "custom-js-site.com is in jsSites config",
+		},
+		{
+			name:     "React site (in config)",
+			url:      "https://react.dev/docs",
+			expectJS: true,
+			reason:   "react.dev is in jsSites config",
+		},
+		{
+			name:     "Static site (not in config)",
+			url:      "https://example.com",
+			expectJS: false,
+			reason:   "example.com is NOT in jsSites config",
+		},
+		{
+			name:     "Blog site (not in config)",
+			url:      "https://blog.example.com",
+			expectJS: false,
+			reason:   "blog.example.com is NOT in jsSites config",
+		},
+		{
+			name:     "Wikipedia (not in config)",
+			url:      "https://en.wikipedia.org/wiki/Go",
+			expectJS: false,
+			reason:   "wikipedia.org is NOT in jsSites config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			needsJS := unified.needsJavaScript(tt.url, Options{})
+			if needsJS != tt.expectJS {
+				t.Errorf("%s: expected JS=%v, got JS=%v (%s)", tt.name, tt.expectJS, needsJS, tt.reason)
+			} else {
+				t.Logf("✅ %s: JS=%v (%s)", tt.name, needsJS, tt.reason)
+			}
+		})
+	}
+
+	t.Log("✅ JS sites detection works correctly with config")
+}
+
+// TestNeedsJSTestWithOptions тестирование needsJavaScript с опциями
+func TestNeedsJSTestWithOptions(t *testing.T) {
+	httpScraper := NewHTTPScraper(nil, nil, nil)
+	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
+
+	scrapingCfg := config.ScrapingConfig{
+		Timeout:    30 * time.Second,
+		MaxRedirects: 10,
+		MaxBodySize: 10 * 1024 * 1024,
+		JSSites:     []string{},
+	}
+
+	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil, scrapingCfg)
+
+	tests := []struct {
+		name     string
+		url      string
+		opts     Options
+		expectJS bool
+		reason   string
+	}{
+		{
+			name:     "WaitForNetworkIdle",
+			url:      "https://example.com",
+			opts:     Options{WaitForNetworkIdle: true},
+			expectJS: true,
+			reason:   "WaitForNetworkIdle requires JS",
+		},
+		{
+			name:     "StealthEnabled",
+			url:      "https://example.com",
+			opts:     Options{StealthEnabled: true},
+			expectJS: true,
+			reason:   "StealthEnabled requires JS",
+		},
+		{
+			name:     "Screenshot",
+			url:      "https://example.com",
+			opts:     Options{Screenshot: true},
+			expectJS: true,
+			reason:   "Screenshot requires JS",
+		},
+		{
+			name:     "Actions",
+			url:      "https://example.com",
+			opts:     Options{Actions: []browser.Action{{Type: "click"}}},
+			expectJS: true,
+			reason:   "Actions require JS",
+		},
+		{
+			name:     "Plain options",
+			url:      "https://github.com",
+			opts:     Options{},
+			expectJS: false,
+			reason:   "No JS options, but github.com should trigger JS if in config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			needsJS := unified.needsJavaScript(tt.url, tt.opts)
+			if needsJS != tt.expectJS {
+				t.Errorf("%s: expected JS=%v, got JS=%v (%s)", tt.name, tt.expectJS, needsJS, tt.reason)
+			} else {
+				t.Logf("✅ %s: JS=%v (%s)", tt.name, needsJS, tt.reason)
+			}
+		})
+	}
+
+	t.Log("✅ needsJavaScript with options works correctly")
 }

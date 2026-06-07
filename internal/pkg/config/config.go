@@ -43,6 +43,7 @@ type ScrapingConfig struct {
 	MaxBodySize      int64         `mapstructure:"max_body_size"`
 	AllowedDomains   []string      `mapstructure:"allowed_domains"`
 	Timeouts         TimeoutConfig `mapstructure:"timeouts"` // Fast-fail timeout configuration
+	JSSites          []string      `mapstructure:"js_sites"`  // Known JavaScript-heavy sites
 }
 
 // TimeoutConfig конфигурация агрессивных таймаутов для улучшения UX
@@ -181,6 +182,31 @@ func setDefaults(v *viper.Viper) {
 	// Fast-fail timeout defaults
 	v.SetDefault("scraping.timeouts.first_scraper_timeout", 5*time.Second)   // 5s fast fail for first attempt
 	v.SetDefault("scraping.timeouts.fallback_timeout", 15*time.Second)       // 15s aggressive fallback
+
+	// JavaScript sites defaults (known JS-heavy sites that require Chrome)
+	v.SetDefault("scraping.js_sites", []string{
+		"github.com",
+		"twitter.com",
+		"facebook.com",
+		"react.dev",
+		"vuejs.org",
+		"angular.io",
+		"nextjs.org",
+		"stackoverflow.com",
+		"reddit.com",
+		"youtube.com",
+		"linkedin.com",
+		"instagram.com",
+		"medium.com",
+		"dev.to",
+		"codesandbox.io",
+		"replit.com",
+		"figma.com",
+		"notion.so",
+		"trello.com",
+		"slack.com",
+		"discord.com",
+	})
 
 	// Browser defaults
 	v.SetDefault("browser.enabled", true)

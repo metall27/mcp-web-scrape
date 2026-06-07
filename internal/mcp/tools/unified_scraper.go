@@ -18,6 +18,7 @@ type UnifiedScraper struct {
 	logger        zerolog.Logger
 	methodLearner *domain.MethodLearner
 	config        config.ScrapingConfig // Конфигурация скрапинга
+	jsSites       []string             // Known JavaScript-heavy sites
 }
 
 // NewUnifiedScraper создает новый UnifiedScraper
@@ -27,6 +28,7 @@ func NewUnifiedScraper(scrapers []Scraper, methodLearner *domain.MethodLearner, 
 		logger:        logger.Get(),
 		methodLearner: methodLearner,
 		config:        cfg,
+		jsSites:       cfg.JSSites,  // Известные JS сайты из конфигурации
 	}
 }
 
@@ -183,32 +185,8 @@ func (s *UnifiedScraper) needsJavaScript(url string, opts Options) bool {
 		return true
 	}
 
-	// Известные JavaScript сайты
-	jsSites := []string{
-		"github.com",
-		"twitter.com",
-		"facebook.com",
-		"react.dev",
-		"vuejs.org",
-		"angular.io",
-		"nextjs.org",
-		"stackoverflow.com",
-		"reddit.com",
-		"youtube.com",
-		"linkedin.com",
-		"instagram.com",
-		"medium.com",
-		"dev.to",
-		"codesandbox.io",
-		"replit.com",
-		"figma.com",
-		"notion.so",
-		"trello.com",
-		"slack.com",
-		"discord.com",
-	}
-
-	for _, site := range jsSites {
+	// Известные JavaScript сайты из конфигурации
+	for _, site := range s.jsSites {
 		if strings.Contains(url, site) {
 			return true
 		}
