@@ -56,3 +56,6 @@ logs/
 REVIEW_SESSION_*.md
 SKYNET_*.md
 FINAL_REVIEW_SUMMARY.md
+
+# Internal documentation files
+AGENTS.md
