@@ -51,3 +51,8 @@ logs/
 .cache/
 
 # Documentation (archived files are now in docs/archive/)
+
+# Internal review documentation
+REVIEW_SESSION_*.md
+SKYNET_*.md
+FINAL_REVIEW_SUMMARY.md
