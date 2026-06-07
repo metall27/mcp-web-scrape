@@ -436,6 +436,13 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			}
 		}()
 
+		// Log active tabs before attempt
+		activeTabs := s.browserPool.GetActiveTabs()
+		s.logger.Debug().
+			Int("attempt", attempt).
+			Int32("active_tabs", activeTabs).
+			Msg("Starting scrape attempt")
+
 		// Perform scrape attempt
 		attemptResult := s.scrapeAttempt(toolCtx, urlStr, scrapeCtx, opts)
 
@@ -456,6 +463,10 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			// Clean up before continuing to next iteration
 			scrapeCtx.browserCancel()
 			cleanupNeeded = false
+			s.logger.Debug().
+				Int("attempt", attempt).
+				Int32("active_tabs", s.browserPool.GetActiveTabs()).
+				Msg("Cleanup after Chrome error")
 			continue
 		}
 
@@ -484,6 +495,10 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				// Clean up before returning
 				scrapeCtx.browserCancel()
 				cleanupNeeded = false
+				s.logger.Debug().
+					Int("attempt", attempt).
+					Int32("active_tabs", s.browserPool.GetActiveTabs()).
+					Msg("Cleanup before HTTP fallback")
 				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, startTime)
 			}
 
@@ -492,6 +507,10 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			// Clean up before continuing to next iteration
 			scrapeCtx.browserCancel()
 			cleanupNeeded = false
+			s.logger.Debug().
+				Int("attempt", attempt).
+				Int32("active_tabs", s.browserPool.GetActiveTabs()).
+				Msg("Cleanup after blocking detection")
 			continue
 		}
 
@@ -516,6 +535,10 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		// Clean up before breaking out of loop
 		scrapeCtx.browserCancel()
 		cleanupNeeded = false
+		s.logger.Debug().
+			Int("attempt", attempt).
+			Int32("active_tabs", s.browserPool.GetActiveTabs()).
+			Msg("Cleanup after successful scrape")
 		break
 	}
 

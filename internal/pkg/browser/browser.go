@@ -205,6 +205,12 @@ func (p *Pool) GetStats() map[string]interface{} {
 	}
 }
 
+// GetActiveTabs returns the current number of active browser tabs
+// Useful for monitoring and metrics collection
+func (p *Pool) GetActiveTabs() int32 {
+	return atomic.LoadInt32(&p.activeTabs)
+}
+
 // Close shuts down the browser pool
 func (p *Pool) Close() error {
 	p.logger.Info().
