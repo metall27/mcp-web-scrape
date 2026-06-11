@@ -265,3 +265,164 @@ func (ml *MethodLearner) GetAllStats() map[string]*DomainStats {
 	}
 	return result
 }
+
+// CatalogMethod хранит паттерны каталога для конкретного домена
+type CatalogMethod struct {
+	Domain            string    `yaml:"domain"`
+	CatalogPaths      []string  `yaml:"catalog_paths"`       // Обнаруженные пути к каталогам
+	ProductPattern    string    `yaml:"product_pattern"`     // CSS паттерн для карточек продуктов
+	PricePattern      string    `yaml:"price_pattern"`       // Паттерн для извлечения цен
+	PaginationPattern string    `yaml:"pagination_pattern"`  // Паттерн для навигации по страницам
+	SuccessRate       float64   `yaml:"success_rate"`        // Успешность применения паттернов
+	LastSeen          time.Time `yaml:"last_seen"`           // Когда последний раз использовался
+}
+
+// CatalogPatterns хранит паттерны для всех доменов
+type CatalogPatterns struct {
+	Domains map[string]*CatalogMethod `yaml:"domains"`
+}
+
+// SaveCatalogPattern сохраняет паттерны каталога для домена
+func (ml *MethodLearner) SaveCatalogPattern(domain string, pattern CatalogMethod) error {
+	if !ml.config.Enabled {
+		return nil // Если метод learning отключен, просто возвращаем успех
+	}
+
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+
+	// Загружаем существующие паттерны
+	patterns := &CatalogPatterns{
+		Domains: make(map[string]*CatalogMethod),
+	}
+
+	// Пробуем загрузить существующий файл
+	if data, err := os.ReadFile(ml.storageFile); err == nil {
+		var existingPatterns CatalogPatterns
+		if err := yaml.Unmarshal(data, &existingPatterns); err == nil {
+			patterns.Domains = existingPatterns.Domains
+		}
+	}
+
+	// Добавляем/обновляем паттерн для домена
+	pattern.Domain = domain
+	pattern.LastSeen = time.Now()
+	patterns.Domains[domain] = &pattern
+
+	// Сохраняем в файл
+	data, err := yaml.Marshal(patterns)
+	if err != nil {
+		ml.logger.Error().Err(err).Str("domain", domain).Msg("Failed to marshal catalog patterns")
+		return fmt.Errorf("failed to marshal catalog patterns: %w", err)
+	}
+
+	// Сохраняем в специальный файл для catalog patterns
+	catalogStorageFile := filepath.Join(ml.config.StorageDir, "catalog_patterns.yaml")
+	if err := os.WriteFile(catalogStorageFile, data, 0644); err != nil {
+		ml.logger.Error().Err(err).Str("domain", domain).Msg("Failed to save catalog patterns")
+		return fmt.Errorf("failed to save catalog patterns: %w", err)
+	}
+
+	ml.logger.Info().Str("domain", domain).Msg("Successfully saved catalog patterns")
+	return nil
+}
+
+// LoadCatalogPattern загружает сохраненные паттерны для домена
+func (ml *MethodLearner) LoadCatalogPattern(domain string) (CatalogMethod, bool) {
+	if !ml.config.Enabled {
+		return CatalogMethod{}, false
+	}
+
+	ml.mutex.RLock()
+	defer ml.mutex.RUnlock()
+
+	// Загружаем файл паттернов
+	catalogStorageFile := filepath.Join(ml.config.StorageDir, "catalog_patterns.yaml")
+	data, err := os.ReadFile(catalogStorageFile)
+	if err != nil {
+		ml.logger.Debug().Err(err).Str("domain", domain).Msg("No catalog patterns file found")
+		return CatalogMethod{}, false
+	}
+
+	// Парсим YAML
+	var patterns CatalogPatterns
+	if err := yaml.Unmarshal(data, &patterns); err != nil {
+		ml.logger.Error().Err(err).Str("domain", domain).Msg("Failed to parse catalog patterns")
+		return CatalogMethod{}, false
+	}
+
+	// Получаем паттерн для домена
+	pattern, exists := patterns.Domains[domain]
+	if !exists {
+		ml.logger.Debug().Str("domain", domain).Msg("No catalog patterns found for domain")
+		return CatalogMethod{}, false
+	}
+
+	ml.logger.Debug().Str("domain", domain).Msg("Successfully loaded catalog patterns")
+	return *pattern, true
+}
+
+// GetAllCatalogPatterns возвращает все сохраненные паттерны каталогов
+func (ml *MethodLearner) GetAllCatalogPatterns() map[string]CatalogMethod {
+	if !ml.config.Enabled {
+		return make(map[string]CatalogMethod)
+	}
+
+	ml.mutex.RLock()
+	defer ml.mutex.RUnlock()
+
+	// Загружаем файл паттернов
+	catalogStorageFile := filepath.Join(ml.config.StorageDir, "catalog_patterns.yaml")
+	data, err := os.ReadFile(catalogStorageFile)
+	if err != nil {
+		ml.logger.Debug().Err(err).Msg("No catalog patterns file found")
+		return make(map[string]CatalogMethod)
+	}
+
+	// Парсим YAML
+	var patterns CatalogPatterns
+	if err := yaml.Unmarshal(data, &patterns); err != nil {
+		ml.logger.Error().Err(err).Msg("Failed to parse catalog patterns")
+		return make(map[string]CatalogMethod)
+	}
+
+	// Конвертируем в обычный map для безопасного использования
+	result := make(map[string]CatalogMethod, len(patterns.Domains))
+	for k, v := range patterns.Domains {
+		if v != nil {
+			result[k] = *v
+		}
+	}
+
+	return result
+}
+
+// UpdateCatalogSuccessRate обновляет успешность паттернов для домена
+func (ml *MethodLearner) UpdateCatalogSuccessRate(domain string, success bool) error {
+	if !ml.config.Enabled {
+		return nil
+	}
+
+	ml.mutex.Lock()
+	defer ml.mutex.Unlock()
+
+	// Загружаем текущие паттерны
+	pattern, exists := ml.LoadCatalogPattern(domain)
+	if !exists {
+		// Если паттернов нет, создаем базовые
+		pattern = CatalogMethod{
+			Domain:      domain,
+			SuccessRate: 0.5, // Начальный рейтинг
+		}
+	}
+
+	// Обновляем успешность (простая экспоненциальная скользящая средняя)
+	if success {
+		pattern.SuccessRate = pattern.SuccessRate*0.8 + 0.2*1.0
+	} else {
+		pattern.SuccessRate = pattern.SuccessRate*0.8 + 0.2*0.0
+	}
+
+	// Сохраняем обновленные паттерны
+	return ml.SaveCatalogPattern(domain, pattern)
+}

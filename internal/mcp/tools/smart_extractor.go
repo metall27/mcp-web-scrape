@@ -36,9 +36,14 @@ func NewSmartExtractorTool(cache *cache.Cache, uaRotator *useragent.Rotator, pro
 			},
 			"mode": map[string]interface{}{
 				"type":        "string",
-				"description": "Extraction mode: news, tech, finance, legal, medical, general, clean_text, links",
-				"enum":        []string{"news", "tech", "finance", "legal", "medical", "general", "clean_text", "links"},
+				"description": "Extraction mode: news, tech, finance, legal, medical, general, clean_text, links, catalog",
+				"enum":        []string{"news", "tech", "finance", "legal", "medical", "general", "clean_text", "links", "catalog"},
 				"default":     "general",
+			},
+			"max_pages": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum catalog pages to discover (for catalog mode)",
+				"default":     3,
 			},
 			"max_items": map[string]interface{}{
 				"type":        "integer",
@@ -85,12 +90,41 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 		return nil, fmt.Errorf("smart_extract requires either 'html' or 'url' parameter. Example: smart_extract(url=\"https://example.com\", mode=\"general\")")
 	}
 
+	// Check mode first - catalog mode needs URL for discovery
+	mode := "general"
+	if m, ok := args["mode"].(string); ok {
+		mode = m
+	}
+
+	// Special handling for catalog mode - pass URL directly
+	if mode == "catalog" {
+		if urlStr, ok := args["url"].(string); ok {
+			t.logger.Info().Str("url", urlStr).Str("mode", mode).Msg("Catalog mode detected, passing URL directly")
+			result := t.extractCatalog(ctx, urlStr, args)
+			return map[string]interface{}{
+				"mode":   mode,
+				"result": result,
+			}, nil
+		} else if htmlVal, ok := args["html"].(string); ok {
+			// Fallback: extract from provided HTML only
+			t.logger.Info().Str("mode", mode).Msg("Catalog mode with HTML, extracting products from provided content")
+			result := t.extractProductsFromHTML(htmlVal)
+			return map[string]interface{}{
+				"mode":   mode,
+				"result": result,
+			}, nil
+		} else {
+			return nil, fmt.Errorf("catalog mode requires either 'url' or 'html' parameter")
+		}
+	}
+
+	// For other modes, process as before
 	var html string
 	var err error
 
 	// Check if url parameter is provided
 	if urlStr, ok := args["url"].(string); ok {
-		t.logger.Info().Str("url", urlStr).Msg("smart_extract called with url parameter, will scrape first")
+		t.logger.Info().Str("url", urlStr).Str("mode", mode).Msg("smart_extract called with url parameter, will scrape first")
 
 		// Use the unified scraper to get content
 		html, err = t.scrapeURL(ctx, urlStr)
@@ -122,11 +156,6 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 	// Validate html is not empty
 	if strings.TrimSpace(html) == "" {
 		return nil, fmt.Errorf("smart_extract 'html' parameter cannot be empty. Please provide the HTML content you want to extract information from")
-	}
-
-	mode := "general"
-	if m, ok := args["mode"].(string); ok {
-		mode = m
 	}
 
 	maxItems := 10
@@ -599,4 +628,157 @@ func (t *SmartExtractorTool) scrapeURL(ctx context.Context, urlStr string) (stri
 		Msg("smart_extract successfully scraped URL")
 
 	return result.HTML, nil
+}
+
+// extractCatalog discovers and extracts products from catalog pages
+func (t *SmartExtractorTool) extractCatalog(ctx context.Context, url string, args map[string]interface{}) map[string]interface{} {
+	t.logger.Info().Str("url", url).Msg("Starting catalog extraction with discovery")
+
+	// Create catalog discovery service
+	catalogDiscovery := NewCatalogDiscovery(t.cache, t.httpScraper)
+
+	// Set configurable pagination depth
+	maxPages := 3 // default
+	if pages, ok := args["max_pages"].(float64); ok {
+		maxPages = int(pages)
+		t.logger.Info().Int("max_pages", maxPages).Msg("Using custom max_pages setting")
+	}
+	catalogDiscovery.SetMaxPages(maxPages)
+
+	// Discover catalog pages using multi-strategy approach
+	catalogPages, err := catalogDiscovery.DiscoverCatalogPages(ctx, url)
+	if err != nil {
+		t.logger.Error().Err(err).Str("url", url).Msg("Catalog discovery failed")
+		return map[string]interface{}{
+			"type":    "catalog",
+			"error":   err.Error(),
+			"products": []Product{},
+		}
+	}
+
+	if len(catalogPages) == 0 {
+		t.logger.Warn().Str("url", url).Msg("No catalog pages discovered, falling back to single page extraction")
+		// Fallback: extract from the URL provided
+		html, err := t.scrapeURL(ctx, url)
+		if err != nil {
+			return map[string]interface{}{
+				"type":    "catalog",
+				"error":   err.Error(),
+				"products": []Product{},
+			}
+		}
+		return t.extractProductsFromHTML(html)
+	}
+
+	t.logger.Info().
+		Str("url", url).
+		Int("catalog_pages", len(catalogPages)).
+		Msg("Successfully discovered catalog pages")
+
+	// Extract products from all discovered catalog pages
+	var allProducts []Product
+	catalogInfo := []map[string]interface{}{}
+
+	for _, catalogPage := range catalogPages {
+		t.logger.Info().
+			Str("catalog_url", catalogPage.URL).
+			Str("discovery_method", catalogPage.DiscoveryMethod).
+			Msg("Extracting products from catalog page")
+
+		// Scrape the catalog page
+		pageHTML, err := t.scrapeURL(ctx, catalogPage.URL)
+		if err != nil {
+			t.logger.Warn().
+				Err(err).
+				Str("catalog_url", catalogPage.URL).
+				Msg("Failed to scrape catalog page")
+			continue
+		}
+
+		// Extract products from this page
+		t.logger.Info().
+			Str("catalog_url", catalogPage.URL).
+			Int("page_html_length", len(pageHTML)).
+			Msg("Extracting products from catalog page HTML")
+
+		products := catalogDiscovery.ExtractProducts(pageHTML)
+
+		t.logger.Info().
+			Str("catalog_url", catalogPage.URL).
+			Int("products_found", len(products)).
+			Msg("Product extraction completed")
+
+		allProducts = append(allProducts, products...)
+
+		// Track catalog info
+		catalogInfo = append(catalogInfo, map[string]interface{}{
+			"url":             catalogPage.URL,
+			"title":           catalogPage.Title,
+			"product_count":   len(products),
+			"discovery_method": catalogPage.DiscoveryMethod,
+			"has_pagination":  catalogPage.HasPagination,
+		})
+
+		t.logger.Debug().
+			Str("catalog_url", catalogPage.URL).
+			Int("products_found", len(products)).
+			Msg("Successfully extracted products from catalog page")
+	}
+
+	// Remove duplicates based on product name
+	uniqueProducts := t.deduplicateProducts(allProducts)
+
+	t.logger.Info().
+		Str("url", url).
+		Int("total_products", len(allProducts)).
+		Int("unique_products", len(uniqueProducts)).
+		Int("pages_analyzed", len(catalogPages)).
+		Msg("Catalog extraction completed")
+
+	return map[string]interface{}{
+		"type":           "catalog",
+		"products":       uniqueProducts,
+		"total_products": len(uniqueProducts),
+		"pages_analyzed": len(catalogPages),
+		"catalog_info":   catalogInfo,
+	}
+}
+
+// extractProductsFromHTML extracts products from provided HTML without catalog discovery
+func (t *SmartExtractorTool) extractProductsFromHTML(html string) map[string]interface{} {
+	t.logger.Debug().Msg("Extracting products from provided HTML")
+
+	catalogDiscovery := NewCatalogDiscovery(t.cache, t.httpScraper)
+	products := catalogDiscovery.ExtractProducts(html)
+
+	// Remove duplicates
+	uniqueProducts := t.deduplicateProducts(products)
+
+	return map[string]interface{}{
+		"type":           "catalog",
+		"products":       uniqueProducts,
+		"total_products": len(uniqueProducts),
+		"pages_analyzed": 1,
+		"source":         "provided_html",
+	}
+}
+
+// deduplicateProducts removes duplicate products based on name
+func (t *SmartExtractorTool) deduplicateProducts(products []Product) []Product {
+	seen := make(map[string]bool)
+	var unique []Product
+
+	for _, product := range products {
+		normalized := strings.ToLower(strings.TrimSpace(product.Name))
+		if normalized == "" {
+			continue
+		}
+
+		if !seen[normalized] {
+			seen[normalized] = true
+			unique = append(unique, product)
+		}
+	}
+
+	return unique
 }

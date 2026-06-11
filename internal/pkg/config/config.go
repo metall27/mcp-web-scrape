@@ -21,6 +21,7 @@ type Config struct {
 	Log            LogConfig            `mapstructure:"log"`
 	GitHub         GitHubConfig         `mapstructure:"github"`
 	SiteMethod     SiteMethodConfig     `mapstructure:"site_method"`
+	Catalog        CatalogConfig        `mapstructure:"catalog"`
 }
 
 type ServerConfig struct {
@@ -128,6 +129,19 @@ type LogConfig struct {
 type SiteMethodConfig struct {
 	Enabled    bool   `mapstructure:"enabled"`     // Save site method preferences
 	StorageDir string `mapstructure:"storage_dir"` // Directory for YAML file (default: ./data)
+}
+
+// CatalogConfig конфигурация для обнаружения и извлечения каталогов
+type CatalogConfig struct {
+	AutoDiscovery       bool     `mapstructure:"auto_discovery"`        // Автоматическое обнаружение каталогов
+	MaxPages            int      `mapstructure:"max_pages"`              // Максимальное количество страниц для анализа (default: 3)
+	MaxPagesLimit       int      `mapstructure:"max_pages_limit"`        // Максимальный лимит страниц (default: 10)
+	ProductThreshold    int      `mapstructure:"product_threshold"`      // Минимум продуктов для валидации (default: 3)
+	EnableRAG           bool     `mapstructure:"enable_rag"`             // Интеграция с RAG для семантического поиска
+	PatternLearning     bool     `mapstructure:"pattern_learning"`       // Изучение паттернов для каждого домена
+	LearningStorage     string   `mapstructure:"learning_storage"`       // Хранение изученных паттернов (cache, file, memory)
+	CatalogPaths        []string `mapstructure:"catalog_paths"`          // Известные пути каталогов
+	ECommerceDomains    []string `mapstructure:"ecommerce_domains"`       // Известные e-commerce домены
 }
 
 func Load(configPath string) (*Config, error) {
@@ -273,4 +287,22 @@ func setDefaults(v *viper.Viper) {
 	// Site method learning defaults
 	v.SetDefault("site_method.enabled", false)               // Disabled by default
 	v.SetDefault("site_method.storage_dir", "./data")        // Default storage directory
+
+	// Catalog discovery defaults
+	v.SetDefault("catalog.auto_discovery", true)              // Автоматическое обнаружение каталогов
+	v.SetDefault("catalog.max_pages", 3)                       // Default: анализируем 3 страницы
+	v.SetDefault("catalog.max_pages_limit", 10)               // Максимальный лимит страниц
+	v.SetDefault("catalog.product_threshold", 3)             // Минимум продуктов для валидации
+	v.SetDefault("catalog.enable_rag", true)                 // Интеграция с RAG
+	v.SetDefault("catalog.pattern_learning", true)            // Изучение паттернов
+	v.SetDefault("catalog.learning_storage", "cache")         // Хранение в cache
+	v.SetDefault("catalog.catalog_paths", []string{           // Известные пути каталогов
+		"/catalog/", "/shop/", "/products/", "/store/", "/goods/",
+		"/product/", "/category/", "/categories/", "/items/",
+	})
+	v.SetDefault("catalog.ecommerce_domains", []string{       // Известные e-commerce домены
+		"wildberries.ru", "ozon.ru", "lamoda.ru", "eldorado.ru",
+		"dns-shop.ru", "mvideo.ru", "citilink.ru", "sportsmaster.ru",
+		"sedmo.ru", "kuycon-russia.ru",
+	})
 }

@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"net/url"
+	neturl "net/url"
 	"strings"
 
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
@@ -238,7 +238,7 @@ func (s *UnifiedScraper) tryFallback(ctx context.Context, url string, opts Optio
 
 // extractDomain извлекает домен из URL для method learning
 func (s *UnifiedScraper) extractDomain(urlStr string) string {
-	u, err := url.Parse(urlStr)
+	u, err := neturl.Parse(urlStr)
 	if err != nil {
 		return ""
 	}
@@ -253,4 +253,58 @@ func (s *UnifiedScraper) findScraperByName(name string) Scraper {
 		}
 	}
 	return nil
+}
+
+// isCatalogSite проверяет, является ли сайт e-commerce сайтом с каталогом
+func (s *UnifiedScraper) isCatalogSite(url string) bool {
+	// Паттерны известных e-commerce платформ
+	eCommercePlatforms := []string{
+		"shopify.com", "bigcommerce.com", "woocommerce.com", "magento.com",
+		"prestashop.com", "opencart.com", "xt-commerce.com", "salesforce.com",
+	}
+
+	// Проверяем e-commerce платформы
+	for _, platform := range eCommercePlatforms {
+		if strings.Contains(url, platform) {
+			s.logger.Debug().Str("url", url).Str("platform", platform).Msg("Detected e-commerce platform")
+			return true
+		}
+	}
+
+	// Паттерны путей каталогов
+	catalogPathPatterns := []string{
+		"/catalog/", "/shop/", "/store/", "/products/", "/goods/",
+		"/product/", "/category/", "/categories/", "/items/",
+		"/listings/", "/inventory/", "/collection/", "/collections/",
+	}
+
+	// Проверяем URL на наличие путей каталогов
+	lowerURL := strings.ToLower(url)
+	for _, pattern := range catalogPathPatterns {
+		if strings.Contains(lowerURL, pattern) {
+			s.logger.Debug().Str("url", url).Str("pattern", pattern).Msg("Detected catalog path pattern")
+			return true
+		}
+	}
+
+	// Паттерны доменов - известные российские e-commerce сайты
+	knownEcommerceDomains := []string{
+		"wildberries.ru", "ozon.ru", "lamoda.ru", "eldorado.ru",
+		"dns-shop.ru", "mvideo.ru", "citilink.ru", "sportsmaster.ru",
+		"sedmo.ru", "kuycon-russia.ru",
+	}
+
+	// Проверяем домен на соответствие известным e-commerce сайтам
+	parsedURL, err := neturl.Parse(url)
+	if err == nil {
+		domain := parsedURL.Hostname()
+		for _, knownDomain := range knownEcommerceDomains {
+			if strings.Contains(domain, knownDomain) || strings.Contains(knownDomain, domain) {
+				s.logger.Debug().Str("url", url).Str("domain", knownDomain).Msg("Detected known e-commerce domain")
+				return true
+			}
+		}
+	}
+
+	return false
 }

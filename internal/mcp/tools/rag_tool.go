@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -416,4 +418,111 @@ func NewRAGListDocumentsTool() Tool {
 		schema,
 		handler,
 	)
+}
+
+// IndexCatalogPages индексирует страницы каталога для семантического поиска продуктов
+func (c *RAGClient) IndexCatalogPages(catalogPages []CatalogPage) error {
+	for _, page := range catalogPages {
+		// Индексируем каждую страницу каталога
+		processingMode := "catalog" // Специальный режим для каталогов
+		ttl := 3600 * 24            // 24 часа TTL для каталогов
+
+		resp, err := c.Index(page.URL, processingMode, ttl)
+		if err != nil {
+			return fmt.Errorf("failed to index catalog page %s: %w", page.URL, err)
+		}
+
+		fmt.Printf("Indexed catalog page: %s (Document ID: %s, Chunks: %d)\n",
+			page.URL, resp.DocumentID, resp.ChunksCreated)
+	}
+
+	return nil
+}
+
+// SearchProducts выполняет семантический поиск продуктов по характеристикам
+func (c *RAGClient) SearchProducts(query string, topK int) ([]Product, error) {
+	// Добавляем фильтр для поиска только по каталогам
+	filters := map[string]interface{}{
+		"processing_mode": "catalog",
+		"document_type":  "catalog",
+	}
+
+	results, err := c.Search(query, topK, filters)
+	if err != nil {
+		return nil, fmt.Errorf("product search failed: %w", err)
+	}
+
+	// Конвертируем результаты в продукты
+	var products []Product
+	for _, result := range results.Results {
+		// Извлекаем информацию о продукте из результатов
+		product := Product{
+			Name:        extractProductNameFromChunk(result.Text),
+			Description: result.Text,
+			Specs:       extractSpecsFromMetadata(result.Metadata),
+		}
+
+		// Добавляем URL если есть в метаданных
+		if url, ok := result.Metadata["url"].(string); ok {
+			product.ProductURL = url
+		}
+
+		products = append(products, product)
+	}
+
+	return products, nil
+}
+
+// extractProductNameFromChunk извлекает название продукта из текстового чанка
+func extractProductNameFromChunk(chunk string) string {
+	// Простая эвристика: берем первую строку или первое предложение
+	lines := strings.Split(chunk, "\n")
+	if len(lines) > 0 {
+		// Ищем строку, которая похожа на название продукта
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			// Пропускаем слишком короткие или слишком длинные строки
+			if len(trimmed) > 3 && len(trimmed) < 100 {
+				// Проверяем на наличие цифр, букв (кириллица или латиница)
+				if hasProductNamePattern(trimmed) {
+					return trimmed
+				}
+			}
+		}
+		// Fallback: первая строка
+		return strings.TrimSpace(lines[0])
+	}
+
+	return chunk
+}
+
+// hasProductNamePattern проверяет, похожа ли строка на название продукта
+func hasProductNamePattern(text string) bool {
+	// Должен содержать буквы (кириллица или латиница)
+	hasLetters := regexp.MustCompile(`[a-zA-Zа-яА-ЯёЁ]`).MatchString(text)
+	// Не должен быть только цифрами или специальными символами
+	notJustNumbers := regexp.MustCompile(`^[0-9\s\.,]+$`).MatchString(text) == false
+
+	return hasLetters && notJustNumbers
+}
+
+// extractSpecsFromMetadata извлек характеристики из метаданных
+func extractSpecsFromMetadata(metadata map[string]interface{}) map[string]string {
+	specs := make(map[string]string)
+
+	// Обычные характеристики для продуктов
+	specKeys := []string{
+		"frequency", "resolution", "brightness", "size", "color",
+		"частота", "разрешение", "яркость", "размер", "цвет",
+	}
+
+	for _, key := range specKeys {
+		if value, ok := metadata[key].(string); ok {
+			specs[key] = value
+		} else if value, ok := metadata[key].(float64); ok {
+			specs[key] = fmt.Sprintf("%.0f", value)
+		}
+	}
+
+	return specs
 }
