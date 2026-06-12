@@ -71,9 +71,6 @@ type ScrapeError struct {
 
 // Error реализует error interface
 func (e *ScrapeError) Error() string {
-	if e == nil {
-		return "nil scrape error"
-	}
 	return e.Message
 }
 

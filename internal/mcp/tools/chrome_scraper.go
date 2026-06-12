@@ -1182,7 +1182,7 @@ func (s *ChromeScraper) convertPlatformURL(urlStr string) string {
 }
 
 // httpFallback performs HTTP fallback when Chrome fails
-func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, *ScrapeError) {
+func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
 	// Phase 4: HTTP Fallback - Use standard HTTP client for better compatibility
 	// For GitHub, we use standard HTTP client to avoid TLS fingerprinting issues
 	isGitHub := strings.Contains(urlStr, "github.com")
@@ -1406,7 +1406,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 }
 
 // platformAPIFallback performs optimized platform API scraping for GitHub, GitLab, and Gitea
-func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, *ScrapeError) {
+func (s *ChromeScraper) platformAPIFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
 	// Detect platform from URL
 	var platform, acceptHeader, authPrefix string
 

@@ -435,7 +435,7 @@ func (s *HTTPScraper) convertPlatformURL(urlStr string) string {
 }
 
 // platformAPIFallback performs platform-specific API scraping for GitHub, GitLab, and Gitea
-func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalURL, platform string, startTime time.Time) (*Result, *ScrapeError) {
+func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalURL, platform string, startTime time.Time) (*Result, error) {
 	// Create HTTP client for API request
 	client := &http.Client{
 		Timeout: 30 * time.Second,
