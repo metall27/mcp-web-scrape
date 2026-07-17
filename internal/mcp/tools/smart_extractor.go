@@ -3,9 +3,12 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
+	"github.com/PuerkitoBio/goquery"
+	"github.com/go-shiori/go-readability"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
@@ -163,6 +166,12 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 		maxItems = int(items)
 	}
 
+	// Optional URL — needed for readability to resolve relative links
+	urlStr := ""
+	if u, ok := args["url"].(string); ok {
+		urlStr = u
+	}
+
 	var result interface{}
 
 	switch mode {
@@ -177,11 +186,11 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 	case "medical":
 		result = t.extractMedical(html)
 	case "clean_text":
-		result = t.extractCleanText(html)
+		result = t.extractCleanText(html, urlStr)
 	case "links":
 		result = t.extractLinks(html)
 	default:
-		result = t.extractGeneral(html)
+		result = t.extractGeneral(html, urlStr)
 	}
 
 	return map[string]interface{}{
@@ -383,14 +392,33 @@ func (t *SmartExtractorTool) extractMedical(html string) map[string]interface{} 
 	}
 }
 
-func (t *SmartExtractorTool) extractCleanText(html string) map[string]interface{} {
-	// Remove all HTML, clean whitespace
+// extractCleanText extracts the main article content via readability.
+// Falls back to regex-based text cleaning if readability can't parse the page
+// (e.g. minimal HTML fragments, non-article pages).
+func (t *SmartExtractorTool) extractCleanText(html, pageURL string) map[string]interface{} {
+	if article, ok := t.parseReadability(html, pageURL); ok {
+		paragraphs := htmlToParagraphs(article.Content)
+		text := strings.Join(paragraphs, "\n\n")
+		return map[string]interface{}{
+			"type":        "clean_text",
+			"engine":      "readability",
+			"title":       article.Title,
+			"text":        text,
+			"paragraphs":  paragraphs,
+			"word_count":  countWords(text),
+			"excerpt":     article.Excerpt,
+			"byline":      article.Byline,
+			"site_name":   article.SiteName,
+			"language":    article.Language,
+		}
+	}
+
+	// Fallback: legacy regex-based cleaning
+	t.logger.Debug().Msg("readability failed for clean_text, falling back to regex")
 	text := t.cleanHTML(html)
 	text = strings.Join(strings.Fields(text), ". ")
 
-	// Split into paragraphs
 	paragraphs := regexp.MustCompile(`\.\s+`).Split(text, -1)
-
 	var cleanParas []string
 	for _, p := range paragraphs {
 		p = strings.TrimSpace(p)
@@ -401,8 +429,9 @@ func (t *SmartExtractorTool) extractCleanText(html string) map[string]interface{
 
 	return map[string]interface{}{
 		"type":        "clean_text",
+		"engine":      "regex",
 		"paragraphs":  cleanParas,
-		"word_count":  len(strings.Fields(text)),
+		"word_count":  countWords(text),
 	}
 }
 
@@ -432,8 +461,39 @@ func (t *SmartExtractorTool) extractLinks(html string) map[string]interface{} {
 	}
 }
 
-func (t *SmartExtractorTool) extractGeneral(html string) map[string]interface{} {
-	// General extraction: title, main content, metadata
+// extractGeneral extracts the main article content with metadata via readability.
+// Falls back to regex-based extraction if readability can't parse the page.
+func (t *SmartExtractorTool) extractGeneral(html, pageURL string) map[string]interface{} {
+	if article, ok := t.parseReadability(html, pageURL); ok {
+		paragraphs := htmlToParagraphs(article.Content)
+		text := strings.Join(paragraphs, "\n\n")
+		metadata := map[string]string{
+			"excerpt":   article.Excerpt,
+			"byline":    article.Byline,
+			"site_name": article.SiteName,
+			"language":  article.Language,
+		}
+		if article.Image != "" {
+			metadata["image"] = article.Image
+		}
+		if article.PublishedTime != nil {
+			metadata["published_time"] = article.PublishedTime.Format("2006-01-02T15:04:05Z")
+		}
+		return map[string]interface{}{
+			"type":        "general",
+			"engine":      "readability",
+			"title":       article.Title,
+			"metadata":    metadata,
+			"text":        text,
+			"paragraphs":  paragraphs,
+			"excerpt":     article.Excerpt,
+			"word_count":  countWords(text),
+			"html":        article.Content, // readability-cleaned HTML
+		}
+	}
+
+	// Fallback: legacy regex-based extraction
+	t.logger.Debug().Msg("readability failed for general, falling back to regex")
 	titleRegex := regexp.MustCompile(`<title[^>]*>(.+?)</title>`)
 	titleMatch := titleRegex.FindStringSubmatch(html)
 
@@ -466,11 +526,83 @@ func (t *SmartExtractorTool) extractGeneral(html string) map[string]interface{} 
 
 	return map[string]interface{}{
 		"type":        "general",
+		"engine":      "regex",
 		"title":       title,
 		"metadata":    metadata,
 		"paragraphs":  paragraphs,
-		"word_count":  len(strings.Fields(t.cleanHTML(html))),
+		"word_count":  countWords(t.cleanHTML(html)),
 	}
+}
+
+// parseReadability runs go-readability on the HTML, returning the parsed article.
+// pageURL is optional (used to resolve relative links). Returns ok=false if
+// readability can't extract meaningful content — caller should fall back.
+func (t *SmartExtractorTool) parseReadability(htmlStr, pageURL string) (readability.Article, bool) {
+	var pageURLPtr *url.URL
+	if pageURL != "" {
+		if u, err := url.Parse(pageURL); err == nil && u.Host != "" {
+			pageURLPtr = u
+		}
+	}
+
+	article, err := readability.FromReader(strings.NewReader(htmlStr), pageURLPtr)
+	if err != nil {
+		t.logger.Debug().Err(err).Msg("readability parse error")
+		return readability.Article{}, false
+	}
+	// Heuristic: if readability extracted < 200 chars, treat as failure
+	if len(strings.TrimSpace(article.TextContent)) < 200 {
+		t.logger.Debug().Int("len", len(article.TextContent)).Msg("readability returned too-short content")
+		return readability.Article{}, false
+	}
+	return article, true
+}
+
+// htmlToParagraphs extracts paragraphs from readability-cleaned HTML.
+// Splits on block-level elements (<p>, <h1-6>, <li>, <br><br>), strips tags,
+// collapses whitespace. Empty blocks are dropped.
+func htmlToParagraphs(htmlStr string) []string {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlStr))
+	if err != nil {
+		// Fallback: naive regex split if goquery fails
+		return splitParagraphs(strings.TrimSpace(stripTags(htmlStr)))
+	}
+
+	var out []string
+	doc.Find("p, h1, h2, h3, h4, h5, h6, li").Each(func(_ int, s *goquery.Selection) {
+		text := strings.TrimSpace(s.Text())
+		if text != "" {
+			out = append(out, text)
+		}
+	})
+
+	// If we got nothing meaningful, fall back to plain text
+	if len(out) == 0 {
+		return splitParagraphs(strings.TrimSpace(stripTags(htmlStr)))
+	}
+	return out
+}
+
+// stripTags removes all HTML tags from s.
+func stripTags(s string) string {
+	return regexp.MustCompile(`<[^>]*>`).ReplaceAllString(s, "")
+}
+
+// splitParagraphs splits text content into non-empty trimmed paragraphs.
+func splitParagraphs(text string) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// countWords returns the word count of s.
+func countWords(s string) int {
+	return len(strings.Fields(s))
 }
 
 // Helper functions
