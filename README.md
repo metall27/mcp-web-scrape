@@ -284,10 +284,6 @@ docker stats mcp-web-scrape
 - ✅ **Real-time monitoring** - Удобнее смотреть логи в live режиме
 - ✅ **Single server** - Для одного сервера в Moscow timezone оптимально
 - ⚠️ **Для distributed systems** - Используйте UTC
-- ✅ **Chrome stability** - Headless Chrome требует больше ресурсов
-- ✅ **Concurrent requests** - Поддержка нескольких одновременных запросов
-- ✅ **Page complexity** - Современные SPA тяжелые для рендеринга
-- ✅ **Production reliability** - Запас производительности для пиковых нагрузок
 
 **Security Features:**
 - ✅ `no-new-privileges` - Privilege escalation prevention
@@ -458,33 +454,36 @@ UnifiedScraper (авто-выбор метода)
 ### Локальное тестирование
 
 ```bash
-# Phase 3 - Extended Stealth Test
-go run test_phase3_direct.go
+# Быстрые юнит-тесты (без сети)
+go test ./internal/pkg/cache/... ./internal/pkg/config/...
 
-# Phase 4 - TLS Fingerprinting Test
-go run test_phase4_tls.go
+# Полный прогон (часть тестов в internal/mcp/tools/ делают реальные
+# HTTP-запросы к httpbin.org / wowhead.com — нужны сеть и Chrome)
+make test
 
-# Phase 5 - Retry Loop Test
-go run test_phase5_retry.go
+# Линт
+make vet
+make format
 ```
 
 ### Production тестирование на сервере
 
 ```bash
-# Запуск тестового скрипта
-./test_remote_production.sh
+# Запуск сервера
+docker compose up -d
 
-# Или с указанием сервера
-./test_remote_production.sh http://localhost:8192
+# Проверка health
+curl http://localhost:8192/health
+
+# Ручные запросы к MCP endpoint
+curl -X POST http://localhost:8192/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-**Мониторинг логов во время тестов:**
+**Мониторинг логов:**
 ```bash
-# В одном терминале
 docker logs mcp-web-scrape -f
-
-# В другом - запускать тесты
-./test_remote_production.sh
 ```
 
 ### Что искать в логах
@@ -541,7 +540,7 @@ INF Phase 5: Scrape attempt successful attempt=0
 **Память и ресурсы:**
 - ✅ Нет memory leaks
 - ✅ Browser context правильно cleaned up
-- ✅ Docker limits: 2GB RAM, 2 CPU
+- ✅ Docker limits: 4GB RAM, 4 CPU
 
 ## 🚫 Ограничения и Known Issues
 
@@ -1034,33 +1033,36 @@ UnifiedScraper (auto-selection)
 ### Local testing
 
 ```bash
-# Phase 3 - Extended Stealth Test
-go run test_phase3_direct.go
+# Fast unit tests (no network)
+go test ./internal/pkg/cache/... ./internal/pkg/config/...
 
-# Phase 4 - TLS Fingerprinting Test
-go run test_phase4_tls.go
+# Full run (some tests in internal/mcp/tools/ make real HTTP requests
+# to httpbin.org / wowhead.com — network and Chrome required)
+make test
 
-# Phase 5 - Retry Loop Test
-go run test_phase5_retry.go
+# Lint
+make vet
+make format
 ```
 
 ### Production testing on server
 
 ```bash
-# Run test script
-./test_remote_production.sh
+# Start server
+docker compose up -d
 
-# Or with server URL
-./test_remote_production.sh http://localhost:8192
+# Health check
+curl http://localhost:8192/health
+
+# Manual MCP requests
+curl -X POST http://localhost:8192/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-**Monitor logs during tests:**
+**Monitor logs:**
 ```bash
-# In one terminal
 docker logs mcp-web-scrape -f
-
-# In another - run tests
-./test_remote_production.sh
 ```
 
 ### What to look for in logs
@@ -1117,7 +1119,7 @@ INF Phase 5: Scrape attempt successful attempt=0
 **Memory and Resources:**
 - ✅ No memory leaks
 - ✅ Browser context properly cleaned up
-- ✅ Docker limits: 2GB RAM, 2 CPU
+- ✅ Docker limits: 4GB RAM, 4 CPU
 
 ## 🚫 Limitations and Known Issues
 

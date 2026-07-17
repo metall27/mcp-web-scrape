@@ -39,10 +39,26 @@ docker-build:
 	@docker build -t mcp-web-scrape:latest .
 	@echo "Docker image built successfully!"
 
+# Build the test image (Go toolchain + Chromium) used by `docker-test`.
+docker-test-build:
+	@echo "Building Docker test image..."
+	@docker build --target test -t mcp-web-scrape:test .
+	@echo "Test image built: mcp-web-scrape:test"
+
+# Run the full test suite inside Docker (unit + integration with network).
+docker-test: docker-test-build
+	@echo "Running tests in Docker..."
+	@docker run --rm mcp-web-scrape:test
+
+# Run only unit tests (no network, fast) inside Docker.
+docker-test-unit: docker-test-build
+	@echo "Running unit tests in Docker..."
+	@docker run --rm mcp-web-scrape:test go test ./internal/pkg/cache/... ./internal/pkg/config/...
+
 docker-run:
 	@echo "Running Docker container..."
-	@docker run -d -p 8080:8080 --name mcp-server mcp-web-scrape:latest
-	@echo "Container started! Access at http://localhost:8080"
+	@docker run -d -p 8192:8192 --name mcp-server mcp-web-scrape:latest
+	@echo "Container started! Access at http://localhost:8192"
 
 docker-stop:
 	@echo "Stopping Docker container..."

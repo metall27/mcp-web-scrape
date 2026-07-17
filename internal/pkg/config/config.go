@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -154,7 +155,19 @@ func Load(configPath string) (*Config, error) {
 	if configPath != "" {
 		v.SetConfigFile(configPath)
 		if err := v.ReadInConfig(); err != nil {
-			return nil, fmt.Errorf("error reading config file: %w", err)
+			return nil, fmt.Errorf("error reading config file %s: %w", configPath, err)
+		}
+	} else {
+		// Default: look for config.yaml in the current working directory.
+		// Missing file is non-fatal — fall back to defaults + env.
+		v.SetConfigName("config")
+		v.SetConfigType("yaml")
+		v.AddConfigPath(".")
+		if err := v.ReadInConfig(); err != nil {
+			var notFound viper.ConfigFileNotFoundError
+			if !errors.As(err, &notFound) {
+				return nil, fmt.Errorf("error reading default config file: %w", err)
+			}
 		}
 	}
 

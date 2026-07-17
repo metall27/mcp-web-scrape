@@ -16,7 +16,31 @@ COPY . .
 # Сборка бинарника
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o mcp-web-scrape ./cmd/server
 
-# Stage 2: Runtime
+# Stage 2: Test
+# Образ для запуска тестов в Docker. Содержит Go-тулчейн + Chromium,
+# чтобы integration-тесты (chrome_scraper, http_scraper) могли ходить
+# к реальным сайтам в headless-режиме. Запуск:
+#   docker build --target test -t mcp-web-scrape:test .
+#   docker run --rm mcp-web-scrape:test
+#   docker run --rm mcp-web-scrape:test go test -run TestNewPool ./internal/pkg/browser/
+FROM golang:1.24-alpine AS test
+
+RUN apk add --no-cache git ca-certificates chromium
+
+WORKDIR /app
+
+COPY --from=builder /app/ /app/
+
+# Хром в Alpine — headless, без X11/GTK. Нужен для chromedp.
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV MCP_WEB_SCRAPE_BROWSER_NO_SANDBOX=true
+
+# Дефолтная команда — полный прогон. Чтобы прогнать только unit (без сети),
+# переопределить аргументом: docker run --rm mcp-web-scrape:test \
+#   go test ./internal/pkg/cache/... ./internal/pkg/config/...
+CMD ["go", "test", "./..."]
+
+# Stage 3: Runtime
 FROM alpine:latest
 
 # Установка Chromium БЕЗ GUI зависимостей

@@ -16,6 +16,8 @@ test_build
 test_*.go
 test_*.md
 test_*.sh
+test_*.json
+test_*.html
 
 # Output of the go coverage tool
 *.out

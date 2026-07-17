@@ -17,8 +17,8 @@ mcp-web-scrape
 *.so
 *.dylib
 
-# Test files
-*_test.go
+# Test artifacts (binaries), но НЕ исходники *_test.go — они нужны для test-stage
+*.test
 test/
 
 # CI/CD

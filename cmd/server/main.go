@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -23,8 +24,12 @@ import (
 )
 
 func main() {
+	// Parse flags
+	configPath := flag.String("config", "", "Path to config file (default: config.yaml from CWD / env)")
+	flag.Parse()
+
 	// Load configuration
-	cfg, err := config.Load("")
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
