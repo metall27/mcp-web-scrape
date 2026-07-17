@@ -14,6 +14,31 @@ scraping:
   max_redirects: 10
   max_body_size: 10485760  # 10MB
   allowed_domains: []  # Empty means all domains allowed
+  timeouts:
+    first_scraper_timeout: 5s   # Fast timeout for first scraper attempt (fail fast)
+    fallback_timeout: 15s        # Aggressive timeout for fallback attempts
+  js_sites:  # Known JavaScript-heavy sites that require Chrome scraper
+    - github.com
+    - twitter.com
+    - facebook.com
+    - react.dev
+    - vuejs.org
+    - angular.io
+    - nextjs.org
+    - stackoverflow.com
+    - reddit.com
+    - youtube.com
+    - linkedin.com
+    - instagram.com
+    - medium.com
+    - dev.to
+    - codesandbox.io
+    - replit.com
+    - figma.com
+    - notion.so
+    - trello.com
+    - slack.com
+    - discord.com
 
 browser:
   enabled: true
@@ -83,3 +108,7 @@ cache:
 log:
   level: info  # debug, info, warn, error
   pretty: true
+
+site_method:
+  enabled: false                 # Enable site method learning (disabled by default)
+  storage_dir: "./data"          # Directory for site_methods.yaml file
