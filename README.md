@@ -309,6 +309,37 @@ docker logs mcp-web-scrape
 docker stats mcp-web-scrape  # Check resource usage
 ```
 
+### Приватный registry (Nexus)
+
+Готовые образы хранятся в приватном Docker registry на `nexus.0x27.ru`
+(репозиторий `docker-0x27`). Это обходить rate limit Docker Hub при сборках
+и даёт точечный откат по SHA-тегам.
+
+**Доступные теги:**
+- `nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest` — последний master
+- `nexus.0x27.ru/docker-0x27/mcp-web-scrape:<git-sha>` — точечная версия
+
+**Запуск из registry вместо локальной сборки:**
+
+```bash
+docker login nexus.0x27.ru   # один раз, креды docker-nexus
+docker pull nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+docker run -d -p 8192:8192 --name mcp-server nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+```
+
+**Push нового образа (после сборки):**
+
+```bash
+make build
+docker tag mcp-web-scrape:latest nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+docker tag mcp-web-scrape:latest nexus.0x27.ru/docker-0x27/mcp-web-scrape:$(git rev-parse --short HEAD)
+docker push nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+docker push nexus.0x27.ru/docker-0x27/mcp-web-scrape:$(git rev-parse --short HEAD)
+```
+
+Pull работает анонимно, push требует учётку `docker-nexus` (роль
+`nx-repository-view-docker-docker-0x27-*` в Nexus).
+
 ### Из исходников
 
 Требуется Go 1.24+:
@@ -887,6 +918,37 @@ sleep 15
 # Check
 docker logs mcp-web-scrape
 ```
+
+### Private registry (Nexus)
+
+Pre-built images are stored in a private Docker registry at `nexus.0x27.ru`
+(repository `docker-0x27`). This avoids Docker Hub rate limits during builds
+and enables rollback to a specific commit by SHA tag.
+
+**Available tags:**
+- `nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest` — latest master
+- `nexus.0x27.ru/docker-0x27/mcp-web-scrape:<git-sha>` — pinned version
+
+**Run from registry instead of building locally:**
+
+```bash
+docker login nexus.0x27.ru   # once, docker-nexus creds
+docker pull nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+docker run -d -p 8192:8192 --name mcp-server nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+```
+
+**Push a new image (after building):**
+
+```bash
+make build
+docker tag mcp-web-scrape:latest nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+docker tag mcp-web-scrape:latest nexus.0x27.ru/docker-0x27/mcp-web-scrape:$(git rev-parse --short HEAD)
+docker push nexus.0x27.ru/docker-0x27/mcp-web-scrape:latest
+docker push nexus.0x27.ru/docker-0x27/mcp-web-scrape:$(git rev-parse --short HEAD)
+```
+
+Pull works anonymously, push requires `docker-nexus` account (role
+`nx-repository-view-docker-docker-0x27-*` in Nexus).
 
 ### From source
 

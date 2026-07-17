@@ -50,6 +50,11 @@ Site-method learning (опционально) пишет в `./data/site_methods
 shm 256MB — критично для Chrome), security_opt, ulimits, healthcheck.
 Порт контейнера и хоста — **8192** (НЕ 8080, как местами в старом Makefile).
 
+Готовые образы хранятся в приватном registry **nexus.0x27.ru** (репозиторий
+`docker-0x27`). Push после сборки: `make docker-push` (теги `:latest` + `:<git-sha>`),
+требует `docker login nexus.0x27.ru` (учётка `docker-nexus`, роль
+`nx-repository-view-docker-docker-0x27-*`). Pull анонимный.
+
 ---
 
 ## 3. Архитектура и структура

@@ -1,4 +1,4 @@
-.PHONY: help build run test stop clean docker-build docker-run docker-stop docker-logs docker-clean
+.PHONY: help build run test stop clean docker-build docker-run docker-stop docker-logs docker-clean docker-push
 
 # Default target
 help:
@@ -12,7 +12,7 @@ help:
 	@echo "  make docker-stop   - Stop Docker container"
 	@echo "  make docker-logs   - Show Docker logs"
 	@echo "  make docker-clean  - Remove Docker containers and images"
-	@echo "  make docker-push   - Push Docker image to registry"
+	@echo "  make docker-push   - Push image to private Nexus registry"
 
 # Local development
 build:
@@ -75,6 +75,20 @@ docker-clean:
 	@docker rm mcp-server 2>/dev/null || true
 	@docker rmi mcp-web-scrape:latest 2>/dev/null || true
 	@echo "Docker cleanup complete!"
+
+# Push the built image to the private Nexus registry (nexus.0x27.ru).
+# Tags both :latest and :<git-sha>. Requires `docker login nexus.0x27.ru`
+# with docker-nexus credentials.
+NEXUS_REG ?= nexus.0x27.ru/docker-0x27
+docker-push:
+	@test -f mcp-web-scrape || $(MAKE) build
+	@SHA=$$(git rev-parse --short HEAD); \
+	echo "Pushing to $(NEXUS_REG)/mcp-web-scrape :latest and :$$SHA..."; \
+	docker tag mcp-web-scrape:latest $(NEXUS_REG)/mcp-web-scrape:latest; \
+	docker tag mcp-web-scrape:latest $(NEXUS_REG)/mcp-web-scrape:$$SHA; \
+	docker push $(NEXUS_REG)/mcp-web-scrape:latest; \
+	docker push $(NEXUS_REG)/mcp-web-scrape:$$SHA; \
+	echo "Pushed: $(NEXUS_REG)/mcp-web-scrape:latest and :$$SHA"
 
 docker-compose-up:
 	@echo "Starting services with docker-compose..."
