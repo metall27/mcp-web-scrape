@@ -180,6 +180,18 @@ Client (MCP JSON-RPC)
 - Единый источник правды — `internal/pkg/config/config.go` (struct- definitions) + `setDefaults()` в нём же.
 - Новая настройка → добавить поле в нужный `*Config` struct + default в `setDefaults` + при необходимости ключ в `config.yaml.example`. Viper автоматически мапит env `MCP_WEB_SCRAPE_<SECTION>_<KEY>`.
 
+**Документация и синхронизация (обязательно):**
+При любом изменении внешнего контракта или поведения — держать документацию в синхроне. Конкретные триггеры и что обновлять:
+
+- **Изменил MCP-инструмент** (description, JSON-schema, параметр, формат ответа в `internal/mcp/tools/*.go`) → синхронно проверить и при необходимости обновить зеркальное описание в `internal/pkg/openapi/handlers.go` (OpenAPI spec для Open WebUI / REST-клиентов). OpenAPI хранит собственные копии описаний — это известный источник рассинхрона.
+- **Изменил формат ответа тулзы** → каждый инструмент обязан возвращать стандартный MCP `content[]` через хелпер `BuildMCPResponse` (`common.go`). Не отдавать raw map — клиенты (Claude Desktop, llama.cpp WebUI, Open WebUI) ждут `CallToolResult.content`.
+- **Добавил/изменил настройку конфига** → обновить `config.yaml.example` (и `config.yaml` если дефолт в коде поменялся).
+- **Изменил список инструментов или их capabilities** → проверить `AGENTS.md` раздел 3 (структура, поток данных) и `cmd/server/main.go` (info-эндпоинт `GET /`).
+- **Изменил Docker/деплой** (порты, лимиты, security_opt) → обновить `docker-compose.yml`, `Dockerfile`, разделы 2 и 6 в `AGENTS.md`.
+- **Депрекация/удаление фичи** → пометить в `docs/` (при активной доке) либо перенести в `docs/archive/`.
+
+Правило одного источника правды: MCP-описания в `internal/mcp/tools/*.go` — канон. OpenAPI spec — зеркало. При расхождении правится канон, затем зеркало, в одном PR.
+
 ---
 
 ## 5. Тесты и проверки
