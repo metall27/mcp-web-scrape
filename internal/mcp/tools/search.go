@@ -47,7 +47,8 @@ func NewSearchTool() *SearchTool {
 				"default":     "duckduckgo",
 			},
 		},
-		"required": []string{"query"},
+		"required":             []string{"query"},
+		"additionalProperties": false,
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
