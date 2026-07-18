@@ -43,8 +43,15 @@ func NewScrapeTool(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *prox
 				"type":        "object",
 				"description": "Custom HTTP headers",
 			},
+			"output_format": map[string]interface{}{
+				"type":        "string",
+				"description": "Output format: markdown (default, ~75% smaller, better for LLMs) or html (raw HTML)",
+				"enum":        []string{"html", "markdown"},
+				"default":     "markdown",
+			},
 		},
-		"required": []string{"url"},
+		"required":             []string{"url"},
+		"additionalProperties": false,
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
@@ -62,7 +69,7 @@ func NewScrapeTool(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *prox
 	return &ScrapeTool{
 		BaseTool: NewBaseTool(
 			"scrape_url",
-			"Fast HTTP for static pages. Use for: blogs, news, documentation, simple HTML sites. Automatic retry for transient errors.\n\nFeatures:\n- Automatic retry for timeout/empty errors (max 3 attempts with exponential backoff)\n- Smart error detection: timeout, blocked, network errors\n- Returns diagnostic hints when scraping fails\n\nError recovery:\n- If timeout occurs: automatic retry with increasing delays (1s, 2s, 3s)\n- If blocked: returns hints to try screenshot or proxy\n- If persistent errors: returns diagnostic suggestions\n\nFor dynamic sites (GitHub, dashboards, SPA) use scrape_with_js instead. Automatically optimizes HTML to reduce tokens. Returns: url, status_code, html (20-50KB), size_bytes, duration_ms",
+			"Fast HTTP scraper for static pages. Use for blogs, news, documentation, and simple HTML sites. For dynamic sites (SPAs, dashboards, JS-rendered content) use scrape_with_js instead.\n\nReturns the page content as Markdown (default, ~75% smaller) or raw HTML. Automatic retry with exponential backoff on transient errors (timeouts, network failures). Detects blocking and returns diagnostic hints. Strips scripts/styles/navigation to reduce output size.",
 			schema,
 			handler,
 		),
@@ -88,11 +95,17 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 		userAgent = ua
 	}
 
+	// Extract output format (default: markdown for ~75% token savings)
+	outputFormat := "markdown"
+	if of, ok := args["output_format"].(string); ok && of != "" {
+		outputFormat = of
+	}
+
 	// Execute scrape using HTTPScraper
 	result, err := t.scraper.Scrape(ctx, urlStr, Options{
-		Timeout:    timeout,
-		UserAgent:  userAgent,
-		OutputFormat: "html",
+		Timeout:      timeout,
+		UserAgent:    userAgent,
+		OutputFormat: outputFormat,
 	})
 
 	if err != nil {
@@ -126,7 +139,7 @@ func (t *ScrapeTool) execute(ctx context.Context, args map[string]interface{}) (
 	}
 
 	return map[string]interface{}{
-		"content":    content,
-		"_metadata":  metadata,
+		"content":   content,
+		"_metadata": metadata,
 	}, nil
 }

@@ -43,7 +43,8 @@ func NewParseHTMLTool() *ParseHTMLTool {
 				"default":     false,
 			},
 		},
-		"required": []string{"html"},
+		"required":             []string{"html"},
+		"additionalProperties": false,
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
@@ -56,7 +57,7 @@ func NewParseHTMLTool() *ParseHTMLTool {
 	return &ParseHTMLTool{
 		BaseTool: NewBaseTool(
 			"parse_html",
-			"Parses HTML content and extracts elements using CSS selectors",
+			"Extract elements from an HTML string using CSS selectors. Unlike smart_extract (which pulls structured facts from an article), this is a low-level tool for precise DOM queries — e.g. 'give me all the <a> hrefs' or 'the text of every .price element'. Pass already-fetched HTML (from scrape_url or scrape_with_js); do not use it to download pages.",
 			schema,
 			handler,
 		),
@@ -110,12 +111,12 @@ func (t *ParseHTMLTool) execute(ctx context.Context, args map[string]interface{}
 
 	elements := doc.Find(selector)
 	if elements.Length() == 0 {
-		return map[string]interface{}{
+		return BuildMCPResponse(map[string]interface{}{
 			"selector":       selector,
 			"elements_found": 0,
 			"results":        []interface{}{},
 			"message":        "No elements found matching the selector",
-		}, nil
+		}, nil)
 	}
 
 	// Extract data from elements
@@ -210,7 +211,7 @@ func (t *ParseHTMLTool) execute(ctx context.Context, args map[string]interface{}
 		Int("elements_found", len(results)).
 		Msg("HTML parsing completed")
 
-	return response, nil
+	return BuildMCPResponse(response, nil)
 }
 
 func (t *ParseHTMLTool) guessSelectorType(selector string) string {

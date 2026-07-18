@@ -15,13 +15,13 @@ import (
 
 type DiagnosticURLTool struct {
 	*BaseTool
-	cache         *cache.Cache
-	browserPool   *browser.Pool
-	ragConfig     config.RAGConfig
-	browserCfg    config.BrowserConfig
-	uaRotator     *useragent.Rotator
-	proxyRotator  *proxy.Rotator
-	githubCfg     config.GitHubConfig
+	cache        *cache.Cache
+	browserPool  *browser.Pool
+	ragConfig    config.RAGConfig
+	browserCfg   config.BrowserConfig
+	uaRotator    *useragent.Rotator
+	proxyRotator *proxy.Rotator
+	githubCfg    config.GitHubConfig
 }
 
 func NewDiagnosticURLTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator, githubCfg config.GitHubConfig) *DiagnosticURLTool {
@@ -47,18 +47,18 @@ func NewDiagnosticURLTool(cache *cache.Cache, browserPool *browser.Pool, ragConf
 	}
 
 	tool := &DiagnosticURLTool{
-		cache:         cache,
-		browserPool:   browserPool,
-		ragConfig:     ragConfig,
-		browserCfg:    browserCfg,
-		uaRotator:     uaRotator,
-		proxyRotator:  proxyRotator,
-		githubCfg:     githubCfg,
+		cache:        cache,
+		browserPool:  browserPool,
+		ragConfig:    ragConfig,
+		browserCfg:   browserCfg,
+		uaRotator:    uaRotator,
+		proxyRotator: proxyRotator,
+		githubCfg:    githubCfg,
 	}
 
 	tool.BaseTool = NewBaseTool(
 		"diagnostic_url",
-		"Diagnostic tool when scraping fails or performance is suspicious. Detects: blocking (Cloudflare, captcha), JS requirements, accessibility issues. Returns: suggested scraper (http/chrome) and action (retry/screenshot/give_up). Uses existing scrapers - no duplication.\n\nWhen to use:\n- After scrape timeout errors\n- After empty responses\n- To determine best scraping strategy\n- To investigate slow responses\n\nReturns diagnostic information:\n- accessible: Can URL be scraped\n- blocking_detected: Anti-bot protection detected\n- requires_javascript: Site needs JS rendering\n- suggested_scraper: Which scraper to use (http/chrome)\n- suggested_action: What to do (retry/screenshot/give_up)\n- issue: Description of the problem\n\nExample usage:\n- diagnostic_url?url=https://example.com\n- diagnostic_url?url=https://example.com&user_agent=CustomAgent",
+		"Diagnose why scraping a URL fails or is slow. Probes the URL with both HTTP and Chrome and reports: whether it's accessible, whether anti-bot blocking (Cloudflare, captcha) is detected, whether JS rendering is required, and recommends which scraper to use (http vs chrome) and what action to take (retry, screenshot, give up).\n\nUse this after a scrape_url or scrape_with_js call returns a timeout, empty body, or suspected block — to choose the right recovery path instead of guessing.",
 		schema,
 		handler,
 	)
@@ -70,9 +70,7 @@ func (t *DiagnosticURLTool) Execute(ctx context.Context, args map[string]interfa
 	// Parse arguments
 	url, ok := args["url"].(string)
 	if !ok || url == "" {
-		return map[string]interface{}{
-			"error": "URL is required",
-		}, nil
+		return nil, fmt.Errorf("URL is required")
 	}
 
 	// Create scrapers for diagnostic (they need to be created per request)
@@ -87,15 +85,15 @@ func (t *DiagnosticURLTool) Execute(ctx context.Context, args map[string]interfa
 
 	// Build response
 	response := map[string]interface{}{
-		"url":                  url,
-		"accessible":           result.Accessible,
-		"status_code":          result.StatusCode,
-		"response_time_ms":     result.ResponseTimeMs,
-		"blocking_detected":    result.BlockingDetected,
-		"requires_javascript":  result.RequiresJavaScript,
-		"suggested_scraper":    result.SuggestedScraper,
-		"suggested_action":     result.SuggestedAction,
-		"issue":                result.Issue,
+		"url":                    url,
+		"accessible":             result.Accessible,
+		"status_code":            result.StatusCode,
+		"response_time_ms":       result.ResponseTimeMs,
+		"blocking_detected":      result.BlockingDetected,
+		"requires_javascript":    result.RequiresJavaScript,
+		"suggested_scraper":      result.SuggestedScraper,
+		"suggested_action":       result.SuggestedAction,
+		"issue":                  result.Issue,
 		"diagnostic_duration_ms": duration.Milliseconds(),
 	}
 
@@ -110,13 +108,10 @@ func (t *DiagnosticURLTool) Execute(ctx context.Context, args map[string]interfa
 	// Convert to JSON for clean output
 	jsonData, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
-		return map[string]interface{}{
-			"error": fmt.Sprintf("Failed to marshal result: %v", err),
-		}, nil
+		return nil, fmt.Errorf("failed to marshal diagnostic result: %w", err)
 	}
 
-	return map[string]interface{}{
-		"content_type": "application/json",
-		"data":          string(jsonData),
-	}, nil
+	return BuildMCPResponse(string(jsonData), map[string]interface{}{
+		"diagnostic_duration_ms": duration.Milliseconds(),
+	})
 }

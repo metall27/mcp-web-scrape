@@ -70,11 +70,11 @@ type RAGIndexRequest struct {
 
 // RAGIndexResponse represents index response
 type RAGIndexResponse struct {
-	Status          string    `json:"status"`
-	DocumentID      string    `json:"document_id"`
-	ChunksCreated   int       `json:"chunks_created"`
-	IndexTimeMs     int       `json:"index_time_ms"`
-	EmbeddingsModel string    `json:"embeddings_model"`
+	Status          string `json:"status"`
+	DocumentID      string `json:"document_id"`
+	ChunksCreated   int    `json:"chunks_created"`
+	IndexTimeMs     int    `json:"index_time_ms"`
+	EmbeddingsModel string `json:"embeddings_model"`
 	IndexedAt       string `json:"indexed_at"`
 }
 
@@ -111,8 +111,8 @@ func (c *RAGClient) Search(query string, topK int, filters map[string]interface{
 	}
 
 	reqBody := RAGSearchRequest{
-		Query:  query,
-		TopK:   topK,
+		Query:   query,
+		TopK:    topK,
 		Filters: filters,
 	}
 
@@ -293,7 +293,7 @@ func NewRAGSearchTool() Tool {
 
 	return NewBaseTool(
 		"rag_search",
-		"Search indexed documentation and knowledge base. Returns relevant text chunks from previously indexed content. Use to find information in docs without re-scraping. scrape_with_js auto-indexes to RAG, so subsequent searches will find content here.",
+		"Semantic search over the RAG knowledge base — finds relevant text chunks from previously indexed pages without re-scraping. scrape_with_js auto-indexes pages to RAG (when enabled), so content from recent scrapes is searchable here. For brand-new pages not yet indexed, call rag_index first to add them.",
 		schema,
 		handler,
 	)
@@ -356,7 +356,7 @@ func NewRAGIndexTool() Tool {
 
 	return NewBaseTool(
 		"rag_index",
-		"Index a web page in RAG knowledge base for future semantic search. Use this BEFORE rag_search to add content to the knowledge base. This tool scrapes the URL, extracts content, creates embeddings, and stores in vector database. After indexing, use rag_search to query the content. Processing modes: structured (default, best for docs), content (main content only), raw (full HTML). Default TTL: 7 days.",
+		"Add a web page to the RAG knowledge base so rag_search can find it later. The tool fetches the URL, extracts content, generates embeddings, and stores them. Note: scrape_with_js also auto-indexes (when RAG is enabled), so you only need rag_index explicitly for pages you haven't scraped yet, or to force re-indexing with a specific processing mode. Default TTL is 7 days.",
 		schema,
 		handler,
 	)
@@ -444,7 +444,7 @@ func (c *RAGClient) SearchProducts(query string, topK int) ([]Product, error) {
 	// Добавляем фильтр для поиска только по каталогам
 	filters := map[string]interface{}{
 		"processing_mode": "catalog",
-		"document_type":  "catalog",
+		"document_type":   "catalog",
 	}
 
 	results, err := c.Search(query, topK, filters)
