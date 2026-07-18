@@ -19,11 +19,11 @@ import (
 
 type ScrapeJSTool struct {
 	*BaseTool
-	scraper    Scraper
-	cache      *cache.Cache
-	ragConfig  config.RAGConfig
-	githubCfg  config.GitHubConfig
-	logger     zerolog.Logger
+	scraper   Scraper
+	cache     *cache.Cache
+	ragConfig config.RAGConfig
+	githubCfg config.GitHubConfig
+	logger    zerolog.Logger
 }
 
 func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator, githubCfg config.GitHubConfig) *ScrapeJSTool {
@@ -107,7 +107,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			},
 			"actions": map[string]interface{}{
 				"type":        "array",
-				"description": "Interactive actions to execute after page load (click, type, scroll_to, wait_for, etc.). Actions are not cached.",
+				"description": "Ordered list of interactive actions to run after page load (not cached). Each action is an object with 'type' plus the fields that type needs: click/submit/hover/scroll_to/wait_for → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text → {text}. Optional on all: {timeout, retries}.",
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -141,15 +141,16 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				},
 			},
 		},
-		"required": []string{"url"},
+		"required":             []string{"url"},
+		"additionalProperties": false,
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 		tool := &ScrapeJSTool{
-			cache:      cache,
-			ragConfig:  ragConfig,
-			githubCfg:  githubCfg,
-			logger:     logger.Get(),
+			cache:     cache,
+			ragConfig: ragConfig,
+			githubCfg: githubCfg,
+			logger:    logger.Get(),
 		}
 		// ChromeScraper has its own retry loop and HTTP fallback
 		// No need for RetryScraper wrapper
@@ -169,7 +170,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-			"Full JavaScript rendering for dynamic sites. Returns HTML/Markdown. Use for: SPAs, dashboards, GitHub, interactive content.\n\nFeatures:\n- Automatic retry for timeout/empty errors (max 3 attempts with exponential backoff)\n- Smart error detection: timeout, blocked, captcha, partial content\n- Returns diagnostic hints when scraping fails\n\nError recovery:\n- If timeout occurs: automatic retry with increasing delays (1s, 2s, 3s)\n- If blocked: returns hints to try screenshot or proxy\n- If persistent errors: returns diagnostic suggestions\n\nGitHub Optimization:\n- Latest releases (default): Shows 5 recent releases (~750 tokens) - BEST for \"what's new?\" questions\n- All releases catalog: Add ?mode=catalog to see ALL releases with metadata (~5,500 tokens) - BEST for \"which release added X?\" questions\n- Flexible detail: Add ?releases=10 for detailed version history (~900 tokens)\n\nExample usage:\n- scrape_with_js?url=https://github.com/owner/repo/releases\n- scrape_with_js?url=https://github.com/owner/repo/releases?mode=catalog\n- scrape_with_js?url=https://github.com/owner/repo/releases?releases=10\n\nAuto-indexes to RAG for future semantic search. Supports smart network idle waiting (wait_for_network_idle=true) for optimal performance on SPA sites. Interactive actions support (click, type, scroll, wait_for) for login-protected content and dynamic elements.",
+		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait) supported for login-protected or dynamically-loaded content.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
 		schema,
 		handler,
 	)
@@ -253,16 +254,16 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	metadata := map[string]interface{}{
-		"url":           result.URL,
-		"final_url":     result.FinalURL,
-		"status_code":   result.StatusCode,
-		"content_type":  contentType,
-		"size_bytes":    result.SizeBytes,
-		"duration_ms":   result.Duration.Milliseconds(),
-		"title":         result.Title,
-		"rendering":     "javascript",
-		"format":        result.Format,
-		"method":        result.Method,
+		"url":          result.URL,
+		"final_url":    result.FinalURL,
+		"status_code":  result.StatusCode,
+		"content_type": contentType,
+		"size_bytes":   result.SizeBytes,
+		"duration_ms":  result.Duration.Milliseconds(),
+		"title":        result.Title,
+		"rendering":    "javascript",
+		"format":       result.Format,
+		"method":       result.Method,
 	}
 
 	// Add action metadata if interactive actions were executed
@@ -345,7 +346,7 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 	}
 
 	// Extract output_format
-	outputFormat := "markdown"  // Default to markdown for 75% token savings
+	outputFormat := "markdown" // Default to markdown for 75% token savings
 	if of, ok := args["output_format"].(string); ok {
 		outputFormat = of
 	}
@@ -399,7 +400,7 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		UserAgent:          userAgent,
 		ViewportWidth:      viewportWidth,
 		ViewportHeight:     viewportHeight,
-		BlockImages:       blockImages,
+		BlockImages:        blockImages,
 		OutputFormat:       outputFormat,
 		StealthEnabled:     stealthEnabled,
 		StealthScroll:      stealthScroll,

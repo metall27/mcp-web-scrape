@@ -3,9 +3,37 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 )
+
+// BuildMCPResponse constructs a standard MCP CallToolResult:
+//
+//	{"content": [{"type":"text","text": <json>}], "_metadata": meta}
+//
+// All tools MUST use this so every client (Claude Desktop, llama.cpp WebUI,
+// Open WebUI) sees content in the same shape. `data` is JSON-serialised into
+// the single text content item; `meta` (optional) is passed through verbatim
+// under _metadata and may itself be nil.
+func BuildMCPResponse(data interface{}, meta map[string]interface{}) (map[string]interface{}, error) {
+	payload, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tool result: %w", err)
+	}
+	resp := map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": string(payload),
+			},
+		},
+	}
+	if meta != nil {
+		resp["_metadata"] = meta
+	}
+	return resp, nil
+}
 
 // Common shared functions for all scrapers
 

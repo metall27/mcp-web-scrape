@@ -60,7 +60,7 @@ func NewSearchTool() *SearchTool {
 	return &SearchTool{
 		BaseTool: NewBaseTool(
 			"search_web",
-			"Searches the web to FIND URLs when you don't have a specific URL yet. Returns search results with URLs. Once you have URLs, use scrape_with_js to get content from those pages. Works with DuckDuckGo, Brave, Bing APIs.",
+			"Search the web to find URLs matching a query. Returns titles, URLs, and snippets — use this when you don't yet have a specific URL. Once you have URLs, fetch their content with scrape_url (static pages) or scrape_with_js (dynamic pages), or extract key facts with smart_extract.\n\nProviders: duckduckgo (default, no API key), brave (requires key), bing (requires key).",
 			schema,
 			handler,
 		),
@@ -131,7 +131,11 @@ func (t *SearchTool) execute(ctx context.Context, args map[string]interface{}) (
 		Int("results", len(results)).
 		Msg("Search completed")
 
-	return result, nil
+	return BuildMCPResponse(result, map[string]interface{}{
+		"query":       query,
+		"provider":    provider,
+		"total_count": len(results),
+	})
 }
 
 type SearchResult struct {

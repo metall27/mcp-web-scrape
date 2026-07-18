@@ -31,15 +31,16 @@ func NewSmartExtractorTool(cache *cache.Cache, uaRotator *useragent.Rotator, pro
 		"properties": map[string]interface{}{
 			"html": map[string]interface{}{
 				"type":        "string",
-				"description": "HTML content to extract from (use this OR url)",
+				"description": "HTML content to extract from. Provide this OR 'url'. Use 'html' when the page was already fetched by scrape_url/scrape_with_js to avoid a second download.",
 			},
 			"url": map[string]interface{}{
 				"type":        "string",
-				"description": "URL to scrape and extract from (tool will download content automatically - use this OR html)",
+				"format":      "uri",
+				"description": "URL to fetch and extract from (the tool downloads it for you). Provide this OR 'html'.",
 			},
 			"mode": map[string]interface{}{
 				"type":        "string",
-				"description": "Extraction mode: news, tech, finance, legal, medical, general, clean_text, links, catalog",
+				"description": "Extraction mode. 'general' (default) and 'clean_text' use readability to pull the main article. 'news/tech/finance/legal/medical' apply domain-specific regex heuristics. 'links' extracts hyperlinks. 'catalog' discovers and extracts e-commerce products with pagination.",
 				"enum":        []string{"news", "tech", "finance", "legal", "medical", "general", "clean_text", "links", "catalog"},
 				"default":     "general",
 			},
@@ -54,10 +55,11 @@ func NewSmartExtractorTool(cache *cache.Cache, uaRotator *useragent.Rotator, pro
 				"default":     10,
 			},
 		},
-		"oneOf": []map[string]interface{}{
+		"anyOf": []map[string]interface{}{
 			{"required": []string{"html"}},
 			{"required": []string{"url"}},
 		},
+		"additionalProperties": false,
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
@@ -74,7 +76,7 @@ func NewSmartExtractorTool(cache *cache.Cache, uaRotator *useragent.Rotator, pro
 	return &SmartExtractorTool{
 		BaseTool: NewBaseTool(
 			"smart_extract",
-			"Extracts key information from web content to save tokens. Two ways to use: 1) Pass 'url' parameter (tool will scrape automatically) - RECOMMENDED for convenience, or 2) Pass 'html' parameter (use AFTER scrape_with_js when content is already scraped). Modes: news=headlines, tech=API/docs, finance=reports, legal=docs, medical=health, clean_text=main content, links=URLs. IMPORTANT: For large responses, always use smart_extract to get key facts before answering.",
+			"Extract the meaningful content from a web page, discarding navigation/ads/boilerplate to save tokens. Accepts either a 'url' (the tool fetches it) or 'html' (already-fetched content). For most article-style pages, the default 'general' mode uses readability and is the right choice; 'clean_text' returns plain paragraphs only. Use 'smart_extract' instead of reading raw HTML when you need to answer a question about a page's content.",
 			schema,
 			handler,
 		),
@@ -104,18 +106,18 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 		if urlStr, ok := args["url"].(string); ok {
 			t.logger.Info().Str("url", urlStr).Str("mode", mode).Msg("Catalog mode detected, passing URL directly")
 			result := t.extractCatalog(ctx, urlStr, args)
-			return map[string]interface{}{
+			return BuildMCPResponse(map[string]interface{}{
 				"mode":   mode,
 				"result": result,
-			}, nil
+			}, nil)
 		} else if htmlVal, ok := args["html"].(string); ok {
 			// Fallback: extract from provided HTML only
 			t.logger.Info().Str("mode", mode).Msg("Catalog mode with HTML, extracting products from provided content")
 			result := t.extractProductsFromHTML(htmlVal)
-			return map[string]interface{}{
+			return BuildMCPResponse(map[string]interface{}{
 				"mode":   mode,
 				"result": result,
-			}, nil
+			}, nil)
 		} else {
 			return nil, fmt.Errorf("catalog mode requires either 'url' or 'html' parameter")
 		}
@@ -193,10 +195,10 @@ func (t *SmartExtractorTool) execute(ctx context.Context, args map[string]interf
 		result = t.extractGeneral(html, urlStr)
 	}
 
-	return map[string]interface{}{
+	return BuildMCPResponse(map[string]interface{}{
 		"mode":   mode,
 		"result": result,
-	}, nil
+	}, nil)
 }
 
 func (t *SmartExtractorTool) extractNews(html string, maxItems int) map[string]interface{} {
