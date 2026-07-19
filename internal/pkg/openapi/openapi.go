@@ -230,7 +230,10 @@ func AddToolEndpointFromSchema(spec *Spec, toolName, toolDescription string, ful
 		properties = make(map[string]interface{})
 	}
 
-	requiredList, _ := fullSchema["required"].([]string)
+	requiredList, ok := fullSchema["required"].([]string)
+	if !ok {
+		requiredList = nil
+	}
 
 	requestSchema := map[string]interface{}{
 		"type":       "object",

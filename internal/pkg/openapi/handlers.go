@@ -65,8 +65,14 @@ func (h *Handler) ListTools(c *gin.Context) {
 		schema := tool.InputSchema()
 
 		// Extract properties for a cleaner REST representation
-		properties, _ := schema["properties"].(map[string]interface{})
-		requiredList, _ := schema["required"].([]string)
+		properties, ok := schema["properties"].(map[string]interface{})
+		if !ok {
+			properties = nil
+		}
+		requiredList, ok := schema["required"].([]string)
+		if !ok {
+			requiredList = nil
+		}
 
 		// Build a simple parameters map from the schema properties
 		params := make(map[string]interface{})
