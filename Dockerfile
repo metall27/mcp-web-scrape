@@ -43,6 +43,14 @@ CMD ["go", "test", "./..."]
 # Stage 3: Runtime
 FROM alpine:latest
 
+# Nexus proxy переподписывает APKINDEX своим ключом (key-f14d99e5).
+# Копируем публичный ключ nexus для верификации подписей apk.
+COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
+
+# Alpine репозитории через nexus proxy
+RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.24/main" > /etc/apk/repositories \
+    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.24/community" >> /etc/apk/repositories
+
 # Установка Chromium БЕЗ GUI зависимостей
 # Chromium в Alpine = только headless, без X11/GTK
 RUN apk add --no-cache \
