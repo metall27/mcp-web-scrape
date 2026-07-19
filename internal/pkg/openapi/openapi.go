@@ -34,17 +34,17 @@ type PathItem struct {
 }
 
 type Operation struct {
-	Summary     string                 `json:"summary"`
-	Description string                 `json:"description,omitempty"`
-	OperationID string                 `json:"operationId"`
-	Tags        []string               `json:"tags"`
-	RequestBody *RequestBody           `json:"requestBody,omitempty"`
-	Responses   map[string]Response    `json:"responses"`
-	Parameters  []Parameter            `json:"parameters,omitempty"`
+	Summary     string              `json:"summary"`
+	Description string              `json:"description,omitempty"`
+	OperationID string              `json:"operationId"`
+	Tags        []string            `json:"tags"`
+	RequestBody *RequestBody        `json:"requestBody,omitempty"`
+	Responses   map[string]Response `json:"responses"`
+	Parameters  []Parameter         `json:"parameters,omitempty"`
 }
 
 type RequestBody struct {
-	Content map[string]MediaType `json:"content"`
+	Content  map[string]MediaType `json:"content"`
 	Required bool                 `json:"required"`
 }
 
@@ -53,8 +53,8 @@ type MediaType struct {
 }
 
 type Response struct {
-	Description string                 `json:"description"`
-	Content     map[string]MediaType   `json:"content,omitempty"`
+	Description string               `json:"description"`
+	Content     map[string]MediaType `json:"content,omitempty"`
 }
 
 type Parameter struct {
@@ -98,7 +98,7 @@ func GenerateSpec(baseURL string, mcpServer *mcp.Server) (*Spec, error) {
 										"type": "string",
 									},
 									"data": map[string]interface{}{
-										"type": "string",
+										"type":        "string",
 										"description": "Base64 encoded data for images/screenshots",
 									},
 								},
@@ -193,9 +193,17 @@ func GenerateSpec(baseURL string, mcpServer *mcp.Server) (*Spec, error) {
 		},
 	}
 
-	// Generate REST endpoints for each MCP tool
-	// This will be populated dynamically based on registered tools
-	// For now, we'll add common tool endpoints
+	// Generate REST endpoints for each MCP tool from registered tools
+	if mcpServer != nil {
+		toolMap := mcpServer.GetTools()
+		for _, toolName := range mcpServer.GetToolsOrder() {
+			tool := toolMap[toolName]
+			schema := tool.InputSchema()
+			AddToolEndpointFromSchema(spec, toolName, tool.Description(), schema)
+			// Also add /sse variant
+			AddToolEndpointFromSchema(spec, toolName, tool.Description(), schema, "/sse")
+		}
+	}
 
 	return spec, nil
 }
@@ -205,8 +213,9 @@ func (s *Spec) GenerateJSON() ([]byte, error) {
 	return json.MarshalIndent(s, "", "  ")
 }
 
-// AddToolEndpoint adds a REST endpoint for an MCP tool
-func AddToolEndpoint(spec *Spec, toolName, toolDescription string, inputSchema map[string]interface{}, prefixes ...string) {
+// AddToolEndpointFromSchema adds a REST endpoint using a full JSON Schema object
+// (type, properties, required, additionalProperties — as returned by Tool.InputSchema())
+func AddToolEndpointFromSchema(spec *Spec, toolName, toolDescription string, fullSchema map[string]interface{}, prefixes ...string) {
 	// Default prefix if not provided
 	prefix := ""
 	if len(prefixes) > 0 {
@@ -215,27 +224,23 @@ func AddToolEndpoint(spec *Spec, toolName, toolDescription string, inputSchema m
 
 	path := prefix + "/tools/" + toolName
 
-	// Convert parameters to request body schema
-	properties := make(map[string]interface{})
-	requiredParams := []string{}
+	// Extract properties and required from the full schema
+	properties, ok := fullSchema["properties"].(map[string]interface{})
+	if !ok {
+		properties = make(map[string]interface{})
+	}
 
-	for paramName, paramInfo := range inputSchema {
-		if paramMap, ok := paramInfo.(map[string]interface{}); ok {
-			properties[paramName] = paramMap
-
-			// Check if required
-			if isRequired, ok := paramMap["required"].(bool); ok && isRequired {
-				requiredParams = append(requiredParams, paramName)
-			}
-		}
+	requiredList, ok := fullSchema["required"].([]string)
+	if !ok {
+		requiredList = nil
 	}
 
 	requestSchema := map[string]interface{}{
 		"type":       "object",
 		"properties": properties,
 	}
-	if len(requiredParams) > 0 {
-		requestSchema["required"] = requiredParams
+	if len(requiredList) > 0 {
+		requestSchema["required"] = requiredList
 	}
 
 	spec.Paths[path] = PathItem{
