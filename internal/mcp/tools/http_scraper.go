@@ -338,7 +338,6 @@ func (s *HTTPScraper) SupportsActions() bool {
 	return false
 }
 
-
 // extractTitleFromHTML extracts the title from HTML content
 func extractTitleFromHTML(html string) string {
 	const startTag = "<title>"

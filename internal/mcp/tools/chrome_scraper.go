@@ -753,12 +753,32 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 	navigationTask := s.buildNavigationTask(urlStr, userAgent, stealth)
 	tasks = append(tasks, navigationTask)
 
-	// Wait for specific selector if provided
+	// Wait for specific selector if provided — wrapped in timeout to prevent indefinite hangs
 	if opts.WaitForSelector != "" {
-		waitAction := chromedp.WaitVisible(opts.WaitForSelector, chromedp.ByQuery)
-		if stealth != nil {
-			waitAction = stealth.ApplyStealth(waitAction)
-		}
+		waitAction := chromedp.ActionFunc(func(ctx context.Context) error {
+			timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+
+			wait := chromedp.WaitVisible(opts.WaitForSelector, chromedp.ByQuery)
+			if stealth != nil {
+				wait = stealth.ApplyStealth(wait)
+			}
+
+			err := wait.Do(timeoutCtx)
+			if err != nil {
+				s.logger.Warn().
+					Str("selector", opts.WaitForSelector).
+					Err(err).
+					Msg("WaitVisible timed out — continuing with page content")
+				// Graceful degradation: log and continue rather than failing the scrape
+				return nil
+			}
+
+			s.logger.Debug().
+				Str("selector", opts.WaitForSelector).
+				Msg("WaitVisible: element found")
+			return nil
+		})
 		tasks = append(tasks, waitAction)
 	}
 
