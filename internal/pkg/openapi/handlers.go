@@ -51,221 +51,59 @@ func (h *Handler) GetOpenAPI(c *gin.Context) {
 		return
 	}
 
-	// Add tool execution endpoints
-	tools := map[string]map[string]interface{}{
-		"scrape_url": {
-			"name":        "scrape_url",
-			"description": "Fast HTTP scraper for static websites, blogs, news, documentation",
-			"parameters": map[string]interface{}{
-				"url": map[string]interface{}{
-					"type":        "string",
-					"description": "URL to scrape (required)",
-					"required":    true,
-				},
-				"timeout": map[string]interface{}{
-					"type":        "integer",
-					"description": "Timeout in seconds (default: 30)",
-					"default":     30,
-				},
-				"user_agent": map[string]interface{}{
-					"type":        "string",
-					"description": "Custom User-Agent header",
-				},
-				"headers": map[string]interface{}{
-					"type":        "object",
-					"description": "Custom HTTP headers",
-				},
-			},
-		},
-		"scrape_with_js": {
-			"name":        "scrape_with_js",
-			"description": "Chrome-based scraper for dynamic websites with JavaScript rendering, GitHub, SPA, dashboards",
-			"parameters": map[string]interface{}{
-				"url": map[string]interface{}{
-					"type":        "string",
-					"description": "URL to scrape (required)",
-					"required":    true,
-				},
-				"timeout": map[string]interface{}{
-					"type":        "integer",
-					"description": "Timeout in seconds (default: 60)",
-					"default":     60,
-				},
-				"output_format": map[string]interface{}{
-					"type":        "string",
-					"description": "Output format",
-					"default":     "html",
-					"enum":        []string{"html", "markdown"},
-				},
-				"screenshot_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "When to take screenshot",
-					"default":     "auto",
-					"enum":        []string{"auto", "always", "never"},
-				},
-				"wait_for_network_idle": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Wait for network idle (smart loading for SPA)",
-					"default":     false,
-				},
-			},
-		},
-		"search_web": {
-			"name":        "search_web",
-			"description": "Web search using DuckDuckGo, Brave, or Bing",
-			"parameters": map[string]interface{}{
-				"query": map[string]interface{}{
-					"type":        "string",
-					"description": "Search query (required)",
-					"required":    true,
-				},
-				"max_results": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of results (default: 10)",
-					"default":     10,
-				},
-			},
-		},
-		"parse_html": {
-			"name":        "parse_html",
-			"description": "Parse and extract structured data from HTML content",
-			"parameters": map[string]interface{}{
-				"html": map[string]interface{}{
-					"type":        "string",
-					"description": "HTML content to parse (required)",
-					"required":    true,
-				},
-				"extract": map[string]interface{}{
-					"type":        "array",
-					"description": "CSS selectors to extract",
-					"items": map[string]interface{}{
-						"type": "string",
-					},
-				},
-			},
-		},
-		"smart_extract": {
-			"name":        "smart_extract",
-			"description": "Smart content extraction using LLM-based analysis of page structure",
-			"parameters": map[string]interface{}{
-				"url": map[string]interface{}{
-					"type":        "string",
-					"description": "URL to extract from (required)",
-					"required":    true,
-				},
-				"tech": map[string]interface{}{
-					"type":        "string",
-					"description": "Technology stack (auto-detected if empty)",
-				},
-			},
-		},
-	}
-
-	// For /sse/openapi.json requests, add only /tools paths (relative)
-	// For /openapi.json requests, add both /tools and /sse/tools paths
-	for toolName, toolInfo := range tools {
-		if isSSEPath {
-			// For /sse/openapi.json - use relative paths (no /sse prefix in paths)
-			AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
-		} else {
-			// For /openapi.json - add both variants
-			AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}))
-			AddToolEndpoint(spec, toolName, toolInfo["description"].(string), toolInfo["parameters"].(map[string]interface{}), "/sse")
-		}
-	}
-
 	c.Header("Content-Type", "application/json")
 	c.JSON(http.StatusOK, spec)
 }
 
-// ListTools returns all available tools
+// ListTools returns all available tools (from MCP server)
 func (h *Handler) ListTools(c *gin.Context) {
-	tools := []map[string]interface{}{
-		{
-			"name":        "scrape_url",
-			"description": "Fast HTTP scraper for static websites",
-			"parameters": map[string]interface{}{
-				"url": map[string]interface{}{
-					"type":        "string",
-					"description": "URL to scrape",
-					"required":    true,
-				},
-				"timeout": map[string]interface{}{
-					"type":        "integer",
-					"description": "Timeout in seconds",
-					"default":     30,
-				},
-				"user_agent": map[string]interface{}{
-					"type":        "string",
-					"description": "Custom User-Agent",
-				},
-			},
-		},
-		{
-			"name":        "scrape_with_js",
-			"description": "Chrome-based scraper for dynamic websites with JavaScript rendering",
-			"parameters": map[string]interface{}{
-				"url": map[string]interface{}{
-					"type":        "string",
-					"description": "URL to scrape",
-					"required":    true,
-				},
-				"timeout": map[string]interface{}{
-					"type":        "integer",
-					"description": "Timeout in seconds",
-					"default":     60,
-				},
-				"output_format": map[string]interface{}{
-					"type":        "string",
-					"description": "Output format (html or markdown)",
-					"default":     "html",
-					"enum":        []string{"html", "markdown"},
-				},
-				"screenshot_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "When to take screenshot",
-					"default":     "auto",
-					"enum":        []string{"auto", "always", "never"},
-				},
-			},
-		},
-		{
-			"name":        "search_web",
-			"description": "Web search using DuckDuckGo, Brave, or Bing",
-			"parameters": map[string]interface{}{
-				"query": map[string]interface{}{
-					"type":        "string",
-					"description": "Search query",
-					"required":    true,
-				},
-				"max_results": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of results",
-					"default":     10,
-				},
-			},
-		},
-		{
-			"name":        "parse_html",
-			"description": "Parse and extract structured data from HTML",
-			"parameters": map[string]interface{}{
-				"html": map[string]interface{}{
-					"type":        "string",
-					"description": "HTML content to parse",
-					"required":    true,
-				},
-				"extract": map[string]interface{}{
-					"type":        "array",
-					"description": "List of elements to extract",
-					"items": map[string]interface{}{
-						"type": "string",
-					},
-				},
-			},
-		},
+	toolMap := h.mcpServer.GetTools()
+	toolsList := make([]map[string]interface{}, 0, len(toolMap))
+
+	for _, toolName := range h.mcpServer.GetToolsOrder() {
+		tool := toolMap[toolName]
+		schema := tool.InputSchema()
+
+		// Extract properties for a cleaner REST representation
+		properties, _ := schema["properties"].(map[string]interface{})
+		requiredList, _ := schema["required"].([]string)
+
+		// Build a simple parameters map from the schema properties
+		params := make(map[string]interface{})
+		requiredSet := make(map[string]bool)
+		for _, r := range requiredList {
+			requiredSet[r] = true
+		}
+
+		for name, info := range properties {
+			if infoMap, ok := info.(map[string]interface{}); ok {
+				param := map[string]interface{}{
+					"type": infoMap["type"],
+				}
+				if desc, ok := infoMap["description"].(string); ok {
+					param["description"] = desc
+				}
+				if def, ok := infoMap["default"]; ok {
+					param["default"] = def
+				}
+				if enum, ok := infoMap["enum"]; ok {
+					param["enum"] = enum
+				}
+				if requiredSet[name] {
+					param["required"] = true
+				}
+				params[name] = param
+			}
+		}
+
+		toolsList = append(toolsList, map[string]interface{}{
+			"name":        tool.Name(),
+			"description": tool.Description(),
+			"parameters":  params,
+		})
 	}
 
-	c.JSON(http.StatusOK, tools)
+	c.JSON(http.StatusOK, toolsList)
 }
 
 // ExecuteTool executes an MCP tool via REST API
@@ -277,7 +115,7 @@ func (h *Handler) ExecuteTool(c *gin.Context) {
 	if err := c.ShouldBindJSON(&requestData); err != nil {
 		h.logger.Error().Err(err).Str("tool", toolName).Msg("Failed to parse request")
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid request body",
+			"error":   "Invalid request body",
 			"details": err.Error(),
 		})
 		return
@@ -325,7 +163,7 @@ func (h *Handler) ExecuteTool(c *gin.Context) {
 	if err != nil {
 		h.logger.Error().Err(err).Str("tool", toolName).Msg("Failed to execute tool")
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Tool execution failed",
+			"error":   "Tool execution failed",
 			"details": err.Error(),
 		})
 		return
@@ -356,8 +194,8 @@ func (h *Handler) ExecuteTool(c *gin.Context) {
 			statusCode = http.StatusBadRequest // Invalid params
 		}
 		c.JSON(statusCode, gin.H{
-			"error": mcpResponse.Error.Message,
-			"code": mcpResponse.Error.Code,
+			"error":   mcpResponse.Error.Message,
+			"code":    mcpResponse.Error.Code,
 			"details": mcpResponse.Error.Data,
 		})
 		return

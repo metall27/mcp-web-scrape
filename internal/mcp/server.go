@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/metall/mcp-web-scrape/internal/mcp/tools"
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
@@ -14,7 +15,6 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
-	"github.com/metall/mcp-web-scrape/internal/mcp/tools"
 	"github.com/rs/zerolog"
 	"golang.org/x/time/rate"
 )
@@ -99,11 +99,11 @@ func (s *Server) registerDefaultTools() error {
 
 	// Always register these tools
 	defaultTools = append(defaultTools,
-		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator, s.config.GitHub), // FALLBACK: Scrape only if rag_search empty
-		tools.NewScrapeTool(s.cache, s.uaRotator, s.proxyRotator), // Fast HTTP scraping for static pages
+		tools.NewScrapeJSTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator, s.config.GitHub),      // FALLBACK: Scrape only if rag_search empty
+		tools.NewScrapeTool(s.cache, s.uaRotator, s.proxyRotator),                                                                        // Fast HTTP scraping for static pages
 		tools.NewDiagnosticURLTool(s.cache, s.browserPool, s.config.RAG, s.config.Browser, s.uaRotator, s.proxyRotator, s.config.GitHub), // Diagnostic tool
-		tools.NewSearchTool(),           // Web search
-		tools.NewParseHTMLTool(),        // HTML parsing
+		tools.NewSearchTool(),    // Web search
+		tools.NewParseHTMLTool(), // HTML parsing
 		tools.NewSmartExtractorTool(s.cache, s.uaRotator, s.proxyRotator), // Content extraction with URL support
 	)
 
@@ -295,6 +295,22 @@ func GenerateSessionID() string {
 	return uuid.New().String()
 }
 
+// GetTools returns all registered tools (read-only copy of the map)
+func (s *Server) GetTools() map[string]tools.Tool {
+	result := make(map[string]tools.Tool, len(s.tools))
+	for k, v := range s.tools {
+		result[k] = v
+	}
+	return result
+}
+
+// GetToolsOrder returns the registration order of tools
+func (s *Server) GetToolsOrder() []string {
+	order := make([]string, len(s.toolsOrder))
+	copy(order, s.toolsOrder)
+	return order
+}
+
 // GetRateLimitInfo returns current rate limit info
 func (s *Server) GetRateLimitInfo() RateLimitInfo {
 	if s.rateLimiter == nil {
@@ -304,6 +320,6 @@ func (s *Server) GetRateLimitInfo() RateLimitInfo {
 	return RateLimitInfo{
 		RequestsPerSecond: s.config.RateLimit.RequestsPerSecond,
 		BurstSize:         s.config.RateLimit.BurstSize,
-		ResetAt:          time.Now(),
+		ResetAt:           time.Now(),
 	}
 }
