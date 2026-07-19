@@ -1,6 +1,14 @@
 # Stage 1: Build
 FROM golang:1.24-alpine AS builder
 
+# Nexus proxy переподписывает APKINDEX своим ключом (key-f14d99e5).
+# golang:1.24-alpine → Alpine 3.23, поэтому пути к репозиториям — v3.23.
+COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
+
+# Alpine репозитории через nexus proxy
+RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
+    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
+
 # Установка зависимостей для сборки
 RUN apk add --no-cache git ca-certificates
 
@@ -25,6 +33,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o 
 #   docker run --rm mcp-web-scrape:test go test -run TestNewPool ./internal/pkg/browser/
 FROM golang:1.24-alpine AS test
 
+# Nexus proxy переподписывает APKINDEX своим ключом (key-f14d99e5).
+# golang:1.24-alpine → Alpine 3.23, поэтому пути к репозиториям — v3.23.
+COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
+
+# Alpine репозитории через nexus proxy
+RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
+    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
+
 RUN apk add --no-cache git ca-certificates chromium
 
 WORKDIR /app
@@ -41,15 +57,14 @@ ENV MCP_WEB_SCRAPE_BROWSER_NO_SANDBOX=true
 CMD ["go", "test", "./..."]
 
 # Stage 3: Runtime
-FROM alpine:latest
+FROM alpine:3.23
 
 # Nexus proxy переподписывает APKINDEX своим ключом (key-f14d99e5).
-# Копируем публичный ключ nexus для верификации подписей apk.
 COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
 
 # Alpine репозитории через nexus proxy
-RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.24/main" > /etc/apk/repositories \
-    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.24/community" >> /etc/apk/repositories
+RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
+    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
 
 # Установка Chromium БЕЗ GUI зависимостей
 # Chromium в Alpine = только headless, без X11/GTK
