@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
+	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
@@ -22,6 +23,7 @@ type HTTPScraper struct {
 	cache     *cache.Cache
 	uaRotator *useragent.Rotator
 	proxy     *proxy.Rotator
+	converter *converter.Converter
 	client    *http.Client
 	logger    zerolog.Logger
 }
@@ -32,6 +34,7 @@ func NewHTTPScraper(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *pro
 		cache:     cache,
 		uaRotator: uaRotator,
 		proxy:     proxy,
+		converter: converter.New(),
 		logger:    logger.Get(),
 	}
 }
@@ -240,6 +243,25 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 		s.logger.Info().
 			Int("optimized_size", len(body)).
 			Msg("HTML optimized for inference")
+	}
+
+	// 12.5. Convert to Markdown if requested
+	if opts.OutputFormat == "markdown" && strings.Contains(contentType, "text/html") {
+		convertedHTML, converterStats, err := s.converter.ConvertWithStats(string(body), converter.FormatMarkdown)
+		if err != nil {
+			s.logger.Warn().
+				Err(err).
+				Str("output_format", opts.OutputFormat).
+				Msg("Markdown conversion failed, falling back to HTML")
+		} else {
+			body = []byte(convertedHTML)
+			s.logger.Info().
+				Int("html_size", converterStats.OriginalSize).
+				Int("markdown_size", converterStats.FinalSize).
+				Int("reduction", converterStats.Reduction).
+				Float64("reduction_percent", converterStats.ReductionPct).
+				Msg("Converted HTML to Markdown")
+		}
 	}
 
 	// 13. Extract title
