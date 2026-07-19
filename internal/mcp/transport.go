@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/rs/zerolog"
 )
+
+const messagesPath = "/messages"
 
 type Transport struct {
 	server   *Server
@@ -103,7 +106,7 @@ func (t *Transport) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	// Ensure we can flush
 	flusher, ok := w.(http.Flusher)
@@ -112,16 +115,10 @@ func (t *Transport) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send initial message
-	t.sendSSEMessage(w, flusher, "connected", map[string]interface{}{
-		"session_id": sessionID,
-		"server_info": t.server.GetServerInfo(),
-	})
-
-	// Send server capabilities
-	t.sendSSEMessage(w, flusher, "capabilities", map[string]interface{}{
-		"capabilities": t.server.GetCapabilities(),
-	})
+	// MCP SSE spec: send endpoint URL for POST messages
+	messageURL := fmt.Sprintf("%s?sessionId=%s", messagesPath, sessionID)
+	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", messageURL)
+	flusher.Flush()
 
 	// Keep connection alive
 	ctx := r.Context()
@@ -139,7 +136,6 @@ func (t *Transport) handleSSE(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ticker.C:
-			// Send keepalive comment
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
 
@@ -151,7 +147,6 @@ func (t *Transport) handleSSE(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 
 		case <-ctx.Done():
-			// Cleanup session
 			t.mu.Lock()
 			delete(t.sessions, sessionID)
 			t.mu.Unlock()
@@ -159,6 +154,84 @@ func (t *Transport) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// HandleMessages handles POST /messages?sessionId=xxx — MCP SSE spec.
+// Processes JSON-RPC and sends response back through the session's SSE channel.
+func (t *Transport) HandleMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		http.Error(w, "Missing sessionId", http.StatusBadRequest)
+		return
+	}
+
+	session, exists := t.GetSession(sessionID)
+	if !exists {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	// Read request body
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Process JSON-RPC message
+	response, err := t.server.HandleMessage(r.Context(), data)
+	if err != nil {
+		t.logger.Error().Err(err).Str("session_id", sessionID).Msg("Failed to handle MCP message")
+		errResp := buildJSONRPCError(r.Context(), data, "Internal error")
+		t.sendToSession(session, errResp)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Send response back through SSE channel
+	t.sendToSession(session, response)
+
+	// HTTP 202 — response delivered via SSE
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (t *Transport) sendToSession(session *Session, data []byte) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	select {
+	case session.Channel <- data:
+	default:
+		t.logger.Warn().Str("session_id", session.ID).Msg("SSE channel full, dropping message")
+	}
+}
+
+func buildJSONRPCError(ctx context.Context, data []byte, message string) []byte {
+	var id interface{}
+	if len(data) > 0 {
+		var req struct{ ID interface{} }
+		if err := json.Unmarshal(data, &req); err == nil {
+			id = req.ID
+		}
+	}
+	if id == nil {
+		id = json.RawMessage("null")
+	}
+	resp := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"error": map[string]interface{}{
+			"code":    -32603,
+			"message": message,
+		},
+		"id": id,
+	}
+	b, _ := json.Marshal(resp)
+	return b
 }
 
 func (t *Transport) handleHTTPPost(w http.ResponseWriter, r *http.Request) {

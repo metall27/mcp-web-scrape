@@ -165,9 +165,14 @@ func main() {
 		transport.HandleMCP(c.Writer, c.Request)
 	})
 
-	// SSE endpoint for llama.cpp WebUI compatibility
+	// SSE endpoint for MCP SSE spec (llama.cpp WebUI)
 	router.Any("/sse", func(c *gin.Context) {
 		transport.HandleMCP(c.Writer, c.Request)
+	})
+
+	// MCP SSE messages endpoint (POST /messages?sessionId=xxx)
+	router.POST("/messages", func(c *gin.Context) {
+		transport.HandleMessages(c.Writer, c.Request)
 	})
 
 	// Register OpenAPI/REST endpoints for Open WebUI compatibility
