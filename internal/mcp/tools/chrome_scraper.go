@@ -134,6 +134,12 @@ type scrapeAttemptResult struct {
 	isBlocked      bool
 	blockResult    browser.BlockResult
 	err            error
+	// isActionError indicates the error was caused by a user-supplied interactive
+	// action (type/click/scroll_to/...) that failed on the page — NOT a network
+	// or blocking issue. Such errors are deterministic: retrying with a new proxy
+	// or browser context won't help, so the Phase 5 retry loop should skip them
+	// and fall back to HTTP immediately instead of wasting cycles.
+	isActionError bool
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -193,6 +199,12 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 			Msg("Chrome scraping failed for this attempt")
 
 		result.err = chromeErr
+		// Classify action errors: "failed to execute actions: ..." comes from
+		// ActionExecutor and means a user-supplied selector/interaction failed on
+		// the page. This is deterministic — retrying with a new proxy won't help.
+		if strings.Contains(chromeErr.Error(), "failed to execute actions") {
+			result.isActionError = true
+		}
 		return result
 	}
 
@@ -453,6 +465,27 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				Int("attempt", attempt).
 				Err(attemptResult.err).
 				Msg("Scrape attempt failed with error")
+
+			// Action errors (failed to execute user-supplied actions) are
+			// deterministic — retrying with a new proxy/browser won't fix a
+			// wrong selector or a missing element. Skip Phase 5 retry entirely
+			// and fall back to HTTP immediately.
+			if attemptResult.isActionError {
+				s.logger.Warn().
+					Int("attempt", attempt).
+					Msg("Action error detected — skipping Phase 5 retry, falling back to HTTP")
+
+				// Mark proxy as failed if applicable (same as regular error path)
+				if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
+					s.proxy.MarkFailure(attemptResult.err)
+				}
+
+				lastError = attemptResult.err
+				// Clean up before falling back
+				scrapeCtx.browserCancel()
+				cleanupNeeded = false
+				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, startTime)
+			}
 
 			// Mark proxy as failed if applicable
 			if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
