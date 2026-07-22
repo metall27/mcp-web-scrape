@@ -186,8 +186,19 @@ func (e *ActionExecutor) ExecuteType(ctx context.Context, selector, text string)
 		Str("text_length", fmt.Sprintf("%d", len(text))).
 		Msg("Typing text")
 
-	// Сначала кликаем на поле (чтобы оно получило фокус)
-	err := chromedp.Focus(selector, chromedp.ByQuery).Do(ctx)
+	// Ждём появления элемента на странице (с таймаутом 10с), чтобы не висеть
+	// полный timeout (30с) в Focus, если элемента нет в DOM или он hidden.
+	// Focus/Click в chromedp используют polling-sleeper — без WaitVisible они
+	// ждут до context deadline, давая бесполезный "context deadline exceeded".
+	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+	err := chromedp.WaitVisible(selector, chromedp.ByQuery).Do(waitCtx)
+	waitCancel()
+	if err != nil {
+		return fmt.Errorf("element %s not visible within 10s: %w", selector, err)
+	}
+
+	// Фокусируемся на элементе (мгновенно после WaitVisible)
+	err = chromedp.Focus(selector, chromedp.ByQuery).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to focus element %s: %w", selector, err)
 	}
