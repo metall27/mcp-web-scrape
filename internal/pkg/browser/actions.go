@@ -186,7 +186,7 @@ func (e *ActionExecutor) ExecuteType(ctx context.Context, selector, text string)
 		Str("text_length", fmt.Sprintf("%d", len(text))).
 		Msg("Typing text")
 
-	// Сначала кликаем на поле (чтобы оно获得 фокус)
+	// Сначала кликаем на поле (чтобы оно получило фокус)
 	err := chromedp.Focus(selector, chromedp.ByQuery).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to focus element %s: %w", selector, err)
