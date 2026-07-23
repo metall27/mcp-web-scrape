@@ -169,13 +169,13 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 		if s.proxy != nil && s.proxy.IsEnabled() {
 			s.proxy.MarkFailure(err)
 		}
-		// Check if timeout
-		if ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.DeadlineExceeded {
+		// Check if timeout or cancellation
+		if ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled {
 			return nil, &ScrapeError{
 				Code:     "timeout",
-				Message:  "HTTP request timeout",
+				Message:  "HTTP request context canceled or timed out",
 				Hints:    []string{"try_screenshot", "diagnostic_url"},
-				CanRetry: true,
+				CanRetry: false, // Cancellation is deterministic — retrying makes no sense
 			}
 		}
 		return nil, &ScrapeError{
