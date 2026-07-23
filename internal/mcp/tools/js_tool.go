@@ -122,7 +122,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 						},
 						"text": map[string]interface{}{
 							"type":        "string",
-							"description": "Text to type (for 'type') or JavaScript code to execute (for 'execute_js'). For execute_js: do NOT use top-level 'return' — wrap in an IIFE (() => { ... })(); the return value is NOT included in tool output, inject a visible DOM element to inspect state.",
+							"description": "Text to type (for 'type') or JavaScript code to execute (for 'execute_js'). For execute_js: do NOT use top-level 'return' — wrap in an IIFE (() => { ... })(); the return value IS included in metadata.execute_js_results.",
 						},
 						"value": map[string]interface{}{
 							"type":        "string",
@@ -276,6 +276,26 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		t.logger.Info().
 			Int("actions_count", result.ActionsMetadata.Count).
 			Msg("Interactive actions metadata added to result")
+	}
+
+	// Add execute_js results to metadata if any execute_js actions were run
+	if len(result.JSResults) > 0 {
+		jsResultsMap := make([]map[string]interface{}, len(result.JSResults))
+		for i, jr := range result.JSResults {
+			entry := map[string]interface{}{
+				"action_index": jr.ActionIndex,
+			}
+			if jr.Err != nil {
+				entry["error"] = jr.Err.Error()
+			} else {
+				entry["result"] = jr.Result
+			}
+			jsResultsMap[i] = entry
+		}
+		metadata["execute_js_results"] = jsResultsMap
+		t.logger.Info().
+			Int("js_results_count", len(result.JSResults)).
+			Msg("execute_js results added to metadata")
 	}
 
 	if result.FromCache {

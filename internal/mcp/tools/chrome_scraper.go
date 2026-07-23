@@ -141,6 +141,8 @@ type scrapeAttemptResult struct {
 	// or browser context won't help, so the Phase 5 retry loop should skip them
 	// and fall back to HTTP immediately instead of wasting cycles.
 	isActionError bool
+	// jsResults contains return values from all execute_js actions
+	jsResults []browser.JSResult
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -149,7 +151,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result := scrapeAttemptResult{}
 
 	// 1. Build Chrome tasks
-	tasks := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.stealth, opts)
+	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.stealth, opts)
 
 	// 2. Run tasks
 	var html string
@@ -234,6 +236,11 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result.finalURL = finalURL
 	result.isBlocked = false
 	result.err = nil
+
+	// Collect execute_js results from actionExecutor
+	if actionExecutor != nil {
+		result.jsResults = actionExecutor.GetJSResults()
+	}
 
 	return result
 }
@@ -422,6 +429,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var screenshotData []byte
 	var title string
 	var finalURL string
+	var jsResults []browser.JSResult
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -557,6 +565,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		screenshotData = attemptResult.screenshotData
 		title = attemptResult.title
 		finalURL = attemptResult.finalURL
+		jsResults = attemptResult.jsResults
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -670,6 +679,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		Format:          opts.OutputFormat,
 		FromCache:       false,
 		ActionsMetadata: actionsMetadata,
+		JSResults:       jsResults,
 		Method:          s.Name(),
 	}
 
@@ -735,7 +745,8 @@ func (s *ChromeScraper) SupportsActions() bool {
 }
 
 // buildChromeTasks строит список Chrome задач
-func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options) []chromedp.Action {
+// Возвращает tasks и actionExecutor (для извлечения результатов execute_js)
+func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options) ([]chromedp.Action, *browser.ActionExecutor) {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
@@ -845,13 +856,14 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 	}
 
 	// Execute interactive actions if provided
+	var actionExecutor *browser.ActionExecutor
 	if len(opts.Actions) > 0 {
+		actionExecutor = browser.NewActionExecutor(s.logger, stealth)
 		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
 			s.logger.Info().
 				Int("actions_count", len(opts.Actions)).
 				Msg("Executing interactive actions")
 
-			actionExecutor := browser.NewActionExecutor(s.logger, stealth)
 			if err := actionExecutor.ExecuteActions(ctx, opts.Actions); err != nil {
 				return fmt.Errorf("failed to execute actions: %w", err)
 			}
@@ -869,7 +881,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 			Msg("Added stealth mouse movement emulation")
 	}
 
-	return tasks
+	return tasks, actionExecutor
 }
 
 // buildNavigationTask создает единую задачу навигации для stealth/non-stealth режимов
