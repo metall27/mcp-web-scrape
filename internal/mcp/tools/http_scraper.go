@@ -43,8 +43,6 @@ func NewHTTPScraper(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *pro
 func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
 	startTime := time.Now()
 
-	s.logger.Info().Msg("🚨 HTTPScraper.Scrape CALLED")
-
 	// 1. Validate URL
 	if _, err := ValidateURL(urlStr); err != nil {
 		return nil, &ScrapeError{
@@ -81,17 +79,15 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 	isGitea := regexp.MustCompile(`gitea\.[^/]+|gitea\.(com|io)`).MatchString(urlStr)
 	isGitLab := strings.Contains(urlStr, "gitlab.com") || regexp.MustCompile(`https://[^/]+/[^/]+/[^/]+/-/`).MatchString(urlStr)
 
-	s.logger.Info().Msg("🚨 PLATFORM DETECTION RUNNING")
-
-	s.logger.Info().
+	s.logger.Debug().
 		Str("url", urlStr).
 		Bool("is_github", isGitHub).
 		Bool("is_gitea", isGitea).
 		Bool("is_gitlab", isGitLab).
-		Msg("🔍 Platform detection debug")
+		Msg("Platform detection")
 
 	if isGitea {
-		s.logger.Info().Msg("✅ GITEA DETECTED! EXECUTING API FALLBACK!")
+		s.logger.Debug().Msg("Gitea detected, using API fallback")
 	}
 
 	if isGitHub || isGitea || isGitLab {
