@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog"
 )
@@ -59,9 +58,8 @@ func newSessionManager(pool *Pool, logger zerolog.Logger, ttl time.Duration) *Se
 }
 
 // GetOrCreate returns an existing named session, or creates a new one.
-// The returned context is the persistent browser context — callers should
-// derive a new tab from it via chromedp.NewContext(sessionCtx) and cancel
-// that tab context when done (NOT the session context).
+// The returned context is the persistent chromedp browser context —
+// navigations happen directly in it across multiple scrape calls.
 func (sm *SessionManager) GetOrCreate(parent context.Context, id string) (context.Context, error) {
 	sm.mu.Lock()
 	if sess, ok := sm.sessions[id]; ok {
@@ -98,16 +96,10 @@ func (sm *SessionManager) GetOrCreate(parent context.Context, id string) (contex
 		}),
 	)
 
-	// Force browser/tab initialization synchronously so errors surface now.
-	// We need a browser to exist before WithNewBrowserContext can be used
-	// on derived contexts. The first chromedp.Run launches the browser.
-	initCtx, initCancel := context.WithTimeout(taskCtx, 60*time.Second)
-	defer initCancel()
-	if err := chromedp.Run(initCtx); err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to initialize browser for session %q: %w", id, err)
-	}
-
+	// NOTE: No pre-initialization here. The browser/tab is initialized
+	// lazily by the first chromedp.Run in scrapeAttempt — exactly like the
+	// ephemeral path. Pre-initializing with a child context caused
+	// "context canceled" errors when the child timeout fired.
 	sess := &namedSession{
 		id:        id,
 		ctx:       taskCtx,
@@ -128,26 +120,7 @@ func (sm *SessionManager) GetOrCreate(parent context.Context, id string) (contex
 	sm.sessions[id] = sess
 	sm.mu.Unlock()
 
-	// Derive a reusable BrowserContextID so derived tab contexts inherit it.
-	// We obtain it from the initialized context.
 	return taskCtx, nil
-}
-
-// NewTabFromSession creates a new tab context derived from a named session's
-// persistent context. The caller MUST cancel the returned cancel func when
-// the scrape is done (this closes the tab but keeps the session alive).
-func (sm *SessionManager) NewTabFromSession(sessCtx context.Context) (context.Context, context.CancelFunc) {
-	tabCtx, tabCancel := chromedp.NewContext(sessCtx)
-	return tabCtx, tabCancel
-}
-
-// browserContextID extracts the CDP BrowserContextID from a chromedp context.
-// Used to verify session isolation in logs/tests.
-func browserContextID(ctx context.Context) cdp.BrowserContextID {
-	if c := chromedp.FromContext(ctx); c != nil {
-		return c.BrowserContextID
-	}
-	return ""
 }
 
 // Close closes a named session by id, disposing its browser context and

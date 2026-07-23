@@ -77,8 +77,11 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 	scrapeCtx := &scrapeContext{}
 
 	// 1a. Named persistent session path: reuse a browser context that
-	// survives across scrape calls (shared cookie jar / storage). A new
-	// tab is derived from the session context for this scrape only.
+	// survives across scrape calls (shared cookie jar / storage).
+	// The session's chromedp context IS the browser context — navigations
+	// happen directly in it. browserCancel is a no-op so the retry loop
+	// does NOT close the session between attempts (only the explicit
+	// close_session flag or TTL eviction closes it).
 	if opts.SessionID != "" && s.browserPool != nil {
 		sm := s.browserPool.Sessions()
 		if sm != nil {
@@ -86,9 +89,8 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			if err != nil {
 				return nil, fmt.Errorf("failed to get named session %q: %w", opts.SessionID, err)
 			}
-			tabCtx, tabCancel := sm.NewTabFromSession(sessCtx)
-			scrapeCtx.browserCtx = tabCtx
-			scrapeCtx.browserCancel = tabCancel
+			scrapeCtx.browserCtx = sessCtx
+			scrapeCtx.browserCancel = func() {} // no-op — session survives
 			scrapeCtx.useSession = true
 			scrapeCtx.sessionID = opts.SessionID
 			scrapeCtx.sessionReused = true
