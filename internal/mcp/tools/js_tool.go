@@ -92,7 +92,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			},
 			"stealth_enabled": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Enable stealth mode (random delays, human-like behavior) to avoid bot detection",
+				"description": "Enable stealth mode: injects anti-detection scripts (hides navigator.webdriver, spoofs canvas/WebGL/audio fingerprint, randomizes hardwareConcurrency/timezone/platform) that persist across page navigations. Use for sites with anti-bot measures that conditionally hide elements (e.g. login buttons) from automated browsers.",
 				"default":     false,
 			},
 			"stealth_scroll": map[string]interface{}{
@@ -122,7 +122,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 						},
 						"text": map[string]interface{}{
 							"type":        "string",
-							"description": "Text to type or JavaScript code to execute (for 'type' and 'execute_js' actions)",
+							"description": "Text to type (for 'type') or JavaScript code to execute (for 'execute_js'). For execute_js: do NOT use top-level 'return' — wrap in an IIFE (() => { ... })(); the return value is NOT included in tool output, inject a visible DOM element to inspect state.",
 						},
 						"value": map[string]interface{}{
 							"type":        "string",
@@ -170,7 +170,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait) supported for login-protected or dynamically-loaded content.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
+		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait) supported for login-protected or dynamically-loaded content.\n\nStealth mode (stealth_enabled=true) injects anti-detection scripts (hides navigator.webdriver, spoofs fingerprint) that persist across navigations — use for sites that conditionally hide elements (e.g. login buttons) from automated browsers.\n\nImportant execute_js notes: code runs via chromedp.Evaluate and does NOT support top-level 'return' — wrap code in an IIFE: (() => { ... })() or (function(){ ... })(). The return value is logged server-side only and is NOT included in the tool output; to inspect DOM state, inject a visible element (e.g. create a <div> with the data) so it appears in the returned HTML.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
 		schema,
 		handler,
 	)
