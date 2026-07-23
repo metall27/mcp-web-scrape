@@ -99,6 +99,9 @@ type Result struct {
 	// Actions metadata (если были actions)
 	ActionsMetadata *ActionsMetadata
 
+	// JS results (результаты execute_js действий)
+	JSResults []browser.JSResult
+
 	// Cache info
 	FromCache bool
 

@@ -19,12 +19,37 @@ type Action struct {
 	Retries  int           // Количество ретраев при ошибке
 }
 
+// JSResult хранит результат выполнения execute_js action
+type JSResult struct {
+	ActionIndex int         // Индекс действия в массиве actions (0-based)
+	Result      interface{} // Возвращаемое значение JavaScript (или nil при undefined)
+	Err         error       // Ошибка выполнения (nil при успехе)
+}
+
 // ActionExecutor исполнитель действий
 type ActionExecutor struct {
 	logger    zerolog.Logger
 	stealth   *StealthActions
 	retries   int           // Дефолтное количество ретраев
 	timeout   time.Duration // Дефолтный timeout
+	jsResults []JSResult    // Результаты выполнения execute_js действий
+}
+
+// GetJSResults возвращает результаты всех execute_js действий
+func (e *ActionExecutor) GetJSResults() []JSResult {
+	return e.jsResults
+}
+
+// recordJSResult добавляет или перезаписывает результат execute_js по actionIndex.
+// При retry предыдущая запись для того же индекса заменяется — без дубликатов.
+func (e *ActionExecutor) recordJSResult(r JSResult) {
+	for i, existing := range e.jsResults {
+		if existing.ActionIndex == r.ActionIndex {
+			e.jsResults[i] = r
+			return
+		}
+	}
+	e.jsResults = append(e.jsResults, r)
 }
 
 // NewActionExecutor создает новый экземпляр ActionExecutor
@@ -75,8 +100,8 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 			// Создаем контекст с timeout
 			actionCtx, cancel := context.WithTimeout(ctx, timeout)
 
-			// Выполняем действие
-			err := e.ExecuteAction(actionCtx, action)
+			// Выполняем действие (передаём индекс)
+			err := e.ExecuteAction(actionCtx, action, i)
 			cancel()
 
 			if err == nil {
@@ -116,8 +141,8 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 	return nil
 }
 
-// ExecuteAction выполняет одно действие
-func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action) error {
+// ExecuteAction выполняет одно действие (actionIndex — индекс в массиве actions)
+func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actionIndex int) error {
 	switch action.Type {
 	case "click":
 		return e.ExecuteClick(ctx, action.Selector)
@@ -136,7 +161,7 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action) error
 	case "select_option":
 		return e.ExecuteSelectOption(ctx, action.Selector, action.Value)
 	case "execute_js":
-		return e.ExecuteJS(ctx, action.Text)
+		return e.ExecuteJS(ctx, action.Text, actionIndex)
 	case "upload_file":
 		return e.ExecuteUploadFile(ctx, action.Selector, action.Text)
 	case "navigate":
@@ -435,8 +460,8 @@ func (e *ActionExecutor) ExecuteSelectOption(ctx context.Context, selector, valu
 	return nil
 }
 
-// ExecuteJS выполняет JavaScript код
-func (e *ActionExecutor) ExecuteJS(ctx context.Context, code string) error {
+// ExecuteJS выполняет JavaScript код и сохраняет результат
+func (e *ActionExecutor) ExecuteJS(ctx context.Context, code string, actionIndex int) error {
 	if code == "" {
 		return fmt.Errorf("code is required for execute_js action")
 	}
@@ -447,6 +472,15 @@ func (e *ActionExecutor) ExecuteJS(ctx context.Context, code string) error {
 
 	var result interface{}
 	err := chromedp.Evaluate(code, &result).Do(ctx)
+
+	// Сохраняем результат (upsert по actionIndex, чтобы при retry
+	// не дублировать записи — перезаписываем предыдущую попытку)
+	e.recordJSResult(JSResult{
+		ActionIndex: actionIndex,
+		Result:      result,
+		Err:         err,
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to execute JavaScript: %w", err)
 	}
