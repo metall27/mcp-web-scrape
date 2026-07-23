@@ -25,7 +25,10 @@ type Pool struct {
 	// Configuration
 	maxTabs      int
 	allocOptions []chromedp.ExecAllocatorOption
-	isolatedMode bool  // Use isolated browser instances
+	isolatedMode bool // Use isolated browser instances
+
+	// Named persistent sessions (login-gated workflows)
+	sessions *SessionManager
 }
 
 type Config struct {
@@ -34,9 +37,10 @@ type Config struct {
 	Headless      bool
 	DisableGPU    bool
 	NoSandbox     bool
-	ViewportWidth int
+	ViewportWidth  int
 	ViewportHeight int
-	IsolatedMode bool  // Use isolated browser instances instead of shared pool (expensive but avoids session conflicts)
+	IsolatedMode bool // Use isolated browser instances instead of shared pool (expensive but avoids session conflicts)
+	SessionTTL    time.Duration // Inactivity TTL for named sessions; 0 = disabled
 }
 
 func New(cfg Config) (*Pool, error) {
@@ -83,6 +87,14 @@ func New(cfg Config) (*Pool, error) {
 		maxTabs:      cfg.MaxTabs,
 		allocOptions: allocOpts,
 		isolatedMode: cfg.IsolatedMode,
+	}
+
+	// Named persistent sessions — enabled only when a TTL is configured.
+	if cfg.SessionTTL > 0 {
+		pool.sessions = newSessionManager(pool, cfg.Logger, cfg.SessionTTL)
+		cfg.Logger.Info().
+			Dur("session_ttl", cfg.SessionTTL).
+			Msg("Named session support enabled")
 	}
 
 	cfg.Logger.Info().
@@ -199,13 +211,29 @@ CreateTab:
 	return taskCtx, wrapCancel, nil
 }
 
+// Sessions returns the named-session manager, or nil if named sessions
+// are disabled (SessionTTL == 0).
+func (p *Pool) Sessions() *SessionManager {
+	return p.sessions
+}
+
+// Allocator returns the pool's chromedp allocator context. Named sessions
+// derive their persistent browser contexts from it.
+func (p *Pool) Allocator() context.Context {
+	return p.allocator
+}
+
 // GetStats returns pool statistics
 func (p *Pool) GetStats() map[string]interface{} {
-	return map[string]interface{}{
+	stats := map[string]interface{}{
 		"active_tabs": atomic.LoadInt32(&p.activeTabs),
 		"total_tabs":  atomic.LoadInt64(&p.totalTabs),
 		"max_tabs":    p.maxTabs,
 	}
+	if p.sessions != nil {
+		stats["sessions"] = p.sessions.Stats()
+	}
+	return stats
 }
 
 // GetActiveTabs returns the current number of active browser tabs
@@ -219,6 +247,12 @@ func (p *Pool) Close() error {
 	p.logger.Info().
 		Int32("active", atomic.LoadInt32(&p.activeTabs)).
 		Msg("Closing browser pool")
+
+	// Close all named sessions first (they hold browser contexts derived
+	// from the allocator; disposing them cleanly avoids leaked tabs).
+	if p.sessions != nil {
+		p.sessions.CloseAll()
+	}
 
 	// Cancel allocator - this will close all browser contexts
 	p.cancel()

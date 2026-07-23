@@ -59,6 +59,15 @@ type Options struct {
 
 	// Interactive actions (только ChromeScraper)
 	Actions []browser.Action
+
+	// Named persistent session (только ChromeScraper). Когда SessionID
+	// непустой, скрейпинг использует переиспользуемый browser context с
+	// общим cookie jar — логин из предыдущих вызовов сохраняется.
+	SessionID string
+
+	// CloseSession=true закрывает named session после этого вызова
+	// (явный cleanup). Имеет смысл только вместе с SessionID.
+	CloseSession bool
 }
 
 // ScrapeError подробная информация об ошибке скрапинга
@@ -107,6 +116,9 @@ type Result struct {
 
 	// Method info (для unified scraper)
 	Method string
+
+	// Named session info
+	SessionReused bool // true if an existing named session was reused (not newly created)
 }
 
 // ActionsMetadata метаданные о выполненных действиях
