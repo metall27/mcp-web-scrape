@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -373,27 +374,30 @@ func (s *StealthActions) GenerateRandomFingerprint() BrowserFingerprint {
 	}
 }
 
-// InjectAntiDetectionScripts injects JavaScript to hide browser automation traces
-// This is the main entry point for Phase 3: Extended Stealth
+// InjectAntiDetectionScripts injects JavaScript to hide browser automation traces.
+// This is the main entry point for Phase 3: Extended Stealth.
+//
+// Uses page.AddScriptToEvaluateOnNewDocument (CDP) instead of chromedp.Evaluate
+// so the scripts PERSIST across navigations — chromedp.Evaluate runs on the
+// current document (about:blank) and is discarded as soon as Navigate() creates
+// a new document, making stealth ineffective on the target page.
 func (s *StealthActions) InjectAntiDetectionScripts(fingerprint BrowserFingerprint) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		// Build comprehensive anti-detection script
-		script := s.buildAntiDetectionScript(fingerprint)
+		mainScript := s.buildAntiDetectionScript(fingerprint)
 
-		var result interface{}
-		err := chromedp.Evaluate(script, &result).Do(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to inject anti-detection scripts: %w", err)
-		}
-
-		// Inject ADVANCED anti-fingerprinting methods for GitHub
+		// Advanced anti-fingerprinting methods
 		advancedStealth := NewAdvancedStealth()
 		advancedScript := advancedStealth.AdvancedAntiDetectionScript()
 
-		var advResult interface{}
-		err = chromedp.Evaluate(advancedScript, &advResult).Do(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to inject advanced anti-detection scripts: %w", err)
+		// Combine both scripts so a single registration covers everything.
+		// Each script is self-contained (IIFE), so concatenation is safe.
+		combinedScript := mainScript + "\n;\n" + advancedScript
+
+		// Register via CDP so the script is re-injected on every new document,
+		// surviving navigation to the target page.
+		if _, err := page.AddScriptToEvaluateOnNewDocument(combinedScript).Do(ctx); err != nil {
+			return fmt.Errorf("failed to register anti-detection scripts: %w", err)
 		}
 
 		return nil

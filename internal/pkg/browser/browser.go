@@ -55,6 +55,9 @@ func New(cfg Config) (*Pool, error) {
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("site-per-process", false), // Disable site-per-process to prevent iframe issues
 		chromedp.Flag("disable-features", "SitePerProcess"), // Disable out-of-process iframes
+		// Prevent navigator.webdriver=true which triggers anti-bot measures
+		// (e.g. conditional hiding of form submit buttons on React SPAs)
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.WindowSize(cfg.ViewportWidth, cfg.ViewportHeight),
 	}
 

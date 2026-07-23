@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
@@ -78,7 +79,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 	// 2. Get User-Agent
 	userAgent := opts.UserAgent
 	if userAgent == "" && s.uaRotator != nil {
-		userAgent = s.uaRotator.Get()
+		userAgent = s.uaRotator.GetRandomDesktop()
 	}
 	if userAgent == "" {
 		// Use real Chrome UA instead of MCP-Web-Scrape
@@ -396,7 +397,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		// Get User-Agent for HTTP fallback
 		userAgent := opts.UserAgent
 		if userAgent == "" && s.uaRotator != nil {
-			userAgent = s.uaRotator.Get()
+			userAgent = s.uaRotator.GetRandomDesktop()
 		}
 		if userAgent == "" {
 			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -585,7 +586,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		// Use a default UA for HTTP fallback
 		userAgent := opts.UserAgent
 		if userAgent == "" && s.uaRotator != nil {
-			userAgent = s.uaRotator.Get()
+			userAgent = s.uaRotator.GetRandomDesktop()
 		}
 		if userAgent == "" {
 			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -739,17 +740,19 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
 			// NOTE: HTTP User-Agent is set at allocator level during browser pool creation
-			// This sync ensures JS navigator.userAgent matches HTTP headers
-
-			var result interface{}
-			err := chromedp.Evaluate(fmt.Sprintf(`
+			// This sync ensures JS navigator.userAgent matches HTTP headers.
+			//
+			// Uses page.AddScriptToEvaluateOnNewDocument so the override
+			// PERSISTS across navigations. Previously chromedp.Evaluate ran
+			// on about:blank and the override was lost after Navigate().
+			uaScript := fmt.Sprintf(`
 				Object.defineProperty(navigator, 'userAgent', {
 					get: function() { return %q; },
 					configurable: true
 				});
-			`, userAgent), &result).Do(ctx)
+			`, userAgent)
 
-			if err != nil {
+			if _, err := page.AddScriptToEvaluateOnNewDocument(uaScript).Do(ctx); err != nil {
 				s.logger.Debug().Err(err).Msg("Failed to set JS User-Agent")
 			} else {
 				s.logger.Debug().
