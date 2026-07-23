@@ -152,6 +152,8 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actio
 		return e.ExecuteJS(ctx, action.Text, actionIndex)
 	case "upload_file":
 		return e.ExecuteUploadFile(ctx, action.Selector, action.Text)
+	case "navigate":
+		return e.ExecuteNavigate(ctx, action.Text)
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
 	}
@@ -500,7 +502,23 @@ func (e *ActionExecutor) ExecuteUploadFile(ctx context.Context, selector, filePa
 	return nil
 }
 
-// Helper функции для экранирования строк
+// ExecuteNavigate осуществляет навигацию по URL внутри текущей страницы.
+// В отличие от execute_js с location.href, chromedp.Navigate() правильно
+// дожидается page load event через CDP — новый документ полностью загружается
+// перед переходом к следующему action.
+//
+// urlStr может быть относительным ("/path") или абсолютным ("https://example.com/path").
+func (e *ActionExecutor) ExecuteNavigate(ctx context.Context, urlStr string) error {
+	if urlStr == "" {
+		return fmt.Errorf("url is required for navigate action")
+	}
+
+	e.logger.Debug().
+		Str("url", urlStr).
+		Msg("Navigating to URL")
+
+	return chromedp.Navigate(urlStr).Do(ctx)
+}
 
 func quoteSelector(s string) string {
 	// Для CSS selector используем двойные кавычки внутри шаблона

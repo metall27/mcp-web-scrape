@@ -107,13 +107,13 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			},
 			"actions": map[string]interface{}{
 				"type":        "array",
-				"description": "Ordered list of interactive actions to run after page load (not cached). Each action is an object with 'type' plus the fields that type needs: click/submit/hover/scroll_to/wait_for → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text → {text}. Optional on all: {timeout, retries}.",
+				"description": "Ordered list of interactive actions to run after page load (not cached). Each action is an object with 'type' plus the fields that type needs: click/submit/hover/scroll_to/wait_for → {selector}; type/upload_file → {selector, text}; navigate → {text}; select_option → {selector, value}; execute_js/wait_for_text → {text}. Optional on all: {timeout, retries}.",
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"type": map[string]interface{}{
 							"type":        "string",
-							"enum":        []string{"click", "type", "submit", "scroll_to", "wait_for", "wait_for_text", "hover", "select_option", "execute_js", "upload_file"},
+							"enum":        []string{"click", "type", "submit", "scroll_to", "wait_for", "wait_for_text", "hover", "select_option", "execute_js", "upload_file", "navigate"},
 							"description": "Action type to perform",
 						},
 						"selector": map[string]interface{}{
