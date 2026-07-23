@@ -1,21 +1,27 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/proxy"
 )
 
 // TLSClientConfig настройки для TLS fingerprinting
 type TLSClientConfig struct {
-	// ChromeHelloID имитирует конкретную версию Chrome
+	// ChromeVersion имитирует конкретную версию Chrome
 	// Варианты: HelloChrome_100, HelloChrome_106, HelloChrome_120, HelloChrome_131
 	ChromeVersion string
 
@@ -38,7 +44,7 @@ var DefaultTLSClientConfig = TLSClientConfig{
 type TLSClient struct {
 	config     TLSClientConfig
 	httpClient *http.Client
-	transport  *http.Transport
+	transport  *utlsRoundTripper
 }
 
 // NewTLSClient создает новый TLS клиент с fingerprinting
@@ -50,67 +56,29 @@ func NewTLSClient(config TLSClientConfig) (*TLSClient, error) {
 		config.HandshakeTimeout = DefaultTLSClientConfig.HandshakeTimeout
 	}
 
+	rt := &utlsRoundTripper{
+		config:  config,
+		helloID: getHelloID(config.ChromeVersion),
+		dialer: &net.Dialer{
+			Timeout: config.HandshakeTimeout,
+		},
+		h2Transport: &http2.Transport{
+			AllowHTTP: false,
+		},
+	}
+
 	client := &TLSClient{
-		config: config,
-	}
-
-	// Initialize transport with TLS fingerprinting
-	transport := &http.Transport{
-		DialTLSContext: client.dialTLSContext,
-		// Standard HTTP transport settings
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: config.HandshakeTimeout,
-		ExpectContinueTimeout: 1 * time.Second,
-		// Enable HTTP/2
-		ForceAttemptHTTP2: true,
-	}
-
-	client.transport = transport
-	client.httpClient = &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
+		config:     config,
+		transport:  rt,
+		httpClient: &http.Client{Transport: rt},
 	}
 
 	return client, nil
 }
 
-// dialTLSContext создает TLS соединение с Chrome fingerprint
-func (c *TLSClient) dialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	// Establish TCP connection
-	conn, err := net.DialTimeout(network, addr, c.config.HandshakeTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("TCP dial failed: %w", err)
-	}
-
-	// Extract hostname from addr for SNI (remove port)
-	// addr format is "hostname:port" or "hostname:443"
-	hostname := addr
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		hostname = host
-	}
-
-	// Parse Chrome version and create ClientHelloID
-	helloID := c.getClientHelloID()
-
-	// Create uTLS config with Chrome fingerprint (using hostname only for SNI)
-	config := c.createTLSConfig(hostname)
-
-	// Create TLS connection with uTLS
-	tlsConn := utls.UClient(conn, config, helloID)
-
-	// Perform TLS handshake with Chrome fingerprint
-	if err := tlsConn.Handshake(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("TLS handshake failed: %w", err)
-	}
-
-	return tlsConn, nil
-}
-
-// getClientHelloID возвращает ClientHelloID для выбранной версии Chrome
-func (c *TLSClient) getClientHelloID() utls.ClientHelloID {
-	switch c.config.ChromeVersion {
+// getHelloID возвращает ClientHelloID для выбранной версии Chrome
+func getHelloID(chromeVersion string) utls.ClientHelloID {
+	switch chromeVersion {
 	case "HelloChrome_100":
 		return utls.HelloChrome_100
 	case "HelloChrome_120":
@@ -124,33 +92,229 @@ func (c *TLSClient) getClientHelloID() utls.ClientHelloID {
 	}
 }
 
-// createTLSConfig создает TLS конфиг с Chrome fingerprint
-func (c *TLSClient) createTLSConfig(serverName string) *utls.Config {
-	config := &utls.Config{
-		ServerName: serverName,
-		// Standard TLS settings
+// utlsRoundTripper реализует http.RoundTripper поверх uTLS с автоматическим
+// роутингом HTTP/2 vs HTTP/1.1 на основе negotiated ALPN.
+//
+// Архитектура: после uTLS handshake проверяем NegotiatedProtocol.
+// Если "h2" — создаём http2.ClientConn поверх готового соединения
+// (http2.Transport принимает любой net.Conn, в отличие от http.Transport,
+// который требует *tls.Conn). Если "http/1.1" — пишем запрос и читаем
+// ответ вручную (DialTLSContext в http.Transport неработоспособен с uTLS
+// из-за type-assertion на *tls.Conn в dialConn).
+type utlsRoundTripper struct {
+	config  TLSClientConfig
+	helloID utls.ClientHelloID
+	dialer  *net.Dialer
+
+	proxyURL *url.URL
+	proxyMu  sync.RWMutex
+
+	// h2Transport используется только для NewClientConn (создание
+	// HTTP/2 соединения поверх уже установленного uTLS-коннекта).
+	// Мы НЕ используем его RoundTrip/dial — соединение создаём сами.
+	h2Transport *http2.Transport
+
+	// Пул HTTP/2 соединений для переиспользования (мультиплексирование)
+	h2Pool sync.Map // map[string]*http2.ClientConn
+}
+
+// dialAndHandshake устанавливает TCP-соединение (прямое или через прокси),
+// выполняет uTLS handshake с Chrome fingerprint и возвращает готовый UConn.
+func (t *utlsRoundTripper) dialAndHandshake(ctx context.Context, host string) (*utls.UConn, error) {
+	addr := host
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "443")
+	}
+
+	// 1. TCP dial (прямое или через прокси)
+	rawConn, err := t.dialTCP(ctx, addr)
+	if err != nil {
+		return nil, fmt.Errorf("tcp dial: %w", err)
+	}
+
+	// 2. Deadline для handshake (по context запроса)
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = rawConn.SetDeadline(deadline)
+	} else {
+		_ = rawConn.SetDeadline(time.Now().Add(t.config.HandshakeTimeout))
+	}
+
+	// 3. Извлекаем hostname для SNI
+	hostname := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostname = h
+	}
+
+	// 4. uTLS handshake с Chrome fingerprint
+	tlsConfig := &utls.Config{
+		ServerName:         hostname,
 		InsecureSkipVerify: false,
 		MinVersion:         tls.VersionTLS12,
 		MaxVersion:         tls.VersionTLS13,
-		// Chrome-like cipher suite preferences
-		CipherSuites: []uint16{
-			utls.TLS_AES_128_GCM_SHA256,
-			utls.TLS_AES_256_GCM_SHA384,
-			utls.TLS_CHACHA20_POLY1305_SHA256,
-			utls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-			utls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			utls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			utls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			utls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
-			utls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-		},
 	}
 
-	// Note: Extension randomization is handled internally by uTLS
-	// based on the ClientHelloID provided to UClient
-	// No need to manually set ExtensionOrder in newer versions
+	uconn := utls.UClient(rawConn, tlsConfig, t.helloID)
+	if err := uconn.HandshakeContext(ctx); err != nil {
+		rawConn.Close()
+		return nil, fmt.Errorf("tls handshake: %w", err)
+	}
 
-	return config
+	// 5. Снимаем deadline — дальше управляем через context
+	_ = rawConn.SetDeadline(time.Time{})
+
+	return uconn, nil
+}
+
+// dialTCP устанавливает TCP-соединение с учётом настроек прокси.
+func (t *utlsRoundTripper) dialTCP(ctx context.Context, addr string) (net.Conn, error) {
+	t.proxyMu.RLock()
+	proxyURL := t.proxyURL
+	t.proxyMu.RUnlock()
+
+	if proxyURL == nil {
+		return t.dialer.DialContext(ctx, "tcp", addr)
+	}
+
+	switch proxyURL.Scheme {
+	case "socks5", "socks5h":
+		var auth *proxy.Auth
+		if proxyURL.User != nil {
+			pw, _ := proxyURL.User.Password()
+			auth = &proxy.Auth{
+				User:     proxyURL.User.Username(),
+				Password: pw,
+			}
+		}
+		dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, t.dialer)
+		if err != nil {
+			return nil, fmt.Errorf("socks5 dialer: %w", err)
+		}
+		// golang.org/x/net/proxy.SOCKS5 возвращает тип, у которого есть
+		// DialContext (под капотом *socks.Dialer). Проверяем интерфейсом.
+		if cd, ok := dialer.(interface {
+			DialContext(context.Context, string, string) (net.Conn, error)
+		}); ok {
+			return cd.DialContext(ctx, "tcp", addr)
+		}
+		// Fallback без context-cancellation (старые версии)
+		return dialer.Dial("tcp", addr)
+
+	default:
+		// HTTP/HTTPS proxy — CONNECT tunnel
+		conn, err := t.dialer.DialContext(ctx, "tcp", proxyURL.Host)
+		if err != nil {
+			return nil, fmt.Errorf("proxy dial: %w", err)
+		}
+
+		connectReq := &http.Request{
+			Method: "CONNECT",
+			URL:    &url.URL{Opaque: addr},
+			Host:   addr,
+			Header: make(http.Header),
+		}
+		if proxyURL.User != nil {
+			password, _ := proxyURL.User.Password()
+			cred := proxyURL.User.Username() + ":" + password
+			connectReq.Header.Set(
+				"Proxy-Authorization",
+				"Basic "+base64.StdEncoding.EncodeToString([]byte(cred)),
+			)
+		}
+
+		if err := connectReq.Write(conn); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("proxy CONNECT write: %w", err)
+		}
+
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, connectReq)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("proxy CONNECT read: %w", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			conn.Close()
+			return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
+		}
+		return conn, nil
+	}
+}
+
+// RoundTrip реализует http.RoundTripper — единая точка входа для http.Client.
+func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Определяем host:port
+	host := req.URL.Host
+	if !strings.Contains(host, ":") {
+		host = host + ":443"
+	}
+
+	// Проверяем пул h2-соединений для переиспользования
+	poolKey := req.URL.Hostname()
+	if cc, ok := t.h2Pool.Load(poolKey); ok {
+		h2cc := cc.(*http2.ClientConn)
+		if h2cc.CanTakeNewRequest() {
+			return h2cc.RoundTrip(req)
+		}
+		t.h2Pool.Delete(poolKey)
+	}
+
+	// Dial + handshake
+	uconn, err := t.dialAndHandshake(req.Context(), host)
+	if err != nil {
+		return nil, err
+	}
+
+	proto := uconn.ConnectionState().NegotiatedProtocol
+
+	if proto == "h2" {
+		// HTTP/2: создаём ClientConn поверх uTLS-соединения
+		h2cc, err := t.h2Transport.NewClientConn(uconn)
+		if err != nil {
+			uconn.Close()
+			return nil, fmt.Errorf("http2 NewClientConn: %w", err)
+		}
+		// Сохраняем в пул для переиспользования (мультиплексирование)
+		t.h2Pool.Store(poolKey, h2cc)
+		return h2cc.RoundTrip(req)
+	}
+
+	// HTTP/1.1: ручной write + read
+	// Deadline из context для read/write фазы
+	if deadline, ok := req.Context().Deadline(); ok {
+		_ = uconn.SetDeadline(deadline)
+	} else {
+		_ = uconn.SetDeadline(time.Now().Add(30 * time.Second))
+	}
+
+	if err := req.Write(uconn); err != nil {
+		uconn.Close()
+		return nil, fmt.Errorf("http/1.1 write request: %w", err)
+	}
+
+	br := bufio.NewReader(uconn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		uconn.Close()
+		return nil, fmt.Errorf("http/1.1 read response: %w", err)
+	}
+
+	// Оборачиваем body: при Close закрываем соединение
+	resp.Body = &connCloseBody{ReadCloser: resp.Body, conn: uconn}
+	return resp, nil
+}
+
+// connCloseBody оборачивает тело ответа и закрывает соединение при Close.
+// Используется для HTTP/1.1 (соединение не переиспользуется).
+type connCloseBody struct {
+	io.ReadCloser
+	conn net.Conn
+}
+
+func (b *connCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.conn.Close()
+	return err
 }
 
 // Do выполняет HTTP запрос с TLS fingerprinting
@@ -182,29 +346,52 @@ func (c *TLSClient) GetHttpClient() *http.Client {
 	return c.httpClient
 }
 
-// GetTransport возвращает http.Transport для proxy settings
+// GetTransport возвращает *http.Transport для совместимости.
+//
+// Deprecated: uTLS transport не является *http.Transport (использует кастомный
+// RoundTripper с ALPN-роутингом h2/h1). Метод возвращает nil. Используйте
+// GetHttpClient() для выполнения запросов.
 func (c *TLSClient) GetTransport() *http.Transport {
-	return c.transport
+	return nil
 }
 
-// SetProxy устанавливает proxy для TLS клиента
+// SetProxy устанавливает proxy для TLS клиента.
+// Поддерживаются схемы: http, https (CONNECT tunnel), socks5, socks5h.
 func (c *TLSClient) SetProxy(proxyURL string) error {
-	if proxyURL != "" {
-		parsedURL, err := url.Parse(proxyURL)
-		if err != nil {
-			return fmt.Errorf("failed to parse proxy URL: %w", err)
-		}
-		c.transport.Proxy = http.ProxyURL(parsedURL)
-	} else {
-		c.transport.Proxy = http.ProxyFromEnvironment
+	if proxyURL == "" {
+		c.transport.proxyMu.Lock()
+		c.transport.proxyURL = nil
+		c.transport.proxyMu.Unlock()
+		return nil
 	}
+
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse proxy URL: %w", err)
+	}
+
+	switch parsed.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		// OK
+	default:
+		return fmt.Errorf("unsupported proxy scheme: %s (supported: http, https, socks5, socks5h)", parsed.Scheme)
+	}
+
+	c.transport.proxyMu.Lock()
+	c.transport.proxyURL = parsed
+	c.transport.proxyMu.Unlock()
 	return nil
 }
 
 // Close закрывает TLS клиент и освобождает ресурсы
 func (c *TLSClient) Close() error {
-	// http.Client doesn't need explicit closing
-	// Transport connections will be closed by idle timeout
+	// Закрываем все h2-соединения в пуле
+	c.transport.h2Pool.Range(func(key, value any) bool {
+		if h2cc, ok := value.(*http2.ClientConn); ok {
+			h2cc.Close()
+		}
+		return true
+	})
 	return nil
 }
 
@@ -215,7 +402,7 @@ func (c *TLSClient) GetFingerprintInfo() map[string]interface{} {
 		"randomize_ext":   c.config.RandomizeExtensions,
 		"tls_min_version": "TLS1.2",
 		"tls_max_version": "TLS1.3",
-		"ja3_protection":   true,
-		"ja4_protection":   true,
+		"ja3_protection":  true,
+		"ja4_protection":  true,
 	}
 }
