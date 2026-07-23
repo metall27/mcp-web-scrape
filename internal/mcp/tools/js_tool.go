@@ -107,7 +107,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			},
 			"session_id": map[string]interface{}{
 				"type":        "string",
-				"description": "Named persistent browser session. When set, the browser context (cookies, localStorage, sessionStorage) is reused across scrape_with_js calls with the same session_id — login once, then fetch N pages without re-authenticating. Sessions auto-close after inactivity (configurable TTL, default 10m). If empty, each call is ephemeral (cookies cleared before navigation). Example: {\"session_id\":\"rebrain\"} on first call logs in; subsequent calls with the same session_id reuse the authenticated state.",
+				"description": "Named persistent browser session. When set, the browser context (cookies, localStorage, sessionStorage) is reused across scrape_with_js calls with the same session_id — login once, then fetch N pages without re-authenticating. Sessions auto-close after inactivity (configurable TTL, default 30m). If empty, each call is ephemeral (cookies cleared before navigation). Example: {\"session_id\":\"rebrain\"} on first call logs in; subsequent calls with the same session_id reuse the authenticated state.",
 				"default":     "",
 			},
 			"close_session": map[string]interface{}{

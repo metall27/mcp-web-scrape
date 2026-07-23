@@ -60,7 +60,7 @@ browser:
   max_retries: 2                   # Maximum retries with different proxies on blocking (0 = no retry)
   sessions:
     enabled: true                  # Named persistent browser sessions (login-gated scraping)
-    ttl: 10m                       # Inactivity TTL — sessions unused for this long are closed
+    ttl: 30m                       # Inactivity TTL — sessions unused for this long are closed
 
 search:
   provider: duckduckgo  # duckduckgo, brave, bing

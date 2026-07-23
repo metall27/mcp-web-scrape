@@ -264,7 +264,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Named persistent sessions defaults
 	v.SetDefault("browser.sessions.enabled", true)
-	v.SetDefault("browser.sessions.ttl", 10*time.Minute)
+	v.SetDefault("browser.sessions.ttl", 30*time.Minute)
 
 	// Tool timeout and block detection defaults
 	v.SetDefault("browser.tool_timeout", 120*time.Second)
