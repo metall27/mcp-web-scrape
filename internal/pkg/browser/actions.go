@@ -40,6 +40,18 @@ func (e *ActionExecutor) GetJSResults() []JSResult {
 	return e.jsResults
 }
 
+// recordJSResult добавляет или перезаписывает результат execute_js по actionIndex.
+// При retry предыдущая запись для того же индекса заменяется — без дубликатов.
+func (e *ActionExecutor) recordJSResult(r JSResult) {
+	for i, existing := range e.jsResults {
+		if existing.ActionIndex == r.ActionIndex {
+			e.jsResults[i] = r
+			return
+		}
+	}
+	e.jsResults = append(e.jsResults, r)
+}
+
 // NewActionExecutor создает новый экземпляр ActionExecutor
 func NewActionExecutor(logger zerolog.Logger, stealth *StealthActions) *ActionExecutor {
 	return &ActionExecutor{
@@ -461,8 +473,9 @@ func (e *ActionExecutor) ExecuteJS(ctx context.Context, code string, actionIndex
 	var result interface{}
 	err := chromedp.Evaluate(code, &result).Do(ctx)
 
-	// Сохраняем результат (успех или ошибка)
-	e.jsResults = append(e.jsResults, JSResult{
+	// Сохраняем результат (upsert по actionIndex, чтобы при retry
+	// не дублировать записи — перезаписываем предыдущую попытку)
+	e.recordJSResult(JSResult{
 		ActionIndex: actionIndex,
 		Result:      result,
 		Err:         err,
