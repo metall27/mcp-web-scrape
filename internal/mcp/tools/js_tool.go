@@ -105,6 +105,16 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "Emulate random mouse movements (advanced anti-bot evasion)",
 				"default":     false,
 			},
+			"session_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Named persistent browser session. When set, the browser context (cookies, localStorage, sessionStorage) is reused across scrape_with_js calls with the same session_id — login once, then fetch N pages without re-authenticating. Sessions auto-close after inactivity (configurable TTL, default 30m). If empty, each call is ephemeral (cookies cleared before navigation). Example: {\"session_id\":\"rebrain\"} on first call logs in; subsequent calls with the same session_id reuse the authenticated state.",
+				"default":     "",
+			},
+			"close_session": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Close the named session after this call (explicit cleanup). Only meaningful with session_id. Releases the browser context immediately instead of waiting for the inactivity TTL. Example: scrape_with_js(session_id=\"rebrain\", close_session=true) to free resources after a workflow completes.",
+				"default":     false,
+			},
 			"actions": map[string]interface{}{
 				"type":        "array",
 				"description": "Ordered list of interactive actions to run after page load (not cached). Each action is an object with 'type' plus the fields that type needs: click/submit/hover/scroll_to/wait_for → {selector}; type/upload_file → {selector, text}; navigate → {text}; select_option → {selector, value}; execute_js/wait_for_text → {text}. Optional on all: {timeout, retries}.",
@@ -216,6 +226,8 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		Str("output_format", opts.OutputFormat).
 		Bool("screenshot", opts.Screenshot).
 		Str("screenshot_mode", opts.ScreenshotMode).
+		Str("session_id", opts.SessionID).
+		Bool("close_session", opts.CloseSession).
 		Msg("Starting JavaScript-rendered scrape")
 
 	// Validate scraper is initialized
@@ -264,6 +276,15 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		"rendering":    "javascript",
 		"format":       result.Format,
 		"method":       result.Method,
+	}
+
+	// Add named-session metadata when a session was used
+	if opts.SessionID != "" {
+		metadata["session_id"] = opts.SessionID
+		metadata["session_reused"] = result.SessionReused
+		if opts.CloseSession {
+			metadata["session_closed"] = true
+		}
 	}
 
 	// Add action metadata if interactive actions were executed
@@ -410,6 +431,17 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		stealthMouse = sm
 	}
 
+	// Extract named session settings
+	sessionID := ""
+	if sid, ok := args["session_id"].(string); ok {
+		sessionID = sid
+	}
+
+	closeSession := false
+	if cs, ok := args["close_session"].(bool); ok {
+		closeSession = cs
+	}
+
 	return Options{
 		Timeout:            time.Duration(timeout) * time.Second,
 		WaitForSelector:    waitFor,
@@ -426,6 +458,8 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		StealthScroll:      stealthScroll,
 		StealthMouse:       stealthMouse,
 		Actions:            actions,
+		SessionID:          sessionID,
+		CloseSession:       closeSession,
 	}
 }
 

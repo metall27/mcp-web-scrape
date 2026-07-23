@@ -67,6 +67,7 @@ type BrowserConfig struct {
 	NoSandbox       bool          `mapstructure:"no_sandbox"`
 	MaxTabs         int           `mapstructure:"max_tabs"` // Maximum concurrent browser tabs
 	PollingConfig   PollingConfig `mapstructure:"polling"` // Navigation polling configuration
+	SessionConfig   SessionConfig `mapstructure:"sessions"` // Named session configuration
 	ToolTimeout     time.Duration `mapstructure:"tool_timeout"` // Tool-level timeout for scraping operations
 	BlockDetection  bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
 	MaxRetries      int           `mapstructure:"max_retries"` // Maximum retries with different proxies on blocking
@@ -75,8 +76,17 @@ type BrowserConfig struct {
 // PollingConfig конфигурация для polling навигации
 type PollingConfig struct {
 	MaxAttempts int           `mapstructure:"max_attempts"` // Maximum polling attempts for body detection
-	Interval    time.Duration `mapstructure:"interval"` // Polling interval between attempts
-	Timeout     time.Duration `mapstructure:"timeout"` // Total timeout for polling operations
+	Interval    time.Duration `mapstructure:"interval"`      // Polling interval between attempts
+	Timeout     time.Duration `mapstructure:"timeout"`       // Total timeout for polling operations
+}
+
+// SessionConfig configures named persistent browser sessions.
+// A named session reuses the same browser context (shared cookie jar,
+// localStorage, sessionStorage) across multiple scrape_with_js calls,
+// enabling login-gated workflows (login once, then fetch N pages).
+type SessionConfig struct {
+	Enabled bool          `mapstructure:"enabled"` // Enable named session support
+	TTL     time.Duration `mapstructure:"ttl"`     // Inactivity TTL — sessions unused for this long are closed
 }
 
 type SearchConfig struct {
@@ -251,6 +261,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("browser.polling.max_attempts", 60)
 	v.SetDefault("browser.polling.interval", 100*time.Millisecond)
 	v.SetDefault("browser.polling.timeout", 6*time.Second)
+
+	// Named persistent sessions defaults
+	v.SetDefault("browser.sessions.enabled", true)
+	v.SetDefault("browser.sessions.ttl", 30*time.Minute)
 
 	// Tool timeout and block detection defaults
 	v.SetDefault("browser.tool_timeout", 120*time.Second)

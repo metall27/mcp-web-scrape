@@ -50,6 +50,11 @@ func main() {
 	}
 
 	// Initialize browser pool
+	// Named sessions are enabled only when both config.enabled=true and ttl>0.
+	sessionTTL := time.Duration(0)
+	if cfg.Browser.SessionConfig.Enabled && cfg.Browser.SessionConfig.TTL > 0 {
+		sessionTTL = cfg.Browser.SessionConfig.TTL
+	}
 	browserPool, err := browser.New(browser.Config{
 		Logger:         log.Logger,
 		MaxTabs:        cfg.Browser.MaxTabs,
@@ -58,6 +63,7 @@ func main() {
 		NoSandbox:      cfg.Browser.NoSandbox,
 		ViewportWidth:  cfg.Browser.ViewportWidth,
 		ViewportHeight: cfg.Browser.ViewportHeight,
+		SessionTTL:     sessionTTL,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize browser pool")

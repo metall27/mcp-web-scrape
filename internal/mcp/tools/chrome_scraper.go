@@ -46,6 +46,14 @@ type scrapeContext struct {
 	proxy         *proxy.Proxy
 	userAgent     string
 	stealth       *browser.StealthActions
+
+	// Named session state. When useSession is true, browserCtx is a tab
+	// derived from a persistent session context; browserCancel closes only
+	// that tab (the session survives). sessionID identifies the named
+	// session for close-after-scrape cleanup.
+	useSession    bool
+	sessionID     string
+	sessionReused bool
 }
 
 // NewChromeScraper создает новый ChromeScraper
@@ -68,13 +76,43 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
 	scrapeCtx := &scrapeContext{}
 
-	// 1. Get browser context
-	browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get browser context: %w", err)
+	// 1a. Named persistent session path: reuse a browser context that
+	// survives across scrape calls (shared cookie jar / storage).
+	// The session's chromedp context IS the browser context — navigations
+	// happen directly in it. browserCancel is a no-op so the retry loop
+	// does NOT close the session between attempts (only the explicit
+	// close_session flag or TTL eviction closes it).
+	if opts.SessionID != "" && s.browserPool != nil {
+		sm := s.browserPool.Sessions()
+		if sm != nil {
+			sessCtx, err := sm.GetOrCreate(s.browserPool.Allocator(), opts.SessionID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get named session %q: %w", opts.SessionID, err)
+			}
+			scrapeCtx.browserCtx = sessCtx
+			scrapeCtx.browserCancel = func() {} // no-op — session survives
+			scrapeCtx.useSession = true
+			scrapeCtx.sessionID = opts.SessionID
+			scrapeCtx.sessionReused = true
+			s.logger.Info().
+				Str("session_id", opts.SessionID).
+				Msg("Using named session for scrape")
+		} else {
+			s.logger.Warn().
+				Str("session_id", opts.SessionID).
+				Msg("Named sessions disabled (TTL=0); falling back to ephemeral context")
+		}
 	}
-	scrapeCtx.browserCtx = browserCtx
-	scrapeCtx.browserCancel = browserCancel
+
+	// 1b. Ephemeral path (default): fresh browser context per call
+	if !scrapeCtx.useSession {
+		browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get browser context: %w", err)
+		}
+		scrapeCtx.browserCtx = browserCtx
+		scrapeCtx.browserCancel = browserCancel
+	}
 
 	// 2. Get User-Agent
 	userAgent := opts.UserAgent
@@ -151,7 +189,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result := scrapeAttemptResult{}
 
 	// 1. Build Chrome tasks
-	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.stealth, opts)
+	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.stealth, opts, scrapeCtx.useSession)
 
 	// 2. Run tasks
 	var html string
@@ -683,6 +721,26 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		Method:          s.Name(),
 	}
 
+	// Named session post-processing
+	if opts.SessionID != "" {
+		result.SessionReused = true
+		s.logger.Info().
+			Str("session_id", opts.SessionID).
+			Bool("session_reused", true).
+			Msg("Scrape completed using named session")
+
+		// Explicit session close after a successful scrape
+		if opts.CloseSession && s.browserPool != nil {
+			if sm := s.browserPool.Sessions(); sm != nil {
+				if sm.Close(opts.SessionID) {
+					s.logger.Info().
+						Str("session_id", opts.SessionID).
+						Msg("Named session closed (close_session=true)")
+				}
+			}
+		}
+	}
+
 	// 13. Store in cache (only if no actions)
 	if s.cache != nil && s.cache.IsEnabled() && !hasActions {
 		cacheKey := GenerateCacheKeyJS(urlStr, OptsToMap(opts))
@@ -746,7 +804,8 @@ func (s *ChromeScraper) SupportsActions() bool {
 
 // buildChromeTasks строит список Chrome задач
 // Возвращает tasks и actionExecutor (для извлечения результатов execute_js)
-func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options) ([]chromedp.Action, *browser.ActionExecutor) {
+// preserveSession: когда true (named session), очистка cookies/storage пропускается
+func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options, preserveSession bool) ([]chromedp.Action, *browser.ActionExecutor) {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
@@ -797,7 +856,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 
 	// Navigate with stealth if enabled
 	// Use FAST navigation - load URL directly without waiting for full page load
-	navigationTask := s.buildNavigationTask(urlStr, userAgent, stealth)
+	navigationTask := s.buildNavigationTask(urlStr, userAgent, stealth, preserveSession)
 	tasks = append(tasks, navigationTask)
 
 	// Wait for specific selector if provided — wrapped in timeout to prevent indefinite hangs
@@ -885,7 +944,10 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 }
 
 // buildNavigationTask создает единую задачу навигации для stealth/non-stealth режимов
-func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *browser.StealthActions) chromedp.Action {
+// preserveSession: когда false, перед навигацией очищаются все cookies/storage
+// (защита от GitHub "signed in with another tab"). Когда true (named session),
+// очистка пропускается — логин из предыдущих вызовов сохраняется.
+func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *browser.StealthActions, preserveSession bool) chromedp.Action {
 	navigationAction := chromedp.ActionFunc(func(ctx context.Context) error {
 		s.logger.Info().Msg("🌐 Starting navigation...")
 		startTime := time.Now()
@@ -895,7 +957,11 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 		// 1. Clearing all cookies
 		// 2. Clearing localStorage
 		// 3. Clearing sessionStorage
-		if err := chromedp.ActionFunc(func(ctx context.Context) error {
+		//
+		// SKIPPED when preserveSession is true (named persistent session) —
+		// clearing would destroy the login state the session is meant to carry.
+		if !preserveSession {
+			if err := chromedp.ActionFunc(func(ctx context.Context) error {
 			// Clear all cookies via CDP
 			if err := network.ClearBrowserCookies().Do(ctx); err != nil {
 				s.logger.Debug().Err(err).Msg("Failed to clear browser cookies (non-critical)")
@@ -942,6 +1008,9 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 
 		// Add small delay to ensure storage is fully cleared before navigation
 		time.Sleep(100 * time.Millisecond)
+		} else {
+			s.logger.Debug().Msg("Skipping cookie/storage clearing (named session)")
+		}
 
 		// Navigate with timeout to prevent hanging on slow sites
 		// chromedp.Navigate waits for full page load which can take 60+ seconds
