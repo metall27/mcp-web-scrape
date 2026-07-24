@@ -71,6 +71,30 @@ var requiredFields = map[string][]struct {
 	"navigate":      {{"text", func(a Action) string { return a.Text }}},
 }
 
+// RequiredField is the exported mirror of an entry in requiredFields: an
+// action type and the names of the Action struct fields it requires.
+type RequiredField struct {
+	ActionType string   // e.g. "wait_for"
+	Fields     []string // e.g. ["selector"]
+}
+
+// RequiredFields returns the validation rules for every action type in a form
+// consumable from outside the browser package (notably the tools package's
+// schema/validator consistency test). The JSON-schema advertised to LLM
+// clients must encode the same required fields; see
+// TestActionsSchemaMatchesValidator in internal/mcp/tools.
+func RequiredFields() []RequiredField {
+	out := make([]RequiredField, 0, len(requiredFields))
+	for actionType, fields := range requiredFields {
+		names := make([]string, len(fields))
+		for i, f := range fields {
+			names[i] = f.field
+		}
+		out = append(out, RequiredField{ActionType: actionType, Fields: names})
+	}
+	return out
+}
+
 // validateAction checks that action has the required fields for its type.
 // Returns an *ActionValidationError (nil for valid actions) so callers in the
 // retry loop can detect it via IsActionValidationError and skip retrying.

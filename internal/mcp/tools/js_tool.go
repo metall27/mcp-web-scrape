@@ -26,6 +26,148 @@ type ScrapeJSTool struct {
 	logger    zerolog.Logger
 }
 
+// buildActionsSchema returns the JSON-schema "actions" array property for
+// scrape_with_js. Each action type is a separate oneOf branch whose required
+// fields match what ParseActions / validateAction enforce in actions.go, so
+// the schema itself encodes "wait_for needs selector", "wait_for_text needs
+// text", etc. — instead of a flat property bag where the LLM has to guess
+// which fields each type requires.
+//
+// Without this, agents repeatedly send {type:"wait_for"} with no selector
+// (confusing the top-level wait_for string param with the action type),
+// producing "selector is required for wait_for action" errors.
+func buildActionsSchema() map[string]interface{} {
+	timeoutProp := func() map[string]interface{} {
+		return map[string]interface{}{
+			"type":        "integer",
+			"description": "Timeout in milliseconds for this action (default: 30000)",
+		}
+	}
+	retriesProp := func() map[string]interface{} {
+		return map[string]interface{}{
+			"type":        "integer",
+			"description": "Number of retries on failure (default: 3)",
+		}
+	}
+
+	// selectorOnly: oneOf branch for actions needing {selector}.
+	selectorOnly := func(actionType, selDesc string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{actionType},
+					"description": "Action type",
+				},
+				"selector": map[string]interface{}{
+					"type":        "string",
+					"description": selDesc,
+				},
+				"timeout": timeoutProp(),
+				"retries": retriesProp(),
+			},
+			"required":             []string{"type", "selector"},
+			"additionalProperties": false,
+		}
+	}
+
+	// selectorAndText: oneOf branch for actions needing {selector, text}.
+	selectorAndText := func(actionType, selDesc, textDesc string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{actionType},
+					"description": "Action type",
+				},
+				"selector": map[string]interface{}{
+					"type":        "string",
+					"description": selDesc,
+				},
+				"text": map[string]interface{}{
+					"type":        "string",
+					"description": textDesc,
+				},
+				"timeout": timeoutProp(),
+				"retries": retriesProp(),
+			},
+			"required":             []string{"type", "selector", "text"},
+			"additionalProperties": false,
+		}
+	}
+
+	// textOnly: oneOf branch for actions needing {text} with no selector.
+	textOnly := func(actionType, textDesc string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{actionType},
+					"description": "Action type",
+				},
+				"text": map[string]interface{}{
+					"type":        "string",
+					"description": textDesc,
+				},
+				"timeout": timeoutProp(),
+				"retries": retriesProp(),
+			},
+			"required":             []string{"type", "text"},
+			"additionalProperties": false,
+		}
+	}
+
+	return map[string]interface{}{
+		"type": "array",
+		"description": "Ordered list of interactive actions to run after page load (not cached). " +
+			"Each action is an object whose 'type' field determines which other fields are required. " +
+			"Match the oneOf branch for the type you are using — omitting a required field is a hard error.",
+		"items": map[string]interface{}{
+			"oneOf": []interface{}{
+				// --- selector-only actions ---
+				selectorOnly("click", "CSS selector for the element to click"),
+				selectorOnly("submit", "CSS selector for the form or submit button"),
+				selectorOnly("scroll_to", "CSS selector for the element to scroll into view"),
+				selectorOnly("wait_for", "CSS selector for the element that must become visible before continuing"),
+				selectorOnly("hover", "CSS selector for the element to hover over"),
+				// --- selector + text actions ---
+				selectorAndText("type", "CSS selector for the input field", "Text to type into the field"),
+				selectorAndText("upload_file", "CSS selector for the file input element", "Path to the file to upload"),
+				// --- selector + value action (select_option) ---
+				map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"select_option"},
+							"description": "Action type",
+						},
+						"selector": map[string]interface{}{
+							"type":        "string",
+							"description": "CSS selector for the <select> dropdown element",
+						},
+						"value": map[string]interface{}{
+							"type":        "string",
+							"description": "Value attribute of the <option> to select",
+						},
+						"timeout": timeoutProp(),
+						"retries": retriesProp(),
+					},
+					"required":             []string{"type", "selector", "value"},
+					"additionalProperties": false,
+				},
+				// --- text-only actions ---
+				textOnly("execute_js", "JavaScript code to execute. Do NOT use top-level 'return' — wrap in an IIFE: (() => { ... })(). The return value IS included in metadata.execute_js_results."),
+				textOnly("wait_for_text", "Text to wait for on the page (polls until document.body.innerText includes this string)"),
+				textOnly("navigate", "URL to navigate to"),
+			},
+		},
+	}
+}
+
 func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxyRotator *proxy.Rotator, githubCfg config.GitHubConfig) *ScrapeJSTool {
 	schema := map[string]interface{}{
 		"type": "object",
@@ -115,41 +257,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "Close the named session after this call (explicit cleanup). Only meaningful with session_id. Releases the browser context immediately instead of waiting for the inactivity TTL. Example: scrape_with_js(session_id=\"rebrain\", close_session=true) to free resources after a workflow completes.",
 				"default":     false,
 			},
-			"actions": map[string]interface{}{
-				"type":        "array",
-				"description": "Ordered list of interactive actions to run after page load (not cached). Each action is an object with 'type' plus the fields that type needs: click/submit/hover/scroll_to/wait_for → {selector}; type/upload_file → {selector, text}; navigate → {text}; select_option → {selector, value}; execute_js/wait_for_text → {text}. Optional on all: {timeout, retries}.",
-				"items": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"type": map[string]interface{}{
-							"type":        "string",
-							"enum":        []string{"click", "type", "submit", "scroll_to", "wait_for", "wait_for_text", "hover", "select_option", "execute_js", "upload_file", "navigate"},
-							"description": "Action type to perform",
-						},
-						"selector": map[string]interface{}{
-							"type":        "string",
-							"description": "CSS selector for the element (required for most actions)",
-						},
-						"text": map[string]interface{}{
-							"type":        "string",
-							"description": "Text to type (for 'type') or JavaScript code to execute (for 'execute_js'). For execute_js: do NOT use top-level 'return' — wrap in an IIFE (() => { ... })(); the return value IS included in metadata.execute_js_results.",
-						},
-						"value": map[string]interface{}{
-							"type":        "string",
-							"description": "Value to select in dropdown (for 'select_option' action)",
-						},
-						"timeout": map[string]interface{}{
-							"type":        "integer",
-							"description": "Timeout in milliseconds for wait actions (default: 30000)",
-						},
-						"retries": map[string]interface{}{
-							"type":        "integer",
-							"description": "Number of retries on failure (default: 3)",
-						},
-					},
-					"required": []string{"type"},
-				},
-			},
+			"actions": buildActionsSchema(),
 		},
 		"required":             []string{"url"},
 		"additionalProperties": false,
