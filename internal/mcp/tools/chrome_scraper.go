@@ -45,6 +45,7 @@ type scrapeContext struct {
 	browserCancel context.CancelFunc
 	proxy         *proxy.Proxy
 	userAgent     string
+	fingerprint   browser.BrowserFingerprint // pinned for named sessions; random for ephemeral
 	stealth       *browser.StealthActions
 
 	// Named session state. When useSession is true, browserCtx is a tab
@@ -85,7 +86,27 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 	if opts.SessionID != "" && s.browserPool != nil {
 		sm := s.browserPool.Sessions()
 		if sm != nil {
-			sessCtx, err := sm.GetOrCreate(s.browserPool.Allocator(), opts.SessionID)
+			// Generate the browser identity once and pin it to the
+			// session. For a new session the values below become the
+			// canonical UA+fingerprint; for an existing session they are
+			// ignored and the session's own pinned values take over (#41).
+			ua := opts.UserAgent
+			if ua == "" && s.uaRotator != nil {
+				ua = s.uaRotator.GetRandomDesktop()
+			}
+			if ua == "" {
+				ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+			}
+			fp := browser.BrowserFingerprint{}
+			if opts.StealthEnabled {
+				// Use a transient StealthActions just to generate a
+				// fingerprint — the real stealth actions for the scrape
+				// are created below with the full config.
+				gen := browser.NewStealthActions(browser.StealthConfig{})
+				fp = gen.GenerateRandomFingerprint()
+			}
+
+			sessCtx, err := sm.GetOrCreate(s.browserPool.Allocator(), opts.SessionID, ua, fp)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get named session %q: %w", opts.SessionID, err)
 			}
@@ -94,8 +115,26 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			scrapeCtx.useSession = true
 			scrapeCtx.sessionID = opts.SessionID
 			scrapeCtx.sessionReused = true
+
+			// Use the session's pinned identity for all downstream work.
+			// For a freshly-created session these equal the values we just
+			// passed in; for a reused session they may differ (that's the
+			// point — the original identity wins).
+			if pinnedUA, ok := sm.GetUserAgent(opts.SessionID); ok {
+				ua = pinnedUA
+			}
+			if pinnedFP, ok := sm.GetFingerprint(opts.SessionID); ok {
+				fp = pinnedFP
+			}
+			scrapeCtx.userAgent = ua
+			scrapeCtx.fingerprint = fp
+
 			s.logger.Info().
 				Str("session_id", opts.SessionID).
+				Str("user_agent", ua).
+				Str("timezone", fp.Timezone).
+				Str("language", fp.Language).
+				Str("platform", fp.Platform).
 				Msg("Using named session for scrape")
 		} else {
 			s.logger.Warn().
@@ -114,19 +153,21 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		scrapeCtx.browserCancel = browserCancel
 	}
 
-	// 2. Get User-Agent
-	userAgent := opts.UserAgent
-	if userAgent == "" && s.uaRotator != nil {
-		userAgent = s.uaRotator.GetRandomDesktop()
+	// 2. Get User-Agent (ephemeral path only — session path already set it)
+	if !scrapeCtx.useSession {
+		userAgent := opts.UserAgent
+		if userAgent == "" && s.uaRotator != nil {
+			userAgent = s.uaRotator.GetRandomDesktop()
+		}
+		if userAgent == "" {
+			// Use real Chrome UA instead of MCP-Web-Scrape
+			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+		}
+		scrapeCtx.userAgent = userAgent
 	}
-	if userAgent == "" {
-		// Use real Chrome UA instead of MCP-Web-Scrape
-		userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-	}
-	scrapeCtx.userAgent = userAgent
 
 	s.logger.Debug().
-		Str("user_agent", userAgent).
+		Str("user_agent", scrapeCtx.userAgent).
 		Str("url", urlStr).
 		Msg("Using User-Agent for Chrome scraping")
 
@@ -189,7 +230,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result := scrapeAttemptResult{}
 
 	// 1. Build Chrome tasks
-	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.stealth, opts, scrapeCtx.useSession)
+	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.fingerprint, scrapeCtx.stealth, opts, scrapeCtx.useSession)
 
 	// 2. Run tasks
 	var html string
@@ -805,7 +846,13 @@ func (s *ChromeScraper) SupportsActions() bool {
 // buildChromeTasks строит список Chrome задач
 // Возвращает tasks и actionExecutor (для извлечения результатов execute_js)
 // preserveSession: когда true (named session), очистка cookies/storage пропускается
-func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *browser.StealthActions, opts Options, preserveSession bool) ([]chromedp.Action, *browser.ActionExecutor) {
+//
+// fingerprint carries the browser identity (timezone, language, platform,
+// WebGL). For named sessions it is pinned once at session creation and
+// reused on every call so the target site observes a consistent browser
+// across the whole session (#41); for ephemeral contexts the caller leaves
+// it zero-valued and a random one is generated per call.
+func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint browser.BrowserFingerprint, stealth *browser.StealthActions, opts Options, preserveSession bool) ([]chromedp.Action, *browser.ActionExecutor) {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
@@ -832,18 +879,23 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, stealth *brow
 
 			// Phase 3: Extended Stealth - Inject anti-detection scripts
 			if stealth != nil {
-				// Generate random fingerprint for this session
-				fingerprint := stealth.GenerateRandomFingerprint()
+				// Named sessions provide a pinned fingerprint; ephemeral
+				// contexts pass a zero-value struct (Timezone=="") and get
+				// a fresh random identity for this call only.
+				fp := fingerprint
+				if fp.Timezone == "" {
+					fp = stealth.GenerateRandomFingerprint()
+				}
 
 				s.logger.Info().
-					Str("timezone", fingerprint.Timezone).
-					Str("language", fingerprint.Language).
-					Str("platform", fingerprint.Platform).
-					Str("webgl_vendor", fingerprint.WebGLVendor).
+					Str("timezone", fp.Timezone).
+					Str("language", fp.Language).
+					Str("platform", fp.Platform).
+					Str("webgl_vendor", fp.WebGLVendor).
 					Msg("Phase 3: Injecting Extended Stealth anti-detection scripts")
 
 				// Inject comprehensive anti-detection scripts
-				if err := stealth.InjectAntiDetectionScripts(fingerprint).Do(ctx); err != nil {
+				if err := stealth.InjectAntiDetectionScripts(fp).Do(ctx); err != nil {
 					s.logger.Warn().Err(err).Msg("Failed to inject anti-detection scripts (non-critical)")
 				} else {
 					s.logger.Info().Msg("✅ Extended Stealth scripts injected successfully")
