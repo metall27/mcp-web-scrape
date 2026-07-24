@@ -95,7 +95,7 @@ MCP-сервер для веб-скрапинга с унифицированн�
 - `url` (обязательный) — URL для скрапинга
 - `timeout` — таймаут в секундах (по умолчанию 30)
 - `user_agent` — кастомный User-Agent
-- `headers` — кастомные HTTP заголовки
+- `output_format` — формат вывода: `"markdown"` (по умолчанию) или `"html"`
 
 **Особенности:**
 - ⚡ Быстрый (1-2 сек)
@@ -131,16 +131,21 @@ MCP-сервер для веб-скрапинга с унифицированн�
 **Параметры:**
 - `url` (обязательный) — URL для скрапинга
 - `timeout` — таймаут в секундах (по умолчанию 60)
-- `wait_for` — CSS селектор для ожидания
+- `wait_for` — CSS селектор для ожидания перед скрапингом
 - `wait_time` — задержка после загрузки в мс (по умолчанию 3000)
 - `wait_for_network_idle` — умное ожидание загрузки (30 сек timeout)
-- `screenshot_mode` — когда делать скриншот: `"auto"`, `"always"`, `"never"`
-- `output_format` — формат вывода: `"html"` (по умолчанию) или `"markdown"`
+- `screenshot_mode` — когда делать скриншот: `"auto"` (по умолчанию), `"always"`, `"never"`
+- `output_format` — формат вывода: `"markdown"` (по умолчанию) или `"html"`
 - `block_images` — блокировать картинки для ускорения
 - `user_agent` — кастомный User-Agent
+- `viewport_width` — ширина браузера в пикселях (по умолчанию 1920)
+- `viewport_height` — высота браузера в пикселях (по умолчанию 1080)
 - `stealth_enabled` — включить stealth mode (Phase 3)
 - `stealth_scroll` — эмуляция скролла (по умолчанию true)
 - `stealth_mouse` — эмуляция движений мыши
+- `session_id` — именованная persistent-сессия браузера. Позволяет переиспользовать контекст (cookies, localStorage, sessionStorage) между вызовами — залогиниться один раз, затем обходить страницы без ре-аутентификации. Сессии авто-закрываются после неактивности (TTL по умолчанию 30м). Если пусто — каждый вызов ephemeral (cookies очищаются перед навигацией)
+- `close_session` — закрыть именованную сессию после этого вызова (явная очистка). Имеет смысл только с `session_id` — освобождает контекст браузера немедленно, не дожидаясь TTL
+- `actions` — массив интерактивных действий (см. ниже)
 
 **Интерактивные действия** (click, type, scroll):
 ```json
@@ -159,6 +164,9 @@ MCP-сервер для веб-скрапинга с унифицированн�
 - `click`, `type`, `submit`, `scroll_to`
 - `wait_for`, `wait_for_text`, `hover`
 - `select_option`, `execute_js`, `upload_file`
+- `navigate` — переход на новый URL внутри той же сессии
+
+Требуемые поля по типу: click/submit/scroll_to/wait_for/hover → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text/navigate → {text}. Опционально для всех: {timeout, retries}.
 
 **Особенности:**
 - 🌐 JavaScript рендеринг
@@ -166,6 +174,7 @@ MCP-сервер для веб-скрапинга с унифицированн�
 - 🎭 Stealth mode (Phase 3)
 - 🔄 HTTP fallback + TLS fingerprinting (Phase 4)
 - 🔄 Retry loop with proxy rotation (Phase 5)
+- 🔐 Named sessions для login-gated контента
 
 ### `search_web`
 
@@ -239,6 +248,33 @@ MCP-сервер для веб-скрапинга с унифицированн�
   "attribute": "href"
 }
 ```
+
+### `diagnostic_url`
+
+Диагностика причин неудачного скрапинга. Пробует URL одновременно через HTTP и Chrome, сообщает: доступен ли сайт, есть ли anti-bot блокировка (Cloudflare, captcha), требуется ли JS-рендеринг, и рекомендует какой скрапер использовать (http vs chrome) и что делать (retry, screenshot, give up).
+
+Использовать **после** неудачного `scrape_url` или `scrape_with_js` (timeout, пустой body, подозрение на блок) — для выбора пути восстановления вместо угадывания.
+
+```json
+{
+  "url": "https://example.com"
+}
+```
+
+### `session_info`
+
+Инспекция именованной браузерной сессии (созданной через `scrape_with_js` с `session_id`) для дебага login-gated сценариев. Возвращает cookies (включая HTTP-only, недоступные через document.cookie), ключи localStorage/sessionStorage, время создания, последний доступ, pinned User-Agent.
+
+По умолчанию отдаёт только метаданные cookies и ключи storage; `include_values=true` также возвращает значения (токены и т.д. — sensitive, попадают в ответ).
+
+```json
+{
+  "session_id": "rebrain",
+  "include_values": false
+}
+```
+
+Без `session_id` — список всех активных сессий без дампа конкретной.
 
 ## 📦 Установка и Развертывание
 
@@ -742,7 +778,7 @@ Fast HTTP scraper for **static sites**: blogs, news, documentation.
 - `url` (required) — URL to scrape
 - `timeout` — timeout in seconds (default: 30)
 - `user_agent` — custom User-Agent
-- `headers` — custom HTTP headers
+- `output_format` — output format: `"markdown"` (default) or `"html"`
 
 **Features:**
 - ⚡ Fast (1-2 sec)
@@ -778,16 +814,21 @@ Universal tool for **dynamic sites**: GitHub, SPAs, dashboards.
 **Parameters:**
 - `url` (required) — URL to scrape
 - `timeout` — timeout in seconds (default: 60)
-- `wait_for` — CSS selector to wait for
+- `wait_for` — CSS selector to wait for before scraping
 - `wait_time` — delay after load in ms (default: 3000)
 - `wait_for_network_idle` — smart load waiting (30 sec timeout)
-- `screenshot_mode` — when to take screenshot: `"auto"`, `"always"`, `"never"`
-- `output_format` — output format: `"html"` (default) or `"markdown"`
+- `screenshot_mode` — when to take screenshot: `"auto"` (default), `"always"`, `"never"`
+- `output_format` — output format: `"markdown"` (default) or `"html"`
 - `block_images` — block images for faster scraping
 - `user_agent` — custom User-Agent
+- `viewport_width` — browser viewport width in pixels (default: 1920)
+- `viewport_height` — browser viewport height in pixels (default: 1080)
 - `stealth_enabled` — enable stealth mode (Phase 3)
 - `stealth_scroll` — scroll emulation (default true)
 - `stealth_mouse` — mouse movement emulation
+- `session_id` — named persistent browser session. Reuses the browser context (cookies, localStorage, sessionStorage) across calls — log in once, then browse pages without re-authenticating. Sessions auto-close after inactivity (default TTL 30m). If empty, each call is ephemeral (cookies cleared before navigation)
+- `close_session` — close the named session after this call (explicit cleanup). Only meaningful with `session_id` — releases the browser context immediately instead of waiting for TTL
+- `actions` — array of interactive actions (see below)
 
 **Interactive actions** (click, type, scroll):
 ```json
@@ -806,6 +847,9 @@ Available actions:
 - `click`, `type`, `submit`, `scroll_to`
 - `wait_for`, `wait_for_text`, `hover`
 - `select_option`, `execute_js`, `upload_file`
+- `navigate` — navigate to a new URL within the same session
+
+Required fields by type: click/submit/scroll_to/wait_for/hover → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text/navigate → {text}. Optional on all: {timeout, retries}.
 
 **Features:**
 - 🌐 JavaScript rendering
@@ -813,6 +857,7 @@ Available actions:
 - 🎭 Stealth mode (Phase 3)
 - 🔄 HTTP fallback + TLS fingerprinting (Phase 4)
 - 🔄 Retry loop with proxy rotation (Phase 5)
+- 🔐 Named sessions for login-gated content
 
 ### `search_web`
 
@@ -886,6 +931,33 @@ Extract elements by CSS selectors.
   "attribute": "href"
 }
 ```
+
+### `diagnostic_url`
+
+Diagnose why scraping a URL fails or is slow. Probes the URL with both HTTP and Chrome and reports: whether it's accessible, whether anti-bot blocking (Cloudflare, captcha) is detected, whether JS rendering is required, and recommends which scraper to use (http vs chrome) and what action to take (retry, screenshot, give up).
+
+Use **AFTER** a failed `scrape_url` or `scrape_with_js` (timeout, empty body, suspected block) — to choose the right recovery path instead of guessing.
+
+```json
+{
+  "url": "https://example.com"
+}
+```
+
+### `session_info`
+
+Inspect a named persistent browser session (created via `scrape_with_js` with `session_id`) for debugging login-gated workflows. Returns cookies (including HTTP-only cookies, invisible to document.cookie), localStorage/sessionStorage keys, creation time, last access, pinned User-Agent.
+
+By default returns only cookie metadata and storage keys; set `include_values=true` to also read token values (sensitive — they enter the response).
+
+```json
+{
+  "session_id": "rebrain",
+  "include_values": false
+}
+```
+
+Without `session_id` — lists all active sessions without dumping any single one.
 
 ## 📦 Installation and Deployment
 
