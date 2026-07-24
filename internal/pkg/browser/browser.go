@@ -32,15 +32,15 @@ type Pool struct {
 }
 
 type Config struct {
-	Logger        zerolog.Logger
-	MaxTabs       int  // Maximum concurrent tabs (0 = unlimited)
-	Headless      bool
-	DisableGPU    bool
-	NoSandbox     bool
+	Logger         zerolog.Logger
+	MaxTabs        int // Maximum concurrent tabs (0 = unlimited)
+	Headless       bool
+	DisableGPU     bool
+	NoSandbox      bool
 	ViewportWidth  int
 	ViewportHeight int
-	IsolatedMode bool // Use isolated browser instances instead of shared pool (expensive but avoids session conflicts)
-	SessionTTL    time.Duration // Inactivity TTL for named sessions; 0 = disabled
+	IsolatedMode   bool          // Use isolated browser instances instead of shared pool (expensive but avoids session conflicts)
+	SessionTTL     time.Duration // Inactivity TTL for named sessions; 0 = disabled
 }
 
 func New(cfg Config) (*Pool, error) {
@@ -57,7 +57,7 @@ func New(cfg Config) (*Pool, error) {
 		chromedp.Flag("disable-renderer-backgrounding", true),
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("site-per-process", false), // Disable site-per-process to prevent iframe issues
+		chromedp.Flag("site-per-process", false),            // Disable site-per-process to prevent iframe issues
 		chromedp.Flag("disable-features", "SitePerProcess"), // Disable out-of-process iframes
 		// Prevent navigator.webdriver=true which triggers anti-bot measures
 		// (e.g. conditional hiding of form submit buttons on React SPAs)
@@ -66,7 +66,14 @@ func New(cfg Config) (*Pool, error) {
 	}
 
 	if cfg.Headless {
-		allocOpts = append(allocOpts, chromedp.Headless)
+		// Use --headless=new (Chrome 112+) which is much closer to a real
+		// browser than the legacy --headless mode. The old mode has timing
+		// and lifecycle differences that break SPA hydration (e.g. Zustand
+		// persist fails to restore auth state from localStorage, causing
+		// infinite skeleton loaders on sites like my.rebrainme.com — #59).
+		allocOpts = append(allocOpts,
+			chromedp.Flag("headless", "new"),
+		)
 	}
 
 	if cfg.DisableGPU {

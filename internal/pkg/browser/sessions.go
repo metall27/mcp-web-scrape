@@ -172,6 +172,63 @@ func (sm *SessionManager) GetFingerprint(id string) (BrowserFingerprint, bool) {
 	return sess.fingerprint, true
 }
 
+// GetLocalStorage reads the current localStorage key-value pairs from a named
+// session's browser context. Returns nil when the session does not exist or
+// storage is empty.
+//
+// Used by ChromeScraper to re-inject localStorage via
+// page.AddScriptToEvaluateOnNewDocument BEFORE navigation, so SPA frameworks
+// that hydrate auth state from localStorage (Zustand persist, Redux persist)
+// see the token synchronously on first JS execution — eliminating the
+// hydration race condition where React starts with an empty auth state and
+// never makes API calls (#59).
+func (sm *SessionManager) GetLocalStorage(ctx context.Context, id string) map[string]string {
+	sm.mu.Lock()
+	sess, ok := sm.sessions[id]
+	if ok {
+		sess.touch()
+	}
+	sm.mu.Unlock()
+	if !ok {
+		return nil
+	}
+
+	sess.mu.Lock()
+	sessCtx := sess.ctx
+	sess.mu.Unlock()
+
+	type storageProbe struct {
+		LocalValues map[string]string `json:"localValues"`
+	}
+	var probe storageProbe
+
+	// Read localStorage values via JS evaluate on the session's persistent
+	// context. A short timeout guards against a dead/unreachable Chrome.
+	readCtx, cancel := context.WithTimeout(sessCtx, 10*time.Second)
+	defer cancel()
+
+	js := `(() => {
+		const out = { localValues: {} };
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			out.localValues[k] = localStorage.getItem(k);
+		}
+		return out;
+	})()`
+
+	if err := chromedp.Run(readCtx,
+		chromedp.Evaluate(js, &probe),
+	); err != nil {
+		sm.logger.Debug().Err(err).Str("session_id", id).Msg("GetLocalStorage: failed to read storage")
+		return nil
+	}
+
+	if len(probe.LocalValues) == 0 {
+		return nil
+	}
+	return probe.LocalValues
+}
+
 // CookieInfo holds the metadata of a single cookie for session inspection (#42).
 // The cookie Value is omitted by default (includeValues=false) because session
 // cookies are sensitive credentials — the debug use case ("is the cookie
