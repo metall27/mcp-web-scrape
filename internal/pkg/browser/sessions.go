@@ -15,14 +15,26 @@ import (
 // share the same cookie jar, localStorage and sessionStorage, enabling
 // login-gated workflows (authenticate once, then fetch N pages without
 // re-logging-in).
+//
+// The userAgent and fingerprint are pinned at creation time so that every
+// subsequent scrape within this session presents the same browser identity
+// to the target site. Sites that correlate cookies with JA3/JA4 TLS
+// fingerprint, User-Agent, navigator.platform, timezone or WebGL renderer
+// would otherwise flag the session as anomalous when each call rotates a
+// different identity (#41).
 type namedSession struct {
-	id        string
-	ctx       context.Context // persistent chromedp context (owns the BrowserContext)
-	cancel    context.CancelFunc
-	created   time.Time
+	id         string
+	ctx        context.Context // persistent chromedp context (owns the BrowserContext)
+	cancel     context.CancelFunc
+	created    time.Time
 	lastAccess time.Time
-	mu        sync.Mutex // guards lastAccess updates + close-once semantics
-	closed    bool
+	mu         sync.Mutex // guards lastAccess updates + close-once semantics
+	closed     bool
+
+	// Pinned browser identity — set once when the session is created,
+	// reused by every subsequent scrape in this session.
+	userAgent   string
+	fingerprint BrowserFingerprint
 }
 
 func (s *namedSession) touch() {
@@ -34,13 +46,13 @@ func (s *namedSession) touch() {
 // SessionManager owns the lifecycle of named persistent browser sessions.
 // It is embedded in Pool and guarded by Pool.mu.
 type SessionManager struct {
-	pool      *Pool
-	logger    zerolog.Logger
-	ttl       time.Duration
-	mu        sync.Mutex
-	sessions  map[string]*namedSession
-	stopOnce  sync.Once
-	stopCh    chan struct{}
+	pool     *Pool
+	logger   zerolog.Logger
+	ttl      time.Duration
+	mu       sync.Mutex
+	sessions map[string]*namedSession
+	stopOnce sync.Once
+	stopCh   chan struct{}
 }
 
 func newSessionManager(pool *Pool, logger zerolog.Logger, ttl time.Duration) *SessionManager {
@@ -60,7 +72,13 @@ func newSessionManager(pool *Pool, logger zerolog.Logger, ttl time.Duration) *Se
 // GetOrCreate returns an existing named session, or creates a new one.
 // The returned context is the persistent chromedp browser context —
 // navigations happen directly in it across multiple scrape calls.
-func (sm *SessionManager) GetOrCreate(parent context.Context, id string) (context.Context, error) {
+//
+// userAgent and fingerprint are pinned when the session is first created
+// and ignored on subsequent calls (the existing session keeps its original
+// identity). This keeps the browser identity stable for the lifetime of a
+// named session (#41): a site that ties cookies to UA/JA3/navigator will
+// see a consistent browser across every scrape.
+func (sm *SessionManager) GetOrCreate(parent context.Context, id, userAgent string, fingerprint BrowserFingerprint) (context.Context, error) {
 	sm.mu.Lock()
 	if sess, ok := sm.sessions[id]; ok {
 		sess.touch()
@@ -101,11 +119,13 @@ func (sm *SessionManager) GetOrCreate(parent context.Context, id string) (contex
 	// ephemeral path. Pre-initializing with a child context caused
 	// "context canceled" errors when the child timeout fired.
 	sess := &namedSession{
-		id:        id,
-		ctx:       taskCtx,
-		cancel:    cancel,
-		created:   time.Now(),
-		lastAccess: time.Now(),
+		id:          id,
+		ctx:         taskCtx,
+		cancel:      cancel,
+		created:     time.Now(),
+		lastAccess:  time.Now(),
+		userAgent:   userAgent,
+		fingerprint: fingerprint,
 	}
 
 	sm.mu.Lock()
@@ -121,6 +141,34 @@ func (sm *SessionManager) GetOrCreate(parent context.Context, id string) (contex
 	sm.mu.Unlock()
 
 	return taskCtx, nil
+}
+
+// GetUserAgent returns the User-Agent pinned to a named session.
+// Returns "" and false when the session does not exist. The caller uses
+// this to override the per-call random UA so every scrape within a session
+// advertises the same UA to the target site.
+func (sm *SessionManager) GetUserAgent(id string) (string, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sess, ok := sm.sessions[id]
+	if !ok {
+		return "", false
+	}
+	return sess.userAgent, true
+}
+
+// GetFingerprint returns the BrowserFingerprint pinned to a named session.
+// Returns a zero BrowserFingerprint and false when the session does not
+// exist. The caller uses this so stealth injection (timezone, language,
+// platform, WebGL) stays consistent across every scrape in the session.
+func (sm *SessionManager) GetFingerprint(id string) (BrowserFingerprint, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sess, ok := sm.sessions[id]
+	if !ok {
+		return BrowserFingerprint{}, false
+	}
+	return sess.fingerprint, true
 }
 
 // Close closes a named session by id, disposing its browser context and
