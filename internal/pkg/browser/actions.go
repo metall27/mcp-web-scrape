@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,6 +25,75 @@ type JSResult struct {
 	ActionIndex int         // Индекс действия в массиве actions (0-based)
 	Result      interface{} // Возвращаемое значение JavaScript (или nil при undefined)
 	Err         error       // Ошибка выполнения (nil при успехе)
+}
+
+// ActionValidationError indicates a deterministic validation failure in a
+// user-supplied action: a required field is empty, an action type is unknown,
+// or the input is otherwise malformed. Such errors describe bad input, not a
+// transient page condition, so the retry loop must NOT retry them — retrying a
+// definitively-invalid action only wastes 3+ seconds of backoff before failing
+// the same way. See issue #50.
+type ActionValidationError struct {
+	ActionIndex int    // 0-based index of the offending action
+	ActionType  string // type of the offending action
+	Reason      string // human-readable reason
+}
+
+func (e *ActionValidationError) Error() string {
+	return fmt.Sprintf("action %d (%s): %s", e.ActionIndex+1, e.ActionType, e.Reason)
+}
+
+// IsActionValidationError reports whether err is an ActionValidationError.
+// Used by the retry loop to skip retries on deterministic validation failures.
+func IsActionValidationError(err error) bool {
+	var ve *ActionValidationError
+	return errors.As(err, &ve)
+}
+
+// requiredFields maps each action type to the Action fields that MUST be
+// non-empty for the action to be valid. Centralised here so both ParseActions
+// (eager reject before any Chrome work) and ExecuteAction (defense-in-depth)
+// enforce the same rules. Adding a new action type only needs an entry here.
+var requiredFields = map[string][]struct {
+	field    string
+	accessor func(a Action) string
+}{
+	"click":         {{"selector", func(a Action) string { return a.Selector }}},
+	"type":          {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
+	"submit":        {{"selector", func(a Action) string { return a.Selector }}},
+	"scroll_to":     {{"selector", func(a Action) string { return a.Selector }}},
+	"wait_for":      {{"selector", func(a Action) string { return a.Selector }}},
+	"wait_for_text": {{"text", func(a Action) string { return a.Text }}},
+	"hover":         {{"selector", func(a Action) string { return a.Selector }}},
+	"select_option": {{"selector", func(a Action) string { return a.Selector }}, {"value", func(a Action) string { return a.Value }}},
+	"execute_js":    {{"text", func(a Action) string { return a.Text }}},
+	"upload_file":   {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
+	"navigate":      {{"text", func(a Action) string { return a.Text }}},
+}
+
+// validateAction checks that action has the required fields for its type.
+// Returns an *ActionValidationError (nil for valid actions) so callers in the
+// retry loop can detect it via IsActionValidationError and skip retrying.
+// actionIndex is the 0-based index used for error reporting.
+func validateAction(action Action, actionIndex int) error {
+	fields, known := requiredFields[action.Type]
+	if !known {
+		return &ActionValidationError{
+			ActionIndex: actionIndex,
+			ActionType:  action.Type,
+			Reason:      fmt.Sprintf("unknown action type: %s", action.Type),
+		}
+	}
+	for _, f := range fields {
+		if f.accessor(action) == "" {
+			return &ActionValidationError{
+				ActionIndex: actionIndex,
+				ActionType:  action.Type,
+				Reason:      fmt.Sprintf("%s is required for %s action", f.field, action.Type),
+			}
+		}
+	}
+	return nil
 }
 
 // ActionExecutor исполнитель действий
@@ -57,7 +127,7 @@ func NewActionExecutor(logger zerolog.Logger, stealth *StealthActions) *ActionEx
 	return &ActionExecutor{
 		logger:  logger,
 		stealth: stealth,
-		retries: 3,               // Дефолт: 3 ретрая
+		retries: 3,                // Дефолт: 3 ретрая
 		timeout: 30 * time.Second, // Дефолт: 30s timeout
 	}
 }
@@ -116,6 +186,21 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 			}
 
 			lastErr = err
+
+			// Validation errors (empty selector, unknown type, ...) are
+			// deterministic — retrying the same bad input always fails the
+			// same way. Skip the remaining attempts to avoid wasting 3+ seconds
+			// of backoff on something that can never succeed. See issue #50.
+			if IsActionValidationError(err) {
+				e.logger.Warn().
+					Int("action_number", i+1).
+					Str("type", action.Type).
+					Int("attempt", attempt+1).
+					Err(err).
+					Msg("Action validation error — not retrying")
+				break
+			}
+
 			e.logger.Warn().
 				Int("action_number", i+1).
 				Str("type", action.Type).
@@ -143,6 +228,12 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 
 // ExecuteAction выполняет одно действие (actionIndex — индекс в массиве actions)
 func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actionIndex int) error {
+	// Defense-in-depth: validateAction is also called in ParseActions, but an
+	// internal caller could construct an Action directly. Reject early so the
+	// retry loop sees an ActionValidationError and skips backoff. See issue #50.
+	if err := validateAction(action, actionIndex); err != nil {
+		return err
+	}
 	switch action.Type {
 	case "click":
 		return e.ExecuteClick(ctx, action.Selector)
@@ -167,7 +258,11 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actio
 	case "navigate":
 		return e.ExecuteNavigate(ctx, action.Text)
 	default:
-		return fmt.Errorf("unknown action type: %s", action.Type)
+		return &ActionValidationError{
+			ActionIndex: actionIndex,
+			ActionType:  action.Type,
+			Reason:      fmt.Sprintf("unknown action type: %s", action.Type),
+		}
 	}
 }
 
@@ -554,8 +649,8 @@ func ParseActions(actionsData []interface{}) ([]Action, error) {
 		}
 
 		action := Action{
-			Retries: 0,      // Использовать дефолт
-			Timeout: 0,      // Использовать дефолт
+			Retries: 0, // Использовать дефолт
+			Timeout: 0, // Использовать дефолт
 		}
 
 		// Парсим обязательные поля
@@ -584,6 +679,16 @@ func ParseActions(actionsData []interface{}) ([]Action, error) {
 
 		if retries, ok := actionMap["retries"].(float64); ok {
 			action.Retries = int(retries)
+		}
+
+		// Validate required fields eagerly. Rejecting an invalid action here
+		// (before any Chrome work) avoids the failure mode where a single bad
+		// action — e.g. wait_for with an empty selector — survives into
+		// ExecuteActions, wastes 3+ seconds on doomed retries, then aborts the
+		// entire action chain (including actions that already succeeded) and
+		// falls back to HTTP. See issue #50.
+		if err := validateAction(action, i); err != nil {
+			return nil, err
 		}
 
 		actions = append(actions, action)
