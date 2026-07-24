@@ -39,10 +39,6 @@ func NewScrapeTool(cache *cache.Cache, uaRotator *useragent.Rotator, proxy *prox
 				"type":        "string",
 				"description": "Custom user agent string",
 			},
-			"headers": map[string]interface{}{
-				"type":        "object",
-				"description": "Custom HTTP headers",
-			},
 			"output_format": map[string]interface{}{
 				"type":        "string",
 				"description": "Output format: markdown (default, ~75% smaller, better for LLMs) or html (raw HTML)",
