@@ -76,6 +76,7 @@ mcp-web-scrape/
 │   │       ├── search.go                # search_web — DuckDuckGo/Brave/Bing
 │   │       ├── parser.go                # parse_html — CSS-селекторы
 │   │       ├── smart_extractor.go       # smart_extract — режимы news/tech/finance/legal/medical/clean_text/links/catalog; clean_text и general через readability + regex-fallback
+│   │       ├── session_info.go          # session_info — дамп cookies/storage named session для дебага login flows (#42)
 │   │       ├── rag_tool.go              # rag_* — 4 инструмента (только при rag.enabled=true)
 │   │       ├── unified_scraper.go       # UnifiedScraper — авто-выбор HTTP vs Chrome по домену/js_sites
 │   │       ├── chrome_scraper.go        # Низкоуровневый Chrome-скрейпер (chromedp)

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog"
 )
@@ -169,6 +170,193 @@ func (sm *SessionManager) GetFingerprint(id string) (BrowserFingerprint, bool) {
 		return BrowserFingerprint{}, false
 	}
 	return sess.fingerprint, true
+}
+
+// CookieInfo holds the metadata of a single cookie for session inspection (#42).
+// The cookie Value is omitted by default (includeValues=false) because session
+// cookies are sensitive credentials — the debug use case ("is the cookie
+// present? when does it expire?") rarely needs the value, and dumping it
+// wholesale into an LLM context risks leaking auth tokens.
+type CookieInfo struct {
+	Name     string `json:"name"`
+	Domain   string `json:"domain"`
+	Path     string `json:"path"`
+	HTTPOnly bool   `json:"http_only"`
+	Secure   bool   `json:"secure"`
+	Session  bool   `json:"session"` // true = session cookie (no expiry)
+	// Expires as a human-readable RFC3339 timestamp. Empty for session cookies.
+	Expires string `json:"expires,omitempty"`
+	// Value is only populated when includeValues=true.
+	Value string `json:"value,omitempty"`
+}
+
+// StorageDump holds the keys (and optionally values) of localStorage and
+// sessionStorage for the session's browser context.
+type StorageDump struct {
+	// Keys are the storage entry keys. Values are omitted unless includeValues.
+	Keys []string `json:"keys"`
+	// Values is keyed by storage key; only populated when includeValues=true.
+	Values map[string]string `json:"values,omitempty"`
+}
+
+// SessionDump is the full inspection result for a named session (#42).
+// It exposes what the session actually holds — cookies (including HTTP-only,
+// which document.cookie cannot see) and the Web Storage keys — so a caller
+// debugging a login-gated workflow can answer "am I actually logged in?"
+type SessionDump struct {
+	SessionID      string       `json:"session_id"`
+	Created        time.Time    `json:"created"`
+	LastAccess     time.Time    `json:"last_access"`
+	UserAgent      string       `json:"user_agent"`
+	CookieCount    int          `json:"cookie_count"`
+	Cookies        []CookieInfo `json:"cookies"`
+	LocalStorage   StorageDump  `json:"local_storage"`
+	SessionStorage StorageDump  `json:"session_storage"`
+}
+
+// Dump inspects a named session and returns its cookies and Web Storage keys
+// for debugging (#42). It runs CDP commands (network.GetAllCookies +
+// chromedp.Evaluate) against the session's persistent browser context, so it
+// sees HTTP-only cookies that document.cookie cannot reach.
+//
+// includeValues controls whether sensitive values are returned: when false
+// (the default/recommended), cookie Value fields and storage Values are omitted
+// — only metadata + keys. Set true only for deep debugging where you need the
+// actual token (it then enters the MCP response and potentially an LLM context).
+//
+// Returns (nil, false) when the session does not exist or named sessions are
+// disabled. The ctx is used as the parent for chromedp.Run; pass a context
+// with a reasonable timeout (e.g. 15s) — Chrome must be reachable.
+func (sm *SessionManager) Dump(ctx context.Context, id string, includeValues bool) (*SessionDump, bool) {
+	sm.mu.Lock()
+	sess, ok := sm.sessions[id]
+	if ok {
+		sess.touch()
+	}
+	sm.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+
+	sess.mu.Lock()
+	created := sess.created
+	lastAccess := sess.lastAccess
+	ua := sess.userAgent
+	sessCtx := sess.ctx
+	sess.mu.Unlock()
+
+	dump := &SessionDump{
+		SessionID:  id,
+		Created:    created,
+		LastAccess: lastAccess,
+		UserAgent:  ua,
+	}
+
+	// Collect cookies via CDP. GetCookies sees the full cookie jar of the
+	// browser context, including HTTP-only cookies (inaccessible from JS).
+	// It returns (cookies, err) directly from Do, so run it inside an
+	// ActionFunc to keep it within chromedp.Run.
+	var cookies []*network.Cookie
+	if err := chromedp.Run(sessCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			cs, err := network.GetCookies().Do(ctx)
+			cookies = cs
+			return err
+		}),
+	); err != nil {
+		sm.logger.Warn().Err(err).Str("session_id", id).Msg("session dump: failed to get cookies")
+		// Continue — storage may still be readable.
+	}
+
+	dump.CookieCount = len(cookies)
+	dump.Cookies = make([]CookieInfo, 0, len(cookies))
+	for _, c := range cookies {
+		info := CookieInfo{
+			Name:     c.Name,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			HTTPOnly: c.HTTPOnly,
+			Secure:   c.Secure,
+			Session:  c.Session,
+		}
+		if !c.Session && c.Expires > 0 {
+			info.Expires = time.Unix(int64(c.Expires), 0).UTC().Format(time.RFC3339)
+		}
+		if includeValues {
+			info.Value = c.Value
+		}
+		dump.Cookies = append(dump.Cookies, info)
+	}
+
+	// Collect localStorage / sessionStorage keys via JS. A single Evaluate
+	// collects both to avoid two round-trips. Values are optional.
+	type storageProbe struct {
+		LocalKeys     []string          `json:"localKeys"`
+		SessionKeys   []string          `json:"sessionKeys"`
+		LocalValues   map[string]string `json:"localValues,omitempty"`
+		StorageValues map[string]string `json:"storageValues,omitempty"`
+	}
+	var probe storageProbe
+	js := `(() => {
+		const out = { localKeys: [], sessionKeys: [] };
+		for (let i = 0; i < localStorage.length; i++)
+			out.localKeys.push(localStorage.key(i));
+		for (let i = 0; i < sessionStorage.length; i++)
+			out.sessionKeys.push(sessionStorage.key(i));
+		return out;
+	})()`
+	// When values requested, augment the script to capture them too.
+	if includeValues {
+		js = `(() => {
+			const out = { localKeys: [], sessionKeys: [], localValues: {}, storageValues: {} };
+			for (let i = 0; i < localStorage.length; i++) {
+				const k = localStorage.key(i);
+				out.localKeys.push(k);
+				out.localValues[k] = localStorage.getItem(k);
+			}
+			for (let i = 0; i < sessionStorage.length; i++) {
+				const k = sessionStorage.key(i);
+				out.sessionKeys.push(k);
+				out.storageValues[k] = sessionStorage.getItem(k);
+			}
+			return out;
+		})()`
+	}
+	if err := chromedp.Run(sessCtx,
+		chromedp.Evaluate(js, &probe),
+	); err != nil {
+		sm.logger.Warn().Err(err).Str("session_id", id).Msg("session dump: failed to read storage")
+	}
+
+	dump.LocalStorage = StorageDump{Keys: probe.LocalKeys}
+	if includeValues {
+		dump.LocalStorage.Values = probe.LocalValues
+	}
+	dump.SessionStorage = StorageDump{Keys: probe.SessionKeys}
+	if includeValues {
+		dump.SessionStorage.Values = probe.StorageValues
+	}
+
+	return dump, true
+}
+
+// List returns metadata for every active named session (without cookie/storage
+// contents). Useful for a "which sessions exist?" overview before Dump-ing one.
+func (sm *SessionManager) List() []SessionDump {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	out := make([]SessionDump, 0, len(sm.sessions))
+	for id, sess := range sm.sessions {
+		sess.mu.Lock()
+		out = append(out, SessionDump{
+			SessionID:  id,
+			Created:    sess.created,
+			LastAccess: sess.lastAccess,
+			UserAgent:  sess.userAgent,
+		})
+		sess.mu.Unlock()
+	}
+	return out
 }
 
 // Close closes a named session by id, disposing its browser context and
