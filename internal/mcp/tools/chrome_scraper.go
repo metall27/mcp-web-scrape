@@ -572,8 +572,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				// Clean up before falling back
 				scrapeCtx.browserCancel()
 				cleanupNeeded = false
-				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, startTime)
-			}
+				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, fallbackReasonActionError, startTime)
+				}
 
 			// Mark proxy as failed if applicable
 			if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
@@ -620,8 +620,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 					Int("attempt", attempt).
 					Int32("active_tabs", s.browserPool.GetActiveTabs()).
 					Msg("Cleanup before HTTP fallback")
-				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, startTime)
-			}
+				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, fallbackReasonBlocking, startTime)
+				}
 
 			// Otherwise, continue to next attempt with new proxy
 			lastError = fmt.Errorf("blocking detected: %s", attemptResult.blockResult.BlockType)
@@ -680,7 +680,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 		}
 
-		return s.httpFallback(ctx, urlStr, userAgent, startTime)
+		return s.httpFallback(ctx, urlStr, userAgent, fallbackReasonGeneric, startTime)
 	}
 
 
@@ -1370,8 +1370,34 @@ func (s *ChromeScraper) convertPlatformURL(urlStr string) string {
 	return urlStr
 }
 
-// httpFallback performs HTTP fallback when Chrome fails
-func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent string, startTime time.Time) (*Result, error) {
+// Fallback reasons passed to httpFallback. The reason is recorded in Result
+// and used to detect the #49 failure mode: an action_error on a login-gated
+// page means the HTTP response lacks session cookies and is likely junk.
+const (
+	// fallbackReasonActionError — Chrome failed on a user-supplied action
+	// (login/navigation). HTTP response has no cookies → likely junk.
+	fallbackReasonActionError = "action_error"
+	// fallbackReasonBlocking — Chrome detected a block (Cloudflare/captcha).
+	// HTTP may also be blocked, but it's a different failure class.
+	fallbackReasonBlocking = "blocking"
+	// fallbackReasonGeneric — Chrome failed for an unspecified reason.
+	fallbackReasonGeneric = "generic"
+)
+
+// minFallbackContentSize is the threshold below which an HTTP-fallback body is
+// considered suspiciously small — almost certainly an error/redirect page, not
+// the requested content. The rebrainme login-gated case returned 51 bytes.
+const minFallbackContentSize = 200
+
+// httpFallback performs HTTP fallback when Chrome fails.
+//
+// reason explains WHY Chrome failed (see fallbackReason* constants). When the
+// reason is an action_error (login/navigation failed) AND the HTTP response is
+// suspiciously small, the fallback returns an error instead of a junk Result —
+// this is the #49 fix. Without the session cookies the HTTP client got the
+// redirect/error stub (e.g. 51 bytes), and returning that as a success (the old
+// behaviour) made the LLM think the scrape worked and feed on garbage.
+func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent, reason string, startTime time.Time) (*Result, error) {
 	// Phase 4: HTTP Fallback - Use standard HTTP client for better compatibility
 	// For GitHub, we use standard HTTP client to avoid TLS fingerprinting issues
 	isGitHub := strings.Contains(urlStr, "github.com")
@@ -1513,8 +1539,8 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 			Msg("✅ Successfully scraped with simple HTTP fallback")
 
 		result.Method = "HTTP (simple fallback)"
-		return result, nil
-	}
+		return s.finalizeFallbackResult(result, reason, urlStr)
+		}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
@@ -1580,7 +1606,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 		Str("final_url", resp.Request.URL.String()).
 		Msg("Successfully scraped with HTTP fallback")
 
-	return &Result{
+	result := &Result{
 		HTML:        html,
 		URL:         urlStr,
 		FinalURL:    resp.Request.URL.String(),
@@ -1591,7 +1617,64 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent stri
 		Format:      "html",
 		FromCache:   false,
 		Method:      "HTTP Fallback",
-	}, nil
+	}
+
+	return s.finalizeFallbackResult(result, reason, urlStr)
+}
+
+// finalizeFallbackResult applies the #49 guard and records fallback provenance
+// on a Result produced by httpFallback (either the TLS path or the simple-HTTP
+// path). It is shared so BOTH return paths enforce the same contract:
+//
+//  1. When reason is an action_error (login/navigation failed) AND the body is
+//     suspiciously small (<minFallbackContentSize), reject it as an error —
+//     the HTTP response has no session cookies and the tiny body is a redirect
+//     or error stub, not the requested content. Returning it as success masked
+//     the real failure and fed the LLM junk (51 bytes in the rebrainme case).
+//  2. Otherwise stamp FallbackReason/FallbackWarning so the client always knows
+//     it got an HTTP body, not the JS-rendered page it asked for.
+func (s *ChromeScraper) finalizeFallbackResult(result *Result, reason, urlStr string) (*Result, error) {
+	// #49: action_error + suspiciously small content → the login likely failed
+	// and the server returned a redirect/error stub without session cookies.
+	// Reject it so the client gets a clear signal instead of junk.
+	if reason == fallbackReasonActionError && len(result.HTML) < minFallbackContentSize {
+		s.logger.Warn().
+			Str("reason", reason).
+			Int("size", len(result.HTML)).
+			Int("threshold", minFallbackContentSize).
+			Msg("HTTP fallback returned suspiciously small content after action error — login likely failed, rejecting")
+
+		return nil, &ScrapeError{
+			Code: "fallback_action_error",
+			Message: fmt.Sprintf(
+				"Chrome failed on interactive actions (login/navigation) and HTTP fallback returned only %d bytes — "+
+					"likely a redirect/error stub without the session cookies. The requested content was NOT retrieved; "+
+					"check your action selectors or re-attempt the login. (url=%s)",
+				len(result.HTML), urlStr,
+			),
+			Hints: []string{
+				"check_action_selectors",
+				"verify_login_succeeded",
+				"try_without_fallback",
+			},
+			CanRetry: false,
+		}
+	}
+
+	// Record the fallback provenance so the caller can attach a warning to the
+	// client response. Even a large HTTP body is NOT the JS-rendered page the
+	// caller asked for — it lacks dynamic content and (after an action_error)
+	// session state. Variant B from the issue: let the client decide.
+	if reason != "" {
+		result.FallbackReason = reason
+		result.FallbackWarning = fmt.Sprintf(
+			"Content served via HTTP fallback (reason=%s) — this is NOT a JavaScript-rendered page. "+
+				"It may lack dynamic content and, if actions were used, session/login state.",
+			reason,
+		)
+	}
+
+	return result, nil
 }
 
 // platformAPIFallback performs optimized platform API scraping for GitHub, GitLab, and Gitea
