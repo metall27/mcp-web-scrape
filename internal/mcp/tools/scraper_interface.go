@@ -119,6 +119,15 @@ type Result struct {
 
 	// Named session info
 	SessionReused bool // true if an existing named session was reused (not newly created)
+
+	// Fallback quality info (для httpFallback)
+	// FallbackReason is set when the result came from an HTTP fallback after
+	// Chrome failed. Knowing WHY Chrome failed (action_error / blocking /
+	// generic) lets the caller judge whether the HTTP body is trustworthy — an
+	// action error on a login-gated page means the HTTP response lacks the
+	// session cookies and is almost certainly junk. See issue #49.
+	FallbackReason  string
+	FallbackWarning string // human-readable caveat appended to _metadata
 }
 
 // ActionsMetadata метаданные о выполненных действиях

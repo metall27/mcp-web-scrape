@@ -324,6 +324,15 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		metadata["duration_ms"] = 0
 	}
 
+	// Surface HTTP-fallback provenance (#49). When Chrome failed and the body
+	// came from a plain HTTP request, warn the client: this is not the
+	// JS-rendered page they asked for and (after an action_error) lacks session
+	// state. Even a large body may be missing dynamic content.
+	if result.FallbackReason != "" {
+		metadata["fallback_reason"] = result.FallbackReason
+		metadata["fallback_warning"] = result.FallbackWarning
+	}
+
 	if includeScreenshot && len(result.Screenshot) > 0 {
 		metadata["screenshot_included"] = true
 		metadata["screenshot_size"] = len(result.Screenshot)
