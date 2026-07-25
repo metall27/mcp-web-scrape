@@ -14,7 +14,11 @@ services:
         VERSION: ${MCP_VERSION:-1.1.0}
         GIT_SHA: ${GIT_SHA:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
-    image: mcp-web-scrape:latest
+    # Тегируем только коротким SHA коммита (#63). При сборке через ./dc
+    # (или make docker-compose-*) GIT_SHA экспортируется автоматически,
+    # поэтому образ получает тег mcp-web-scrape:<sha>. Без экспорта
+    # (голый `docker compose`) fallback на :latest — чтобы build не падал.
+    image: mcp-web-scrape:${GIT_SHA:-latest}
     container_name: mcp-web-scrape
 
     # Restart policy
