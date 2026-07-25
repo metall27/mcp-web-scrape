@@ -135,13 +135,23 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			scrapeCtx.userAgent = ua
 			scrapeCtx.fingerprint = fp
 
-			// #59: Pre-read localStorage from the named session so it can be
-			// re-injected via AddScriptToEvaluateOnNewDocument BEFORE navigation.
-			// SPA frameworks (Zustand persist, Redux persist) that hydrate auth
-			// state from localStorage otherwise race: React starts before the
-			// session's storage is available, sees no auth token, and never makes
-			// API calls (infinite skeleton loaders on my.rebrainme.com etc.).
-			scrapeCtx.localStorageData = sm.GetLocalStorage(ctx, opts.SessionID)
+			// #59: Pre-read the captured localStorage snapshot for this
+			// session so it can be re-injected via
+			// AddScriptToEvaluateOnNewDocument BEFORE navigation.
+			// SPA frameworks (Zustand persist, Redux persist) that hydrate
+			// auth state from localStorage otherwise race: React starts
+			// before the session's storage is available, sees no auth token,
+			// and never makes API calls (infinite skeleton loaders on
+			// my.rebrainme.com etc.).
+			//
+			// IMPORTANT: GetCachedLocalStorage is a pure map read — it never
+			// touches Chrome. The snapshot is refreshed by scrapeAttempt AFTER
+			// a successful navigation (SaveLocalStorage). The previous design
+			// ran a live chromedp.Run here on the shared session context while
+			// the tab was still at about:blank, which threw a SecurityError on
+			// localStorage and poisoned the session context ("context canceled"
+			// on every subsequent CDP op across all retries).
+			scrapeCtx.localStorageData = sm.GetCachedLocalStorage(opts.SessionID)
 
 			s.logger.Info().
 				Str("session_id", opts.SessionID).
@@ -251,6 +261,12 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	var screenshotData []byte
 	var title string
 	var finalURL string
+	// localSnapshot captures the page's localStorage after navigation, for
+	// named sessions only (#59). Read inside the navigation Run where the
+	// page is on its real origin (localStorage is accessible), then committed
+	// to the session cache on success so the NEXT scrape can re-inject it
+	// pre-navigation. Stays nil for ephemeral contexts.
+	var localSnapshot map[string]string
 
 	chromeErr := chromedp.Run(scrapeCtx.browserCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -274,6 +290,29 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 			// Get final URL
 			if err := chromedp.Location(&finalURL).Do(ctx); err != nil {
 				return err
+			}
+
+			// Capture localStorage for named sessions. By now the page is on
+			// its real origin (post-navigation), so localStorage is readable
+			// — unlike the pre-navigation about:blank that broke the old
+			// live GetLocalStorage. The JS swallows any SecurityError so a
+			// privileged-page read failure can never abort the whole Run.
+			if scrapeCtx.useSession {
+				readJS := `(() => {
+					try {
+						const out = {};
+						for (let i = 0; i < localStorage.length; i++) {
+							const k = localStorage.key(i);
+							out[k] = localStorage.getItem(k);
+						}
+						return out;
+					} catch(e) {
+						return null;
+					}
+				})()`
+				if err := chromedp.Evaluate(readJS, &localSnapshot).Do(ctx); err != nil {
+					s.logger.Debug().Err(err).Str("session_id", scrapeCtx.sessionID).Msg("Failed to capture localStorage snapshot (non-critical)")
+				}
 			}
 
 			// Take screenshot if requested
@@ -329,6 +368,22 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result.finalURL = finalURL
 	result.isBlocked = false
 	result.err = nil
+
+	// Commit the captured localStorage snapshot to the named-session cache
+	// so the next scrape can re-inject it pre-navigation (#59). Done only on
+	// success — a failed/blocked attempt must not poison the snapshot with
+	// partial or empty data. SaveLocalStorage is a pure map write.
+	if scrapeCtx.useSession && s.browserPool != nil {
+		if sm := s.browserPool.Sessions(); sm != nil {
+			sm.SaveLocalStorage(scrapeCtx.sessionID, localSnapshot)
+			if len(localSnapshot) > 0 {
+				s.logger.Debug().
+					Str("session_id", scrapeCtx.sessionID).
+					Int("keys", len(localSnapshot)).
+					Msg("localStorage snapshot committed to session cache")
+			}
+		}
+	}
 
 	// Collect execute_js results from actionExecutor
 	if actionExecutor != nil {
