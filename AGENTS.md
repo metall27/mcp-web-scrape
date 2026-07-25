@@ -98,7 +98,8 @@ mcp-web-scrape/
 │       ├── logger/                      # zerolog init
 │       ├── openapi/                     # REST/OpenAPI-слой для совместимости с Open WebUI
 │       ├── proxy/rotator.go             # Ротация прокси
-│       └── useragent/rotator.go         # Ротация User-Agent
+│       ├── useragent/rotator.go         # Ротация User-Agent
+│       └── version/                     # Версия/коммит/дата сборки (инжектируются через -ldflags, #63)
 ├── config.yaml                 # Дефолтный конфиг (монтируется в Docker read-only)
 ├── config.yaml.example         # Пример конфигурации
 ├── docker-compose.yml          # Продакшен-конфиг: лимиты, security, healthcheck
@@ -145,8 +146,16 @@ Client (MCP JSON-RPC)
 - `Any /mcp` (значение `mcp.endpoint` из конфига) — JSON-RPC endpoint.
 - `Any /sse` — SSE для llama.cpp WebUI (тот же handler).
 - OpenAPI routes — регистрируются `openapiHandler.RegisterRoutes(router)` (для Open WebUI).
-- `GET /` — info: имя, версия, список endpoints, capabilities, tools.
+- `GET /` — info: имя, версия (`version` + `git_commit` + `build_date`), список endpoints, capabilities, tools.
 - `GET /metrics` — rate_limit/cache/browser_pool/user_agent/proxy статистика.
+
+### CLI-флаги (#63)
+
+- `--version`, `-v` — печать `mcp-web-scrape <Version> (<GitCommit>) built <BuildDate>` и выход (до загрузки конфига/Chrome).
+- `--help`, `-h` — авто-usage от стандартного `flag`-пакета (все зарегистрированные флаги).
+- `-config <path>` — путь к конфигу (по умолчанию `config.yaml` из CWD / env).
+
+**Важно: версия инжектируется только через `-ldflags`** (см. раздел «Сборка и версионирование» ниже). Сборка голым `go build ./cmd/server` даёт `dev (unknown) built unknown` — используйте `make build` / `make docker-build`.
 
 ---
 
@@ -190,6 +199,7 @@ Client (MCP JSON-RPC)
 - **Изменил список инструментов или их capabilities** → проверить `AGENTS.md` раздел 3 (структура, поток данных) и `cmd/server/main.go` (info-эндпоинт `GET /`).
 - **Изменил Docker/деплой** (порты, лимиты, security_opt) → обновить `docker-compose.yml`, `Dockerfile`, разделы 2 и 6 в `AGENTS.md`.
 - **Депрекация/удаление фичи** → пометить в `docs/` (при активной доке) либо перенести в `docs/archive/`.
+- **Поднял версию / изменил процесс сборки** → версия — единый источник правды в `internal/pkg/version` (инжектируется через `-ldflags`, см. «Сборка и версионирование»). Новая версия → поднять `VERSION` в `Makefile` + `ARG VERSION` в `Dockerfile` синхронно. CLI-флаги и поля `GET /` (`version`/`git_commit`/`build_date`) трогать не нужно — они читают из пакета.
 
 Правило одного источника правды: MCP-описания в `internal/mcp/tools/*.go` — канон. OpenAPI spec — зеркало. При расхождении правится канон, затем зеркало, в одном PR.
 
@@ -254,6 +264,32 @@ make run              # запуск сервера
 docker compose up -d --build
 curl http://localhost:8192/health
 ```
+
+### Версионирование (#63)
+
+Версия — единый источник правды в `internal/pkg/version` (переменные `Version`,
+`GitCommit`, `BuildDate`). Значения инжектируются линкером через `-ldflags -X`,
+а не хардкодятся в коде. При сборке **всегда** используйте `make`, а не голый
+`go build`:
+
+```bash
+make build          # → ./mcp-web-scrape, штамп: Version=Makefile VERSION, GitCommit=git rev-parse --short HEAD
+make docker-build   # → Docker-образ с теми же build-args (+ тег :<sha>)
+```
+
+Собранный через `make build` бинарник несёт всю тройку. Голый
+`go build ./cmd/server` (без `-ldflags`) даёт `dev (unknown) built unknown` —
+это маркер «бинарник не отштампован», не ошибка.
+
+Текущая версия живёт в `Makefile` (переменная `VERSION`, default `1.1.0`) и в
+`Dockerfile` (`ARG VERSION=1.1.0`). При релизе поднимаются **оба** синхронно.
+
+Где версия отображается (всё читает из пакета, править не нужно):
+- CLI: `./mcp-web-scrape --version` / `-v`
+- стартовый лог: `version`/`git_commit`/`build_date`
+- `GET /`: поля `version`, `git_commit`, `build_date`
+- MCP `initialize`: `serverInfo.version`
+- OpenAPI spec: `info.version`
 
 ### Известные проблемы тестов
 
