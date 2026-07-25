@@ -20,13 +20,26 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/openapi"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
+	"github.com/metall/mcp-web-scrape/internal/pkg/version"
 	"github.com/rs/zerolog/log"
 )
 
 func main() {
-	// Parse flags
+	// Parse flags. --version/-v prints the build metadata and exits before any
+	// config/browser initialization (#63). --help/-h is handled automatically by
+	// the flag package (prints usage of all registered flags to os.Stderr and
+	// exits 0), so we only add a custom flag for version.
+	showVersion := flag.Bool("version", false, "Print version (semver, git short-sha, build date) and exit")
+	// -v is the conventional short alias for --version. Registered separately
+	// because the stdlib flag package treats each name as a distinct flag.
+	showVersionShort := flag.Bool("v", false, "Print version (semver, git short-sha, build date) and exit")
 	configPath := flag.String("config", "", "Path to config file (default: config.yaml from CWD / env)")
 	flag.Parse()
+
+	if *showVersion || *showVersionShort {
+		fmt.Println("mcp-web-scrape", version.Full())
+		os.Exit(0)
+	}
 
 	// Load configuration
 	cfg, err := config.Load(*configPath)
@@ -41,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info().Msg("Starting MCP Web Scrape Server...")
+	log.Info().Str("version", version.Version).Str("git_commit", version.GitCommit).Str("build_date", version.BuildDate).Msg("Starting MCP Web Scrape Server...")
 
 	// Initialize cache
 	cacheInstance, err := cache.New(cfg.Cache)
@@ -117,7 +130,7 @@ func main() {
 	mcpServer, err := mcp.New(mcp.Config{
 		ProtocolVersion: "2024-11-05",
 		ServerName:      "mcp-web-scrape",
-		ServerVersion:   "1.0.0",
+		ServerVersion:   version.Version,
 		RateLimit: mcp.RateLimitConfig{
 			RequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
 			BurstSize:         cfg.RateLimit.BurstSize,
@@ -188,7 +201,9 @@ func main() {
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"name":        "MCP Web Scrape Server",
-			"version":     "1.0.0",
+			"version":     version.Version,
+			"git_commit":  version.GitCommit,
+			"build_date":  version.BuildDate,
 			"description": "MCP server for web scraping and search capabilities",
 			"endpoints": map[string]string{
 				"mcp":     cfg.MCP.Endpoint,

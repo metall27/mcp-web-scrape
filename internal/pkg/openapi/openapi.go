@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/metall/mcp-web-scrape/internal/mcp"
+	"github.com/metall/mcp-web-scrape/internal/pkg/version"
 )
 
 // Spec represents the OpenAPI 3.0 specification
@@ -72,7 +73,7 @@ func GenerateSpec(baseURL string, mcpServer *mcp.Server) (*Spec, error) {
 		Info: Info{
 			Title:       "MCP Web Scrape Server",
 			Description: "REST API wrapper for MCP web scraping tools",
-			Version:     "1.0.0",
+			Version:     version.Version,
 		},
 		Servers: []Server{
 			{

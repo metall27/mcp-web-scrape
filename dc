@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# dc — thin wrapper around `docker compose` that auto-stamps the build with
+# the current git short SHA + UTC build date (#63), so version metadata is
+# always injected without thinking about export GIT_SHA=... on every run.
+#
+# Usage is identical to `docker compose` — every flag is passed through:
+#
+#   ./dc down -v && ./dc build --no-cache && ./dc up -d
+#
+# Equivalent to your previous:
+#   docker compose down -v && docker compose build --no-cache && docker compose up -d
+#
+# …except the resulting binary reports its real version:
+#   mcp-web-scrape 1.1.0 (<sha>) built <UTC>
+#
+# To override the version stamp (e.g. a release), set the vars explicitly:
+#   MCP_VERSION=2.0.0 ./dc build --no-cache
+# To skip stamping entirely (fall back to "unknown"), pass --no-stamp.
+
+set -euo pipefail
+
+# Locate the repo root (this script lives at the repo root, but be robust to
+# being called from a subdirectory).
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$script_dir"
+
+stamp=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-stamp) stamp=0 ;;
+  esac
+done
+
+if [ "$stamp" -eq 1 ]; then
+  # Short SHA of HEAD; "unknown" if not in a git checkout.
+  : "${GIT_SHA:=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+  : "${BUILD_DATE:=$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  : "${MCP_VERSION:=1.1.0}"
+  export GIT_SHA BUILD_DATE MCP_VERSION
+fi
+
+# Strip our own --no-stamp flag before handing off to docker compose.
+exec docker compose "$@"
