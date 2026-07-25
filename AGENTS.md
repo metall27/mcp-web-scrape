@@ -260,10 +260,19 @@ make run              # запуск сервера
 
 ### Сборка и поднятие приложения
 
+Два равнозначных способа. Первый — предпочтительный, повторяет привычный
+`docker compose` one-liner, но автоматически штампует версию через `./dc`:
+
 ```bash
-docker compose up -d --build
+./dc down -v && ./dc build --no-cache && ./dc up -d
 curl http://localhost:8192/health
 ```
+
+`./dc` — wrapper (в корне репо, `chmod +x`), который перед каждой командой
+экспортирует `GIT_SHA`/`BUILD_DATE`/`MCP_VERSION` и прокидывает все флаги
+docker compose насквозь. `make docker-compose-*` цели — те же по эффекту,
+но флаги к docker-compose через make не передать (make съедает `-v`/`-d`
+как свои), поэтому для произвольных флагов используйте `./dc`.
 
 ### Версионирование (#63)
 

@@ -23,6 +23,10 @@ help:
 	@echo "  make docker-clean  - Remove Docker containers and images"
 	@echo "  make docker-push   - Push image to private Nexus registry"
 	@echo ""
+	@echo "Build stamp (version/commit/date) requires -ldflags. Two equivalent ways:"
+	@echo "  ./dc build --no-cache     # wrapper: auto-stamps, passes all docker compose flags"
+	@echo "  make docker-compose-build # make target: same auto-stamp, fixed flags"
+	@echo ""
 	@echo "Run ./mcp-web-scrape --version  (or -v) to see the build stamp."
 	@echo "Run ./mcp-web-scrape --help     for CLI flags."
 
