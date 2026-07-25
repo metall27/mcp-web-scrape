@@ -36,6 +36,16 @@ type namedSession struct {
 	// reused by every subsequent scrape in this session.
 	userAgent   string
 	fingerprint BrowserFingerprint
+
+	// localStorageSnapshot is the last successfully captured localStorage
+	// for this session, populated by SaveLocalStorage after a scrape
+	// navigation completes. GetCachedLocalStorage returns it so the next
+	// scrape can re-inject the values pre-navigation via
+	// AddScriptToEvaluateOnNewDocument (#59). This is a pure map read — it
+	// NEVER issues a CDP round-trip, which avoids the about:blank
+	// SecurityError + session-context poisoning that the original live
+	// GetLocalStorage caused on fresh/reused sessions. Guarded by mu.
+	localStorageSnapshot map[string]string
 }
 
 func (s *namedSession) touch() {
@@ -172,17 +182,26 @@ func (sm *SessionManager) GetFingerprint(id string) (BrowserFingerprint, bool) {
 	return sess.fingerprint, true
 }
 
-// GetLocalStorage reads the current localStorage key-value pairs from a named
-// session's browser context. Returns nil when the session does not exist or
-// storage is empty.
+// GetCachedLocalStorage returns the last captured localStorage snapshot for a
+// named session, or nil when the session does not exist or no snapshot has
+// been captured yet.
 //
-// Used by ChromeScraper to re-inject localStorage via
-// page.AddScriptToEvaluateOnNewDocument BEFORE navigation, so SPA frameworks
+// This is a PURE MAP READ — it never issues a CDP round-trip. The snapshot is
+// populated by SaveLocalStorage, which the scraper must call from INSIDE the
+// navigation chromedp.Run (after the page has loaded), where localStorage is
+// accessible. The next scrape then reads the snapshot here and re-injects it
+// pre-navigation via page.AddScriptToEvaluateOnNewDocument so SPA frameworks
 // that hydrate auth state from localStorage (Zustand persist, Redux persist)
-// see the token synchronously on first JS execution — eliminating the
-// hydration race condition where React starts with an empty auth state and
-// never makes API calls (#59).
-func (sm *SessionManager) GetLocalStorage(ctx context.Context, id string) map[string]string {
+// see the token synchronously on first JS execution (#59).
+//
+// The earlier live GetLocalStorage implementation ran its own chromedp.Run on
+// the shared session context BEFORE navigation. On a fresh or reused session
+// the tab sits at about:blank, where window.localStorage is a SecurityError —
+// and that failed Run poisoned the session context so every subsequent CDP
+// op (UA override, stealth, Navigate) returned "context canceled" across all
+// retry attempts until the HTTP fallback kicked in. Reading a cached map
+// instead eliminates that entire failure path.
+func (sm *SessionManager) GetCachedLocalStorage(id string) map[string]string {
 	sm.mu.Lock()
 	sess, ok := sm.sessions[id]
 	if ok {
@@ -194,39 +213,32 @@ func (sm *SessionManager) GetLocalStorage(ctx context.Context, id string) map[st
 	}
 
 	sess.mu.Lock()
-	sessCtx := sess.ctx
+	defer sess.mu.Unlock()
+	if len(sess.localStorageSnapshot) == 0 {
+		return nil
+	}
+	// Return a copy so callers cannot mutate the session's snapshot.
+	out := make(map[string]string, len(sess.localStorageSnapshot))
+	for k, v := range sess.localStorageSnapshot {
+		out[k] = v
+	}
+	return out
+}
+
+// SaveLocalStorage stores a localStorage snapshot on a named session for later
+// retrieval via GetCachedLocalStorage. values may be nil (clears the snapshot).
+// It is a pure in-memory write and does not touch Chrome.
+func (sm *SessionManager) SaveLocalStorage(id string, values map[string]string) {
+	sm.mu.Lock()
+	sess, ok := sm.sessions[id]
+	sm.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	sess.mu.Lock()
+	sess.localStorageSnapshot = values
 	sess.mu.Unlock()
-
-	type storageProbe struct {
-		LocalValues map[string]string `json:"localValues"`
-	}
-	var probe storageProbe
-
-	// Read localStorage values via JS evaluate on the session's persistent
-	// context. A short timeout guards against a dead/unreachable Chrome.
-	readCtx, cancel := context.WithTimeout(sessCtx, 10*time.Second)
-	defer cancel()
-
-	js := `(() => {
-		const out = { localValues: {} };
-		for (let i = 0; i < localStorage.length; i++) {
-			const k = localStorage.key(i);
-			out.localValues[k] = localStorage.getItem(k);
-		}
-		return out;
-	})()`
-
-	if err := chromedp.Run(readCtx,
-		chromedp.Evaluate(js, &probe),
-	); err != nil {
-		sm.logger.Debug().Err(err).Str("session_id", id).Msg("GetLocalStorage: failed to read storage")
-		return nil
-	}
-
-	if len(probe.LocalValues) == 0 {
-		return nil
-	}
-	return probe.LocalValues
 }
 
 // CookieInfo holds the metadata of a single cookie for session inspection (#42).
