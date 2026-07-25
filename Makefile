@@ -1,4 +1,4 @@
-.PHONY: help build run test stop clean docker-build docker-run docker-stop docker-logs docker-clean docker-push
+.PHONY: help build run test stop clean docker-build docker-run docker-stop docker-logs docker-clean docker-push docker-compose-build docker-compose-up docker-compose-down docker-compose-logs docker-compose-restart
 
 # Build metadata injected via -ldflags into internal/pkg/version.
 # VERSION follows semver; GIT_SHA is the short commit; BUILD_DATE is UTC.
@@ -106,10 +106,20 @@ docker-push:
 	docker push $(NEXUS_REG)/mcp-web-scrape:$$SHA; \
 	echo "Pushed: $(NEXUS_REG)/mcp-web-scrape:latest and :$$SHA"
 
+# Build the compose image with version metadata stamped via -ldflags (#63).
+# Exports GIT_SHA / BUILD_DATE so docker-compose.yml's ${VAR:-default} picks
+# them up without manual `export`. `make docker-compose-up` rebuilds implicitly.
+docker-compose-build:
+	@echo "Building compose image $(VERSION) ($(GIT_SHA))..."
+	@GIT_SHA=$(GIT_SHA) BUILD_DATE=$(BUILD_DATE) MCP_VERSION=$(VERSION) \
+		docker-compose build
+	@echo "Image built: $(VERSION) ($(GIT_SHA))"
+
 docker-compose-up:
-	@echo "Starting services with docker-compose..."
-	@docker-compose up -d
-	@echo "Services started!"
+	@echo "Starting services with docker-compose ($(GIT_SHA))..."
+	@GIT_SHA=$(GIT_SHA) BUILD_DATE=$(BUILD_DATE) MCP_VERSION=$(VERSION) \
+		docker-compose up -d --build
+	@echo "Services started! Version: $(VERSION) ($(GIT_SHA))"
 
 docker-compose-down:
 	@echo "Stopping services..."

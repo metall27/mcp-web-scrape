@@ -3,6 +3,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Build metadata injected via -ldflags (#63). ${VAR:-default} syntax
+        # means `docker compose build` works without any manual export:
+        # GIT_SHA falls back to "unknown" when not in a git checkout / shell.
+        # `make docker-compose-up` (and -build) export the real short SHA +
+        # UTC build date automatically, so the canonical workflow is stamped:
+        #   make docker-compose-build   # or: make docker-compose-up
+        # Override ad hoc: GIT_SHA=abc1234 docker compose build
+        VERSION: ${MCP_VERSION:-1.1.0}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
     image: mcp-web-scrape:latest
     container_name: mcp-web-scrape
 
@@ -86,7 +97,8 @@ services:
 
     # Labels
     labels:
-      - "com.mcp-web-scrape.version=1.0"
+      - "com.mcp-web-scrape.version=${MCP_VERSION:-1.1.0}"
+      - "com.mcp-web-scrape.git-sha=${GIT_SHA:-unknown}"
       - "com.mcp-web-scrape.phase=5-complete"
       - "com.mcp-web-scrape.site-method-learning=true"
       - "com.mcp-web-scrape.production-ready=true"
