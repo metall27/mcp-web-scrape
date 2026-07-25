@@ -18,8 +18,8 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
-	tlshttp "github.com/metall/mcp-web-scrape/internal/pkg/http"
 	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
+	tlshttp "github.com/metall/mcp-web-scrape/internal/pkg/http"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
 	"github.com/metall/mcp-web-scrape/internal/pkg/useragent"
@@ -55,6 +55,12 @@ type scrapeContext struct {
 	useSession    bool
 	sessionID     string
 	sessionReused bool
+
+	// localStorageData holds the saved localStorage key-value pairs from a
+	// named session, to be re-injected via AddScriptToEvaluateOnNewDocument
+	// BEFORE navigation. This eliminates the SPA hydration race (#59):
+	// React/Zustand sees the auth token synchronously on first JS execution.
+	localStorageData map[string]string
 }
 
 // NewChromeScraper создает новый ChromeScraper
@@ -128,6 +134,14 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			}
 			scrapeCtx.userAgent = ua
 			scrapeCtx.fingerprint = fp
+
+			// #59: Pre-read localStorage from the named session so it can be
+			// re-injected via AddScriptToEvaluateOnNewDocument BEFORE navigation.
+			// SPA frameworks (Zustand persist, Redux persist) that hydrate auth
+			// state from localStorage otherwise race: React starts before the
+			// session's storage is available, sees no auth token, and never makes
+			// API calls (infinite skeleton loaders on my.rebrainme.com etc.).
+			scrapeCtx.localStorageData = sm.GetLocalStorage(ctx, opts.SessionID)
 
 			s.logger.Info().
 				Str("session_id", opts.SessionID).
@@ -230,7 +244,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result := scrapeAttemptResult{}
 
 	// 1. Build Chrome tasks
-	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.fingerprint, scrapeCtx.stealth, opts, scrapeCtx.useSession)
+	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.fingerprint, scrapeCtx.stealth, opts, scrapeCtx.useSession, scrapeCtx.localStorageData)
 
 	// 2. Run tasks
 	var html string
@@ -323,7 +337,6 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 
 	return result
 }
-
 
 // Scrape реализует интерфейс Scraper
 func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options) (*Result, error) {
@@ -573,7 +586,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 				scrapeCtx.browserCancel()
 				cleanupNeeded = false
 				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, fallbackReasonActionError, startTime)
-				}
+			}
 
 			// Mark proxy as failed if applicable
 			if s.proxy != nil && s.proxy.IsEnabled() && scrapeCtx.proxy != nil {
@@ -621,7 +634,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 					Int32("active_tabs", s.browserPool.GetActiveTabs()).
 					Msg("Cleanup before HTTP fallback")
 				return s.httpFallback(ctx, urlStr, scrapeCtx.userAgent, fallbackReasonBlocking, startTime)
-				}
+			}
 
 			// Otherwise, continue to next attempt with new proxy
 			lastError = fmt.Errorf("blocking detected: %s", attemptResult.blockResult.BlockType)
@@ -682,7 +695,6 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 
 		return s.httpFallback(ctx, urlStr, userAgent, fallbackReasonGeneric, startTime)
 	}
-
 
 	duration := time.Since(startTime)
 
@@ -852,7 +864,7 @@ func (s *ChromeScraper) SupportsActions() bool {
 // reused on every call so the target site observes a consistent browser
 // across the whole session (#41); for ephemeral contexts the caller leaves
 // it zero-valued and a random one is generated per call.
-func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint browser.BrowserFingerprint, stealth *browser.StealthActions, opts Options, preserveSession bool) ([]chromedp.Action, *browser.ActionExecutor) {
+func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint browser.BrowserFingerprint, stealth *browser.StealthActions, opts Options, preserveSession bool, localStorageData map[string]string) ([]chromedp.Action, *browser.ActionExecutor) {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
@@ -899,6 +911,38 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 					s.logger.Warn().Err(err).Msg("Failed to inject anti-detection scripts (non-critical)")
 				} else {
 					s.logger.Info().Msg("✅ Extended Stealth scripts injected successfully")
+				}
+			}
+
+			// #59: Pre-navigation localStorage injection for named sessions.
+			// SPA frameworks (Zustand persist, Redux persist) hydrate auth state
+			// from localStorage on first JS execution. In headless Chrome the
+			// session's localStorage is present but React may read it too late,
+			// starting with an empty auth state and never making API calls.
+			// Registering a script via AddScriptToEvaluateOnNewDocument ensures
+			// localStorage is populated SYNCHRONOUSLY before any page JS runs.
+			if len(localStorageData) > 0 {
+				// Marshal to JSON for safe embedding in JS.
+				storageJSON, err := json.Marshal(localStorageData)
+				if err != nil {
+					s.logger.Warn().Err(err).Msg("Failed to marshal localStorage for injection")
+				} else {
+					lsScript := fmt.Sprintf(`(() => {
+						try {
+							const items = %s;
+							for (const [key, value] of Object.entries(items)) {
+								try { localStorage.setItem(key, value); } catch(e) {}
+							}
+						} catch(e) {}
+					})();`, string(storageJSON))
+
+					if _, err := page.AddScriptToEvaluateOnNewDocument(lsScript).Do(ctx); err != nil {
+						s.logger.Warn().Err(err).Msg("Failed to register localStorage injection script")
+					} else {
+						s.logger.Info().
+							Int("keys", len(localStorageData)).
+							Msg("✅ Pre-navigation localStorage injection registered")
+					}
 				}
 			}
 
@@ -1014,16 +1058,16 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 		// clearing would destroy the login state the session is meant to carry.
 		if !preserveSession {
 			if err := chromedp.ActionFunc(func(ctx context.Context) error {
-			// Clear all cookies via CDP
-			if err := network.ClearBrowserCookies().Do(ctx); err != nil {
-				s.logger.Debug().Err(err).Msg("Failed to clear browser cookies (non-critical)")
-			} else {
-				s.logger.Debug().Msg("✅ Cleared browser cookies")
-			}
+				// Clear all cookies via CDP
+				if err := network.ClearBrowserCookies().Do(ctx); err != nil {
+					s.logger.Debug().Err(err).Msg("Failed to clear browser cookies (non-critical)")
+				} else {
+					s.logger.Debug().Msg("✅ Cleared browser cookies")
+				}
 
-			// Clear localStorage and sessionStorage via JS
-			var result interface{}
-			if err := chromedp.Evaluate(`
+				// Clear localStorage and sessionStorage via JS
+				var result interface{}
+				if err := chromedp.Evaluate(`
 				(() => {
 					// Clear localStorage
 					try {
@@ -1048,18 +1092,18 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 					return true;
 				})()
 			`, &result).Do(ctx); err != nil {
-				s.logger.Debug().Err(err).Msg("Failed to clear storage via JS (non-critical)")
-			} else {
-				s.logger.Debug().Msg("✅ Cleared localStorage/sessionStorage/cookies")
+					s.logger.Debug().Err(err).Msg("Failed to clear storage via JS (non-critical)")
+				} else {
+					s.logger.Debug().Msg("✅ Cleared localStorage/sessionStorage/cookies")
+				}
+
+				return nil
+			}).Do(ctx); err != nil {
+				s.logger.Debug().Err(err).Msg("Failed to execute storage clearing (non-critical)")
 			}
 
-			return nil
-		}).Do(ctx); err != nil {
-			s.logger.Debug().Err(err).Msg("Failed to execute storage clearing (non-critical)")
-		}
-
-		// Add small delay to ensure storage is fully cleared before navigation
-		time.Sleep(100 * time.Millisecond)
+			// Add small delay to ensure storage is fully cleared before navigation
+			time.Sleep(100 * time.Millisecond)
 		} else {
 			s.logger.Debug().Msg("Skipping cookie/storage clearing (named session)")
 		}
@@ -1511,7 +1555,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent, rea
 		// Use existing HTTPScraper for compatibility
 		httpScraper := NewHTTPScraper(s.cache, s.uaRotator, s.proxy)
 		result, scrapeErr := httpScraper.Scrape(ctx, urlStr, Options{
-			Timeout:    30 * time.Second,
+			Timeout:   30 * time.Second,
 			UserAgent: userAgent,
 		})
 
@@ -1540,7 +1584,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent, rea
 
 		result.Method = "HTTP (simple fallback)"
 		return s.finalizeFallbackResult(result, reason, urlStr)
-		}
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
@@ -2085,11 +2129,11 @@ type ReleaseMetadata struct {
 
 // SmartGitHubResponse represents the intelligent two-phase GitHub response
 type SmartGitHubResponse struct {
-	Phase        string             `json:"phase"` // "catalog" or "detailed"
-	TotalCount   int                `json:"total_count"`
+	Phase        string            `json:"phase"` // "catalog" or "detailed"
+	TotalCount   int               `json:"total_count"`
 	Releases     []ReleaseMetadata `json:"releases"`
 	DetailedData map[string]string `json:"detailed_data,omitempty"` // tag_name -> full markdown
-	TokensSaved  int                `json:"tokens_saved"`
+	TokensSaved  int               `json:"tokens_saved"`
 }
 
 // githubSmartCatalog creates a release catalog for intelligent LLM selection
@@ -2691,4 +2735,3 @@ func (s *ChromeScraper) convertRepoToMarkdown(repo map[string]interface{}) strin
 	markdown.WriteString(fmt.Sprintf("\n*Estimated: ~%d tokens*\n", len(markdown.String())/4))
 	return markdown.String()
 }
-
