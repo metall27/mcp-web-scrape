@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -194,6 +195,84 @@ func TestParseActionsRejectsInvalid(t *testing.T) {
 	}
 	if ve.ActionType != "wait_for" {
 		t.Errorf("ActionType = %q, want wait_for", ve.ActionType)
+	}
+}
+
+// TestQuoteSelectorHandlesEmbeddedQuotes is the regression guard for the
+// quoteSelector bug: a CSS selector containing double quotes — the extremely
+// common input[name="login"] form — must produce a valid JavaScript string
+// literal when embedded into document.querySelector(...). The previous
+// implementation (raw fmt.Sprintf(`"%s"`, s)) generated
+//
+//	document.querySelector("input[name="login"]")
+//
+// which throws "SyntaxError: missing ) after argument list" and silently
+// broke ExecuteType's clear-field step on every login form.
+func TestQuoteSelectorHandlesEmbeddedQuotes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{`input[name="login"]`, `input[name="login"]`},
+		{`button[data-test="submit"]`, `button[data-test="submit"]`},
+		{`a[href="/path\""]`, `a[href="/path\"]`}, // embedded backslash+quote
+		{`#plain`, `#plain`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := quoteSelector(c.in)
+			// The output must be a valid JSON string literal: starts and
+			// ends with a double quote, and round-trips through the JSON
+			// scanner back to the original selector.
+			if len(got) < 2 || got[0] != '"' || got[len(got)-1] != '"' {
+				t.Fatalf("quoteSelector(%q) = %q, expected a double-quoted JSON literal", c.in, got)
+			}
+			// Embed it in the exact JS shape used by ExecuteType and verify
+			// the whole expression would not contain a premature terminator.
+			js := "document.querySelector(" + got + ")"
+			if strings.Count(js, `"`)%2 != 0 {
+				t.Errorf("odd number of quotes in %q — unbalanced JS literal", js)
+			}
+			// Round-trip: stripping the outer quotes via JSON decode yields
+			// the original selector, proving no quoting was lost.
+			var decoded string
+			if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+				t.Fatalf("quoteSelector output is not valid JSON: %v (got %q)", err, got)
+			}
+			if decoded != c.in {
+				t.Errorf("JSON round-trip mismatch: got %q, want %q", decoded, c.in)
+			}
+		})
+	}
+}
+
+// TestQuoteStringHandlesApostrophes guards the sibling bug in quoteString:
+// text containing a single quote must have it escaped so it does not
+// terminate the JS string literal early.
+func TestQuoteStringHandlesApostrophes(t *testing.T) {
+	cases := []struct {
+		in   string
+	}{
+		{`d'Artagnan`},
+		{`it's a "test"`},
+		{`back\slash`},
+		{`line1\nalready`},
+		{`plain text`},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			got := quoteString(c.in)
+			if len(got) < 2 || got[0] != '\'' || got[len(got)-1] != '\'' {
+				t.Fatalf("quoteString(%q) = %q, expected a single-quoted literal", c.in, got)
+			}
+			// No unescaped single quote may appear in the body.
+			body := got[1 : len(got)-1]
+			for i := 0; i < len(body); i++ {
+				if body[i] == '\'' && (i == 0 || body[i-1] != '\\') {
+					t.Errorf("unescaped single quote in %q at offset %d", got, i+1)
+				}
+			}
+		})
 	}
 }
 

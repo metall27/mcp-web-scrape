@@ -2,8 +2,10 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -652,14 +654,55 @@ func (e *ActionExecutor) ExecuteNavigate(ctx context.Context, urlStr string) err
 	return chromedp.Navigate(urlStr).Do(ctx)
 }
 
+// quoteSelector returns s wrapped as a JSON string literal (including the
+// surrounding double quotes) so it can be safely embedded as a JavaScript
+// string argument in document.querySelector(...). The previous
+// implementation used fmt.Sprintf(`"%s"`, s) — a raw double-quote wrap with
+// no escaping — which produced invalid JavaScript whenever the selector
+// itself contained double quotes. The very common selector
+// input[name="login"] became:
+//
+//	document.querySelector("input[name="login"]")
+//
+// → "SyntaxError: missing ) after argument list". This silently broke the
+// "clear field" step in ExecuteType on every login form, and likewise broke
+// ExecuteHover / ExecuteSelectOption / ExecuteWaitForText for any selector
+// or text containing a quote. json.Marshal handles double-quotes, backslashes
+// and all other JS metacharacters correctly.
 func quoteSelector(s string) string {
-	// Для CSS selector используем двойные кавычки внутри шаблона
-	return fmt.Sprintf(`"%s"`, s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		// json.Marshal on a plain string only fails on \u0000 replacement;
+		// fall back to a best-effort literal so the scrape never aborts.
+		return fmt.Sprintf("%q", s)
+	}
+	return string(b)
 }
 
+// quoteString returns s as a JavaScript single-quoted string literal, with
+// embedded single quotes, backslashes and newlines escaped. The previous
+// implementation used fmt.Sprintf(`'%s'`, s) — a raw single-quote wrap — so a
+// text value containing an apostrophe (e.g. "d'Artagnan") terminated the
+// literal early and threw a SyntaxError in the page.
 func quoteString(s string) string {
-	// Экранируем строку для JavaScript
-	return fmt.Sprintf(`'%s'`, s)
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		switch r {
+		case '\'':
+			b.WriteString(`\'`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // ParseActions из JSON (парсинг действий из MCP request)
