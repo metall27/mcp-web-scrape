@@ -1,9 +1,18 @@
 .PHONY: help build run test stop clean docker-build docker-run docker-stop docker-logs docker-clean docker-push
 
+# Build metadata injected via -ldflags into internal/pkg/version.
+# VERSION follows semver; GIT_SHA is the short commit; BUILD_DATE is UTC.
+# Override on the command line, e.g. make build VERSION=2.0.0.
+VERSION  ?= 1.1.0
+GIT_SHA  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION_PKG := github.com/metall/mcp-web-scrape/internal/pkg/version
+LDFLAGS  := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).GitCommit=$(GIT_SHA) -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
+
 # Default target
 help:
 	@echo "Available targets:"
-	@echo "  make build         - Build Go binary"
+	@echo "  make build         - Build Go binary (stamped with version/commit/date)"
 	@echo "  make run           - Run server locally"
 	@echo "  make test          - Run tests"
 	@echo "  make clean         - Clean build artifacts"
@@ -13,11 +22,14 @@ help:
 	@echo "  make docker-logs   - Show Docker logs"
 	@echo "  make docker-clean  - Remove Docker containers and images"
 	@echo "  make docker-push   - Push image to private Nexus registry"
+	@echo ""
+	@echo "Run ./mcp-web-scrape --version  (or -v) to see the build stamp."
+	@echo "Run ./mcp-web-scrape --help     for CLI flags."
 
 # Local development
 build:
-	@echo "Building mcp-web-scrape..."
-	@go build -o mcp-web-scrape ./cmd/server
+	@echo "Building mcp-web-scrape $(VERSION) ($(GIT_SHA))..."
+	@go build -ldflags "$(LDFLAGS)" -o mcp-web-scrape ./cmd/server
 	@echo "Build complete!"
 
 run:
@@ -35,9 +47,13 @@ clean:
 
 # Docker targets
 docker-build:
-	@echo "Building Docker image..."
-	@docker build -t mcp-web-scrape:latest .
-	@echo "Docker image built successfully!"
+	@echo "Building Docker image $(VERSION) ($(GIT_SHA))..."
+	@docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg GIT_SHA=$(GIT_SHA) \
+	  --build-arg BUILD_DATE=$(BUILD_DATE) \
+	  -t mcp-web-scrape:latest -t mcp-web-scrape:$(GIT_SHA) .
+	@echo "Docker image built: mcp-web-scrape:latest + :$(GIT_SHA)"
 
 # Build the test image (Go toolchain + Chromium) used by `docker-test`.
 docker-test-build:

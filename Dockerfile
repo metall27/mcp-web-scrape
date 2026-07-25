@@ -1,6 +1,14 @@
 # Stage 1: Build
 FROM golang:1.24-alpine AS builder
 
+# Build metadata injected via -ldflags into internal/pkg/version (#63).
+# GIT_SHA is taken from the build-arg (passed by Makefile/docker-compose as the
+# current short SHA); BUILD_DATE is fixed at image-build time for reproducibility.
+ARG VERSION=1.1.0
+ARG GIT_SHA=unknown
+ARG BUILD_DATE
+ENV BUILD_DATE=${BUILD_DATE:-unknown}
+
 # Nexus proxy переподписывает APKINDEX своим ключом (key-f14d99e5).
 # golang:1.24-alpine → Alpine 3.23, поэтому пути к репозиториям — v3.23.
 COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
@@ -21,8 +29,15 @@ RUN go mod download
 # Копирование исходного кода
 COPY . .
 
-# Сборка бинарника
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o mcp-web-scrape ./cmd/server
+# Сборка бинарника с инжекцией версии/коммита/даты (#63).
+# GIT_SHA/BUILD_DATE приходят из build-args (см. ARG выше).
+# -w -s вырезают DWARF/символы для меньшего образа.
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags="-w -s \
+      -X github.com/metall/mcp-web-scrape/internal/pkg/version.Version=${VERSION} \
+      -X github.com/metall/mcp-web-scrape/internal/pkg/version.GitCommit=${GIT_SHA} \
+      -X github.com/metall/mcp-web-scrape/internal/pkg/version.BuildDate=${BUILD_DATE}" \
+    -o mcp-web-scrape ./cmd/server
 
 # Stage 2: Test
 # Образ для запуска тестов в Docker. Содержит Go-тулчейн + Chromium,
