@@ -14,8 +14,10 @@ ENV BUILD_DATE=${BUILD_DATE:-unknown}
 COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
 
 # Alpine репозитории через nexus proxy
-RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
-    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
+# ВРЕМЕННО ЗАКОММЕНТИРОВАНО: nexus.0x27.ru недоступен (#63 PR). Используются
+# дефолтные Alpine-репозитории. Раскомментировать, когда nexus снова онлайн.
+#RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
+#    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
 
 # Установка зависимостей для сборки
 RUN apk add --no-cache git ca-certificates
@@ -53,8 +55,10 @@ FROM golang:1.24-alpine AS test
 COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
 
 # Alpine репозитории через nexus proxy
-RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
-    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
+# ВРЕМЕННО ЗАКОММЕНТИРОВАНО: nexus.0x27.ru недоступен (#63 PR). Используются
+# дефолтные Alpine-репозитории. Раскомментировать, когда nexus снова онлайн.
+#RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
+#    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
 
 RUN apk add --no-cache git ca-certificates chromium
 
@@ -78,8 +82,10 @@ FROM alpine:3.23
 COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
 
 # Alpine репозитории через nexus proxy
-RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
-    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
+# ВРЕМЕННО ЗАКОММЕНТИРОВАНО: nexus.0x27.ru недоступен (#63 PR). Используются
+# дефолтные Alpine-репозитории. Раскомментировать, когда nexus снова онлайн.
+#RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
+#    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
 
 # Установка Chromium БЕЗ GUI зависимостей
 # Chromium в Alpine = только headless, без X11/GTK
