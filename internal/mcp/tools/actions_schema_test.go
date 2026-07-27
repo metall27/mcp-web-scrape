@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/metall/mcp-web-scrape/internal/pkg/browser"
+	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 )
 
 // schemaRequiredFields extracts the required fields for each action type from
@@ -132,4 +133,43 @@ func setStr(s map[string]bool) string {
 	}
 	sort.Strings(parts)
 	return "{" + strings.Join(parts, ",") + "}"
+}
+
+// TestScrapeJSSchemaHasObserveChanges guards issue #72: the scrape_with_js
+// tool schema must advertise the observe_changes parameter and it must default
+// to false. A missing or mis-defaulted entry means the LLM never learns the
+// feedback-loop feature exists.
+func TestScrapeJSSchemaHasObserveChanges(t *testing.T) {
+	// Re-invoke the constructor used for registration so we inspect the exact
+	// schema clients receive, not a hand-maintained copy.
+	tool := newSchemaOnlyScrapeJSTool(t)
+	props, ok := tool.InputSchema()["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("schema has no properties object")
+	}
+	oc, ok := props["observe_changes"].(map[string]interface{})
+	if !ok {
+		t.Fatal("observe_changes missing from scrape_with_js schema properties")
+	}
+	if oc["type"] != "boolean" {
+		t.Errorf("observe_changes.type = %v, want boolean", oc["type"])
+	}
+	if oc["default"] != false {
+		t.Errorf("observe_changes.default = %v, want false", oc["default"])
+	}
+	desc, _ := oc["description"].(string)
+	if !strings.Contains(desc, "action_observations") {
+		t.Errorf("observe_changes description does not mention action_observations metadata key; got %q", desc)
+	}
+}
+
+// newSchemaOnlyScrapeJSTool returns a ScrapeJSTool whose schema is populated.
+// We cannot call NewScrapeJSTool (it needs a browser pool); instead replicate
+// the schema map via buildActionsSchema + the known property set by invoking
+// the public constructor path minimally.
+func newSchemaOnlyScrapeJSTool(t *testing.T) *ScrapeJSTool {
+	t.Helper()
+	// Construct with nil deps — the schema is static and does not touch them.
+	// NewScrapeJSTool wires a handler that uses the pool at call time only.
+	return NewScrapeJSTool(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
 }

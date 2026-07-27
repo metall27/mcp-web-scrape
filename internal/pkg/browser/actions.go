@@ -29,6 +29,57 @@ type JSResult struct {
 	Err         error       // Ошибка выполнения (nil при успехе)
 }
 
+// ActionResult records the outcome of a single action within a chain. Surfaced
+// in the scrape response metadata so the LLM (or user) can see what happened at
+// each step — not just "all actions succeeded" or "scrape failed". See #72.
+type ActionResult struct {
+	Index    int    `json:"index"`    // 0-based action index in the chain
+	Type     string `json:"type"`     // action type (click, type, wait_for_text, ...)
+	Selector string `json:"selector"` // CSS selector used (empty for text-only actions)
+	Status   string `json:"status"`   // "completed", "soft_timeout", "failed"
+	Warning  string `json:"warning"`  // non-empty on soft_timeout (e.g. text not found)
+	Error    string `json:"error"`    // non-empty on failed
+	Attempts int    `json:"attempts"` // number of attempts actually executed
+}
+
+// PageObservation is a compact snapshot of the page state captured after a
+// mutating action (click/submit/type/navigate/...), when observe mode is on
+// (observe_changes=true). Designed to be small (~50-150 tokens) so it can be
+// included in the scrape response metadata without flooding context. Gives the
+// LLM enough signal to decide whether the action had the intended effect
+// (login succeeded, content loaded, error appeared) without needing to guess
+// the exact text to wait for — solving the core UX problem of #72.
+type PageObservation struct {
+	ActionIndex int      `json:"action_index"` // 0-based index of the preceding action
+	URL         string   `json:"url"`          // window.location.href after the action
+	URLChanged  bool     `json:"url_changed"`  // true if URL differs from previous observation
+	Title       string   `json:"title"`
+	Headings    []string `json:"headings"`     // up to 5 h1/h2 texts (truncated to 100 chars)
+	Errors      []string `json:"errors"`       // visible error/alert messages (up to 5)
+	BodyChanged bool     `json:"body_changed"` // true if body content hash changed
+	TextPreview string   `json:"text_preview"` // first ~300 chars of visible body text
+}
+
+// SoftTimeoutError indicates a wait-type action (wait_for, wait_for_text) timed
+// out. Unlike a hard error, this does NOT abort the action chain: it's recorded
+// as a warning and execution continues. The LLM can inspect page observations
+// to decide whether the wait condition was eventually met. See issue #72.
+type SoftTimeoutError struct {
+	ActionIndex int
+	ActionType  string
+	Message     string
+}
+
+func (e *SoftTimeoutError) Error() string {
+	return e.Message
+}
+
+// IsSoftTimeoutError reports whether err is a *SoftTimeoutError.
+func IsSoftTimeoutError(err error) bool {
+	var ste *SoftTimeoutError
+	return errors.As(err, &ste)
+}
+
 // ActionValidationError indicates a deterministic validation failure in a
 // user-supplied action: a required field is empty, an action type is unknown,
 // or the input is otherwise malformed. Such errors describe bad input, not a
@@ -129,11 +180,34 @@ type ActionExecutor struct {
 	retries   int           // Дефолтное количество ретраев
 	timeout   time.Duration // Дефолтный timeout
 	jsResults []JSResult    // Результаты выполнения execute_js действий
+
+	// Per-action outcomes (#72). Populated during ExecuteActions and surfaced
+	// in the scrape response metadata so the LLM sees what happened at each
+	// step, not just the final success/failure.
+	results      []ActionResult
+	observations []PageObservation // only when observeChanges=true
+	observe      bool              // whether to capture PageObservation after mutating actions
+
+	// Baseline state for the next observation: URL + body hash captured BEFORE
+	// a mutating action, so captureObservation can diff against it. Keyed by
+	// action index. Cleared after the corresponding observation is captured.
+	baselineURL  map[int]string
+	baselineHash map[int]string
 }
 
 // GetJSResults возвращает результаты всех execute_js действий
 func (e *ActionExecutor) GetJSResults() []JSResult {
 	return e.jsResults
+}
+
+// GetResults возвращает результат каждого действия в цепочке (#72).
+func (e *ActionExecutor) GetResults() []ActionResult {
+	return e.results
+}
+
+// GetObservations возвращает наблюдения страницы после mutating actions (#72).
+func (e *ActionExecutor) GetObservations() []PageObservation {
+	return e.observations
 }
 
 // recordJSResult добавляет или перезаписывает результат execute_js по actionIndex.
@@ -148,17 +222,40 @@ func (e *ActionExecutor) recordJSResult(r JSResult) {
 	e.jsResults = append(e.jsResults, r)
 }
 
-// NewActionExecutor создает новый экземпляр ActionExecutor
-func NewActionExecutor(logger zerolog.Logger, stealth *StealthActions) *ActionExecutor {
+// recordResult upserts a per-action outcome by index (same dedup semantics as
+// recordJSResult: a retried action overwrites its previous outcome).
+func (e *ActionExecutor) recordResult(r ActionResult) {
+	for i, existing := range e.results {
+		if existing.Index == r.Index {
+			e.results[i] = r
+			return
+		}
+	}
+	e.results = append(e.results, r)
+}
+
+// NewActionExecutor создает новый экземпляр ActionExecutor.
+// observeChanges=true включает снятие PageObservation после mutating actions.
+func NewActionExecutor(logger zerolog.Logger, stealth *StealthActions, observeChanges bool) *ActionExecutor {
 	return &ActionExecutor{
 		logger:  logger,
 		stealth: stealth,
 		retries: 3,                // Дефолт: 3 ретрая
 		timeout: 30 * time.Second, // Дефолт: 30s timeout
+		observe: observeChanges,
 	}
 }
 
-// ExecuteActions выполняет список действий последовательно
+// ExecuteActions выполняет список действий последовательно.
+//
+// Изменение #72: wait-подобные действия (wait_for, wait_for_text) возвращают
+// *SoftTimeoutError при таймауте. Такая ошибка НЕ прерывает цепочку и НЕ
+// является hard-fail: она записывается как warning в ActionResult, scrape
+// продолжается и возвращает страницу в том состоянии, в котором оказалась.
+// Ранее таймаут wait-а абортил весь scrape и LLM не видел страницу вообще —
+// именно это описано в issue #72. Hard-fail остаётся для validation errors
+// (#50) и для всех не-wait действий (click/type/...): их неудача означает, что
+// последующие действия не имеют смысла.
 func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) error {
 	for i, action := range actions {
 		e.logger.Info().
@@ -179,8 +276,18 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 			timeout = action.Timeout
 		}
 
+		// Снимаем observation ДО mutating action, чтобы потом сравнить.
+		// (observation после action снимается ниже в блоке завершения.)
+		if e.observe && isMutatingAction(action.Type) {
+			// Предзапоминаем URL/body-hash для сравнения "changed?".
+			if err := e.captureBaseline(ctx, i); err != nil {
+				e.logger.Debug().Err(err).Msg("observation baseline capture failed (non-critical)")
+			}
+		}
+
 		// Выполняем действие с ретраями
 		var lastErr error
+		attemptMade := 0
 		for attempt := 0; attempt < retries; attempt++ {
 			if attempt > 0 {
 				e.logger.Debug().
@@ -199,6 +306,7 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 			// Выполняем действие (передаём индекс)
 			err := e.ExecuteAction(actionCtx, action, i)
 			cancel()
+			attemptMade = attempt + 1
 
 			if err == nil {
 				e.logger.Info().
@@ -227,6 +335,20 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 				break
 			}
 
+			// Soft timeout (#72): wait-condition не выполнено за timeout.
+			// НЕ ретраим и НЕ прерываем цепочку — это не ошибка, а сигнал
+			// «условие не наступило, но страница, возможно, уже в нужном
+			// состоянии». Запишем warning и продолжим.
+			if IsSoftTimeoutError(err) {
+				e.logger.Info().
+					Int("action_number", i+1).
+					Str("type", action.Type).
+					Int("attempt", attempt+1).
+					Err(err).
+					Msg("Wait condition timed out (soft) — continuing chain")
+				break
+			}
+
 			e.logger.Warn().
 				Int("action_number", i+1).
 				Str("type", action.Type).
@@ -235,10 +357,26 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 				Msg("Action failed")
 		}
 
-		// Если все ретраи провалились
-		if lastErr != nil {
+		// Классификация исхода действия для ActionResult (#72).
+		e.recordActionOutcome(i, action, lastErr, attemptMade)
+
+		// Soft timeout — продолжаем цепочку, не прерываем.
+		if lastErr != nil && IsSoftTimeoutError(lastErr) {
+			// observation снимем ниже единым блоком (как для успеха).
+		} else if lastErr != nil {
+			// Hard fail (click/type/validation) — последующие действия не
+			// имеют смысла, прерываем цепочку. Возвращаемый error приведёт к
+			// fallback, но ActionResult уже сохранён в executor и попадёт в
+			// metadata.
 			return fmt.Errorf("action %d (%s on %s) failed after %d attempts: %w",
-				i+1, action.Type, action.Selector, retries, lastErr)
+				i+1, action.Type, action.Selector, attemptMade, lastErr)
+		}
+
+		// Observation после mutating action (#72).
+		if e.observe && isMutatingAction(action.Type) {
+			if err := e.captureObservation(ctx, i); err != nil {
+				e.logger.Debug().Err(err).Msg("observation capture failed (non-critical)")
+			}
 		}
 
 		// Небольшая задержка между действиями (если stealth включен)
@@ -249,6 +387,136 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 		}
 	}
 
+	return nil
+}
+
+// isMutatingAction reports whether an action type is expected to change page
+// state (and thus warrants a PageObservation snapshot). wait_* and scroll/hover
+// are read-only w.r.t. the document and are skipped to avoid noise.
+func isMutatingAction(t string) bool {
+	switch t {
+	case "click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js":
+		return true
+	}
+	return false
+}
+
+// recordActionOutcome converts the result of a single action's retry loop into
+// an ActionResult and stores it via recordResult.
+func (e *ActionExecutor) recordActionOutcome(index int, action Action, lastErr error, attempts int) {
+	r := ActionResult{
+		Index:    index,
+		Type:     action.Type,
+		Selector: action.Selector,
+		Attempts: attempts,
+	}
+	switch {
+	case lastErr == nil:
+		r.Status = "completed"
+	case IsSoftTimeoutError(lastErr):
+		r.Status = "soft_timeout"
+		r.Warning = lastErr.Error()
+	default:
+		r.Status = "failed"
+		r.Error = lastErr.Error()
+	}
+	e.recordResult(r)
+}
+
+// captureBaseline snapshots the page URL and a body-content hash before a
+// mutating action runs. captureObservation later diffs against these values to
+// report url_changed / body_changed. Both are best-effort: a failure is logged
+// and ignored (observation is a non-critical convenience, not a correctness
+// requirement). See #72.
+func (e *ActionExecutor) captureBaseline(ctx context.Context, actionIndex int) error {
+	if e.baselineURL == nil {
+		e.baselineURL = make(map[int]string)
+		e.baselineHash = make(map[int]string)
+	}
+
+	var snapshot struct {
+		URL  string `json:"url"`
+		Hash string `json:"hash"`
+	}
+	// djb2 hash of a trimmed innerText — cheap and stable enough to detect
+	// content change without sending the whole body across the CDP boundary.
+	err := chromedp.Evaluate(`(() => {
+		const t = (document.body && document.body.innerText) ? document.body.innerText : '';
+		const trimmed = t.replace(/\s+/g, ' ').trim().slice(0, 5000);
+		let h = 5381;
+		for (let i = 0; i < trimmed.length; i++) {
+			h = ((h << 5) + h + trimmed.charCodeAt(i)) | 0;
+		}
+		return { url: location.href, hash: String(h) };
+	})()`, &snapshot).Do(ctx)
+	if err != nil {
+		return err
+	}
+	e.baselineURL[actionIndex] = snapshot.URL
+	e.baselineHash[actionIndex] = snapshot.Hash
+	return nil
+}
+
+// captureObservation runs the compact page-state probe after a mutating action
+// and appends a PageObservation to the executor. url_changed / body_changed are
+// computed against the baseline captured by captureBaseline for the same index.
+//
+// The probe is a single chromedp.Evaluate call returning URL, title, headings,
+// error/alert texts, body hash and a text preview — all bounded to keep the
+// response small (~50-150 tokens). Designed so the LLM can judge whether a
+// login/navigation/loading action had the intended effect without guessing the
+// exact text to wait_for. See #72.
+func (e *ActionExecutor) captureObservation(ctx context.Context, actionIndex int) error {
+	var probe struct {
+		URL      string   `json:"url"`
+		Title    string   `json:"title"`
+		Headings []string `json:"headings"`
+		Errors   []string `json:"errors"`
+		Hash     string   `json:"hash"`
+		Preview  string   `json:"preview"`
+	}
+	err := chromedp.Evaluate(`(() => {
+		const trunc = (s, n) => s ? s.trim().slice(0, n) : '';
+		const heads = Array.from(document.querySelectorAll('h1,h2')).slice(0, 5).map(h => trunc(h.innerText, 100));
+		// Error messages: elements whose class/id hints at an alert/error.
+		const errs = Array.from(document.querySelectorAll('[class*="error" i],[class*="alert" i],[role="alert"]'))
+			.map(e => trunc(e.innerText, 120)).filter(Boolean).slice(0, 5);
+		const t = (document.body && document.body.innerText) ? document.body.innerText : '';
+		const trimmed = t.replace(/\s+/g, ' ').trim();
+		let h = 5381;
+		const forHash = trimmed.slice(0, 5000);
+		for (let i = 0; i < forHash.length; i++) {
+			h = ((h << 5) + h + forHash.charCodeAt(i)) | 0;
+		}
+		return {
+			url: location.href,
+			title: document.title || '',
+			headings: heads,
+			errors: errs,
+			hash: String(h),
+			preview: trunc(trimmed, 300)
+		};
+	})()`, &probe).Do(ctx)
+	if err != nil {
+		return err
+	}
+
+	prevHash := e.baselineHash[actionIndex]
+	prevURL := e.baselineURL[actionIndex]
+	delete(e.baselineHash, actionIndex)
+	delete(e.baselineURL, actionIndex)
+
+	obs := PageObservation{
+		ActionIndex: actionIndex,
+		URL:         probe.URL,
+		URLChanged:  prevURL != "" && probe.URL != prevURL,
+		Title:       probe.Title,
+		Headings:    probe.Headings,
+		Errors:      probe.Errors,
+		BodyChanged: prevHash != "" && probe.Hash != prevHash,
+		TextPreview: probe.Preview,
+	}
+	e.observations = append(e.observations, obs)
 	return nil
 }
 
@@ -446,7 +714,10 @@ func (e *ActionExecutor) ExecuteScrollTo(ctx context.Context, selector string) e
 	return nil
 }
 
-// ExecuteWaitFor ждет появления элемента
+// ExecuteWaitFor ждет появления элемента.
+//
+// #72: таймаут — это SoftTimeoutError, НЕ hard-fail. Цепочка действий не
+// прерывается, scrape возвращает страницу в текущем состоянии.
 func (e *ActionExecutor) ExecuteWaitFor(ctx context.Context, selector string, timeout time.Duration) error {
 	if selector == "" {
 		return fmt.Errorf("selector is required for wait_for action")
@@ -467,13 +738,22 @@ func (e *ActionExecutor) ExecuteWaitFor(ctx context.Context, selector string, ti
 
 	err := chromedp.WaitVisible(selector, chromedp.ByQuery).Do(waitCtx)
 	if err != nil {
-		return fmt.Errorf("element %s not visible within %v: %w", selector, timeout, err)
+		// #72: soft timeout — не прерываем scrape, даём LLM увидеть страницу.
+		return &SoftTimeoutError{
+			ActionType: "wait_for",
+			Message:    fmt.Sprintf("element %s not visible within %v", selector, timeout),
+		}
 	}
 
 	return nil
 }
 
-// ExecuteWaitForText ждет появления текста на странице
+// ExecuteWaitForText ждет появления текста на странице.
+//
+// #72: таймаут — это SoftTimeoutError, НЕ hard-fail. Цепочка действий не
+// прерывается, scrape возвращает страницу в текущем состоянии. Ранее таймаут
+// wait_for_text абортил весь scrape (90с wasted, страница не возвращалась) —
+// основная жалоба issue #72.
 func (e *ActionExecutor) ExecuteWaitForText(ctx context.Context, text string, timeout time.Duration) error {
 	if text == "" {
 		return fmt.Errorf("text is required for wait_for_text action")
@@ -498,7 +778,11 @@ func (e *ActionExecutor) ExecuteWaitForText(ctx context.Context, text string, ti
 	for {
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("text '%s' not found within %v", text, timeout)
+			// #72: soft timeout — не прерываем scrape, даём LLM увидеть страницу.
+			return &SoftTimeoutError{
+				ActionType: "wait_for_text",
+				Message:    fmt.Sprintf("text '%s' not found within %v", text, timeout),
+			}
 		case <-ticker.C:
 			var found bool
 			err := chromedp.Evaluate(fmt.Sprintf(`

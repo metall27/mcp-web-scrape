@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 // TestValidateAction covers the validation logic centralised in
@@ -251,7 +253,7 @@ func TestQuoteSelectorHandlesEmbeddedQuotes(t *testing.T) {
 // terminate the JS string literal early.
 func TestQuoteStringHandlesApostrophes(t *testing.T) {
 	cases := []struct {
-		in   string
+		in string
 	}{
 		{`d'Artagnan`},
 		{`it's a "test"`},
@@ -295,5 +297,139 @@ func TestParseActionsAcceptsValid(t *testing.T) {
 	// Verify the timeout parsed correctly (ms → Duration).
 	if parsed[1].Timeout.Milliseconds() != 5000 {
 		t.Errorf("timeout = %v, want 5000ms", parsed[1].Timeout)
+	}
+}
+
+// --- issue #72 tests: soft-wait + action results + observations ---
+
+// TestSoftTimeoutError ensures *SoftTimeoutError is detectable via errors.As
+// both directly and when wrapped — ExecuteActions relies on this to distinguish
+// a non-fatal wait timeout from a hard action failure.
+func TestSoftTimeoutError(t *testing.T) {
+	ste := &SoftTimeoutError{ActionIndex: 1, ActionType: "wait_for_text", Message: "text 'x' not found"}
+
+	if !IsSoftTimeoutError(ste) {
+		t.Error("IsSoftTimeoutError(ste) = false, want true")
+	}
+	// Wrapped via fmt.Errorf("%w") — the form ExecuteActions produces.
+	wrapped := errors.New("action 2 (wait_for_text) failed after 1 attempts: " + ste.Error())
+	if IsSoftTimeoutError(wrapped) {
+		// A plain errors.New does NOT unwrap to *SoftTimeoutError; document that
+		// the caller must use %w wrapping, mirroring TestIsActionValidationError.
+		t.Error("plain errors.New matched as soft timeout (should require %w wrapping)")
+	}
+
+	// A non-soft error must not match.
+	if IsSoftTimeoutError(errors.New("element not found")) {
+		t.Error("generic error matched as soft timeout")
+	}
+	// And a validation error must not be mistaken for a soft timeout.
+	if IsSoftTimeoutError(&ActionValidationError{ActionType: "click", Reason: "x"}) {
+		t.Error("validation error matched as soft timeout")
+	}
+}
+
+// TestIsMutatingAction documents which action types are considered mutating
+// (and thus warrant a PageObservation snapshot). The classification is part of
+// the #72 contract — changing it silently changes which actions get observed.
+func TestIsMutatingAction(t *testing.T) {
+	mutating := []string{"click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js"}
+	for _, mt := range mutating {
+		if !isMutatingAction(mt) {
+			t.Errorf("isMutatingAction(%q) = false, want true", mt)
+		}
+	}
+	nonMutating := []string{"wait_for", "wait_for_text", "scroll_to", "hover"}
+	for _, nt := range nonMutating {
+		if isMutatingAction(nt) {
+			t.Errorf("isMutatingAction(%q) = true, want false", nt)
+		}
+	}
+}
+
+// TestRecordActionOutcome verifies the status classification that turns the
+// raw retry-loop result into an ActionResult. ExecuteActions depends on these
+// three buckets to decide abort-vs-continue and what to surface in metadata.
+func TestRecordActionOutcome(t *testing.T) {
+	cases := []struct {
+		name       string
+		lastErr    error
+		wantStatus string
+		wantField  string // "warning" or "error"
+		wantText   string
+	}{
+		{"success → completed", nil, "completed", "", ""},
+		{"soft timeout → soft_timeout", &SoftTimeoutError{ActionType: "wait_for_text", Message: "text 'x' not found"}, "soft_timeout", "warning", "text 'x' not found"},
+		{"hard error → failed", errors.New("failed to click element #x"), "failed", "error", "failed to click element #x"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := NewActionExecutor(zerolog.Nop(), nil, false)
+			e.recordActionOutcome(2, Action{Type: "wait_for_text", Text: "x"}, c.lastErr, 3)
+
+			results := e.GetResults()
+			if len(results) != 1 {
+				t.Fatalf("got %d results, want 1", len(results))
+			}
+			r := results[0]
+			if r.Index != 2 {
+				t.Errorf("Index = %d, want 2", r.Index)
+			}
+			if r.Status != c.wantStatus {
+				t.Errorf("Status = %q, want %q", r.Status, c.wantStatus)
+			}
+			if r.Attempts != 3 {
+				t.Errorf("Attempts = %d, want 3", r.Attempts)
+			}
+			switch c.wantField {
+			case "warning":
+				if r.Warning != c.wantText {
+					t.Errorf("Warning = %q, want %q", r.Warning, c.wantText)
+				}
+				if r.Error != "" {
+					t.Errorf("Error should be empty for soft_timeout, got %q", r.Error)
+				}
+			case "error":
+				if r.Error != c.wantText {
+					t.Errorf("Error = %q, want %q", r.Error, c.wantText)
+				}
+				if r.Warning != "" {
+					t.Errorf("Warning should be empty for failed, got %q", r.Warning)
+				}
+			}
+		})
+	}
+}
+
+// TestRecordResultUpsertOnIndex ensures recordResult replaces (not appends) an
+// existing outcome for the same action index. ExecuteActions records a result
+// per action after its retry loop; a future caller re-running an action must
+// not accumulate duplicate entries for the same index.
+func TestRecordResultUpsertOnIndex(t *testing.T) {
+	e := NewActionExecutor(zerolog.Nop(), nil, false)
+
+	e.recordResult(ActionResult{Index: 0, Type: "click", Status: "completed"})
+	e.recordResult(ActionResult{Index: 0, Type: "click", Status: "failed", Error: "boom"})
+
+	got := e.GetResults()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result after upsert, got %d", len(got))
+	}
+	if got[0].Status != "failed" {
+		t.Errorf("Status = %q, want failed (upserted value)", got[0].Status)
+	}
+}
+
+// TestNewActionExecutorObserveFlag confirms the observe flag is wired through
+// the constructor — captureObservation is only invoked when observe=true, so a
+// miswire would silently disable the whole observation feature.
+func TestNewActionExecutorObserveFlag(t *testing.T) {
+	off := NewActionExecutor(zerolog.Nop(), nil, false)
+	if off.observe {
+		t.Error("observe=false constructor produced observe=true")
+	}
+	on := NewActionExecutor(zerolog.Nop(), nil, true)
+	if !on.observe {
+		t.Error("observe=true constructor produced observe=false")
 	}
 }

@@ -31,19 +31,19 @@ type Options struct {
 	UserAgent string
 
 	// Wait strategies
-	WaitForSelector string
-	WaitForDuration time.Duration
+	WaitForSelector    string
+	WaitForDuration    time.Duration
 	WaitForNetworkIdle bool
 
 	// Content format
 	OutputFormat string // "html" или "markdown"
 
 	// Screenshot
-	Screenshot bool
+	Screenshot     bool
 	ScreenshotMode string
 
 	// Viewport
-	ViewportWidth int
+	ViewportWidth  int
 	ViewportHeight int
 
 	// Content blocking
@@ -51,8 +51,8 @@ type Options struct {
 
 	// Stealth
 	StealthEnabled bool
-	StealthScroll bool
-	StealthMouse bool
+	StealthScroll  bool
+	StealthMouse   bool
 
 	// Proxy (не используется в HTTPScraper, только в ChromeScraper)
 	ProxyEnabled bool
@@ -68,6 +68,14 @@ type Options struct {
 	// CloseSession=true закрывает named session после этого вызова
 	// (явный cleanup). Имеет смысл только вместе с SessionID.
 	CloseSession bool
+
+	// ObserveChanges (#72): when true, after each mutating action a compact
+	// page snapshot (URL, title, headings, error messages, body-changed flag,
+	// text preview) is captured and returned in metadata.action_observations.
+	// Lets the LLM judge whether an action had its intended effect (login
+	// succeeded, content loaded, error appeared) without guessing exact text
+	// to wait_for. Off by default — zero overhead on static scrapes.
+	ObserveChanges bool
 }
 
 // ScrapeError подробная информация об ошибке скрапинга
@@ -86,17 +94,17 @@ func (e *ScrapeError) Error() string {
 // Result общий результат для всех скраперов (только успешные случаи)
 type Result struct {
 	// Content
-	HTML string
+	HTML  string
 	Title string
 
 	// Metadata
-	URL string
-	FinalURL string
-	StatusCode int
+	URL         string
+	FinalURL    string
+	StatusCode  int
 	ContentType string
 
 	// Performance
-	Duration time.Duration
+	Duration  time.Duration
 	SizeBytes int
 
 	// Screenshot
@@ -128,6 +136,14 @@ type Result struct {
 	// session cookies and is almost certainly junk. See issue #49.
 	FallbackReason  string
 	FallbackWarning string // human-readable caveat appended to _metadata
+
+	// Per-action results (#72): outcome of each action in the chain (status,
+	// warnings, attempts). Always populated when actions were executed.
+	ActionResults []browser.ActionResult
+
+	// Page observations (#72): compact page snapshots captured after mutating
+	// actions, only when ObserveChanges was requested. Empty otherwise.
+	ActionObservations []browser.PageObservation
 }
 
 // ActionsMetadata метаданные о выполненных действиях

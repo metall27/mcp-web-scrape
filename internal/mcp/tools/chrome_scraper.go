@@ -246,6 +246,9 @@ type scrapeAttemptResult struct {
 	isActionError bool
 	// jsResults contains return values from all execute_js actions
 	jsResults []browser.JSResult
+	// Per-action outcomes and page observations (#72)
+	actionResults      []browser.ActionResult
+	actionObservations []browser.PageObservation
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -388,6 +391,9 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	// Collect execute_js results from actionExecutor
 	if actionExecutor != nil {
 		result.jsResults = actionExecutor.GetJSResults()
+		// #72: collect per-action outcomes and page observations
+		result.actionResults = actionExecutor.GetResults()
+		result.actionObservations = actionExecutor.GetObservations()
 	}
 
 	return result
@@ -577,6 +583,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var title string
 	var finalURL string
 	var jsResults []browser.JSResult
+	var actionResults []browser.ActionResult
+	var actionObservations []browser.PageObservation
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -713,6 +721,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		title = attemptResult.title
 		finalURL = attemptResult.finalURL
 		jsResults = attemptResult.jsResults
+		actionResults = attemptResult.actionResults
+		actionObservations = attemptResult.actionObservations
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -813,20 +823,22 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	}
 
 	result := &Result{
-		HTML:            html,
-		Title:           title,
-		URL:             urlStr,
-		FinalURL:        finalURL,
-		StatusCode:      200,
-		ContentType:     contentType,
-		Duration:        duration,
-		SizeBytes:       len(html),
-		Screenshot:      screenshotData,
-		Format:          opts.OutputFormat,
-		FromCache:       false,
-		ActionsMetadata: actionsMetadata,
-		JSResults:       jsResults,
-		Method:          s.Name(),
+		HTML:               html,
+		Title:              title,
+		URL:                urlStr,
+		FinalURL:           finalURL,
+		StatusCode:         200,
+		ContentType:        contentType,
+		Duration:           duration,
+		SizeBytes:          len(html),
+		Screenshot:         screenshotData,
+		Format:             opts.OutputFormat,
+		FromCache:          false,
+		ActionsMetadata:    actionsMetadata,
+		JSResults:          jsResults,
+		ActionResults:      actionResults,
+		ActionObservations: actionObservations,
+		Method:             s.Name(),
 	}
 
 	// Named session post-processing
@@ -1068,7 +1080,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 	// Execute interactive actions if provided
 	var actionExecutor *browser.ActionExecutor
 	if len(opts.Actions) > 0 {
-		actionExecutor = browser.NewActionExecutor(s.logger, stealth)
+		actionExecutor = browser.NewActionExecutor(s.logger, stealth, opts.ObserveChanges)
 		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
 			s.logger.Info().
 				Int("actions_count", len(opts.Actions)).
