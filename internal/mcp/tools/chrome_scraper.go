@@ -860,7 +860,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 			Headers: map[string]string{
 				"content_type": contentType,
 				"title":        title,
-				"final_url":    finalURL,
+				"final_url":    RedactURL(finalURL),
 				"format":       opts.OutputFormat,
 			},
 		}
@@ -886,7 +886,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 
 	s.logger.Info().
 		Str("url", urlStr).
-		Str("final_url", finalURL).
+		Str("final_url", RedactURL(finalURL)).
 		Int("size_bytes", len(html)).
 		Str("format", opts.OutputFormat).
 		Int64("duration_ms", duration.Milliseconds()).
@@ -1702,7 +1702,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent, rea
 	s.logger.Info().
 		Str("method", "HTTP fallback").
 		Int("size", len(html)).
-		Str("final_url", resp.Request.URL.String()).
+		Str("final_url", RedactURL(resp.Request.URL.String())).
 		Msg("Successfully scraped with HTTP fallback")
 
 	result := &Result{

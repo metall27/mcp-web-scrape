@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // BuildMCPResponse constructs a standard MCP CallToolResult:
@@ -135,4 +136,80 @@ func OptsToMap(opts Options) map[string]interface{} {
 	}
 
 	return result
+}
+
+// sensitiveQueryKeys — список имён query-параметров, значения которых
+// маскируются в логах/метаданных, чтобы предотвратить утечку кредов (issue #69).
+// Сравнение нечувствительно к регистру.
+var sensitiveQueryKeys = map[string]bool{
+	"password":     true,
+	"passwd":       true,
+	"login":        true, // my.rebrainme.com шлёт логин в ?login=
+	"email":        true,
+	"token":        true,
+	"access_token": true,
+	"api_key":      true,
+	"apikey":       true,
+	"secret":       true,
+	"auth":         true,
+	"session":      true,
+}
+
+// redactPlaceholder — значение, подставляемое вместо реального sensitive-параметра.
+const redactPlaceholder = "***"
+
+// RedactURL маскирует sensitive query-параметры в URL для безопасного логирования.
+//
+// Вернёт исходную строку как есть (best-effort), если url.Parse упадёт или
+// это не URL вообще. Query-значения ключей из sensitiveQueryKeys заменяются
+// на "***", всё остальное сохраняется (scheme/host/path/safe params).
+//
+// Значения пересобираются вручную через strings.Builder, а не url.Values.Encode()
+// (который URL-кодирует "***" в "%2A%2A%2A" — нечитаемо в логах). Сами ключи и
+// безопасные значения кодируются через url.QueryEscape для корректности.
+//
+// Пример:
+//
+//	RedactURL("https://my.rebrainme.com/?login=dpavlov85@yandex.ru&password=Y2RkNDkx")
+//	→ "https://my.rebrainme.com/?login=***&password=***"
+func RedactURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.RawQuery == "" {
+		return rawURL
+	}
+	values, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return rawURL
+	}
+
+	// Detect whether any key needs redaction; rebuild RawQuery preserving order.
+	// url.Values.Encode() re-encodes "***" → "%2A%2A%2A" which is unreadable in
+	// logs, so we assemble the query string ourselves with literal "***".
+	needsRedact := false
+	var b strings.Builder
+	first := true
+	for key, vals := range values {
+		for _, v := range vals {
+			if !first {
+				b.WriteByte('&')
+			}
+			first = false
+			b.WriteString(url.QueryEscape(key))
+			b.WriteByte('=')
+			if sensitiveQueryKeys[strings.ToLower(key)] {
+				b.WriteString(redactPlaceholder)
+				needsRedact = true
+			} else {
+				b.WriteString(url.QueryEscape(v))
+			}
+		}
+	}
+	if !needsRedact {
+		return rawURL
+	}
+	u.RawQuery = b.String()
+	return u.String()
 }
