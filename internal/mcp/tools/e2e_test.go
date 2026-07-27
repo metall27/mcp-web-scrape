@@ -51,6 +51,19 @@ func TestE2EScenarios(t *testing.T) {
 			expectSuccess: true,
 			minDuration:   100 * time.Millisecond,
 			maxDuration:   15 * time.Second,
+			// Known environmental failure — see issue #75.
+			// This test uses NewHTTPScraper (plain HTTP, line 19), not Chrome.
+			// Wowhead runs an aggressive anti-bot layer that returns HTTP 403
+			// for any non-browser request, regardless of TLS fingerprint or
+			// User-Agent rotation. Stealth mode (stealth.go / stealth_advanced.go)
+			// is a Chrome-only concept: it injects JS to hide navigator.webdriver
+			// and spoof canvas/WebGL fingerprints — none of that runs in an HTTP
+			// request. The 403 reproduces on a clean master and is NOT a
+			// regression of any PR.
+			// User confirmation: "wowhead.com надо проверять со stealth, там
+			// какая-то страшная защита, которая не обходится".
+			// To actually cover this site, the case must move to a Chrome-based
+			// E2E test (NewChromeScraper with StealthEnabled=true) — see #75.
 		},
 		{
 			name:        "Invalid URL (should fail fast)",
