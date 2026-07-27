@@ -49,6 +49,11 @@ type ActionResult struct {
 // LLM enough signal to decide whether the action had the intended effect
 // (login succeeded, content loaded, error appeared) without needing to guess
 // the exact text to wait for — solving the core UX problem of #72.
+//
+// #71 enrichment: AuthSignals (cookie count + auth-like storage keys) lets the
+// LLM see that an auth flow actually took effect, even when URL/body haven't
+// visibly changed within the settle window — the universal "login succeeded"
+// signal for SPA sites that store tokens in cookies/localStorage.
 type PageObservation struct {
 	ActionIndex int      `json:"action_index"` // 0-based index of the preceding action
 	URL         string   `json:"url"`          // window.location.href after the action
@@ -58,6 +63,27 @@ type PageObservation struct {
 	Errors      []string `json:"errors"`       // visible error/alert messages (up to 5)
 	BodyChanged bool     `json:"body_changed"` // true if body content hash changed
 	TextPreview string   `json:"text_preview"` // first ~300 chars of visible body text
+
+	// #71 auth-state enrichment. Populated when observe=true. These fields let
+	// the LLM judge whether a login/auth action succeeded by inspecting the
+	// actual auth state, not just URL/body changes that may lag behind async
+	// token storage. AuthKeys lists localStorage keys whose name matches common
+	// token/session markers (auth, token, session, user, ...); values are never
+	// exposed — only key presence.
+	AuthSignals *AuthSignals `json:"auth_signals,omitempty"`
+
+	// Settle is the report from the post-action smart-settle wait (when
+	// enabled): which phase ended the wait and how long it took. Lets the LLM
+	// distinguish "page settled cleanly" from "still loading at timeout".
+	Settle *SettleReport `json:"settle,omitempty"`
+}
+
+// AuthSignals summarises the auth-relevant browser state at observation time.
+// It is deliberately value-free: only counts and key NAMES are reported, never
+// token/cookie values, so credentials never leak into scrape metadata.
+type AuthSignals struct {
+	Cookies  int      `json:"cookies"`   // document.cookie length (chars) — rough session-cookie proxy
+	AuthKeys []string `json:"auth_keys"` // localStorage keys matching token/session/auth/user markers (names only)
 }
 
 // SoftTimeoutError indicates a wait-type action (wait_for, wait_for_text) timed
@@ -111,17 +137,19 @@ var requiredFields = map[string][]struct {
 	field    string
 	accessor func(a Action) string
 }{
-	"click":         {{"selector", func(a Action) string { return a.Selector }}},
-	"type":          {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
-	"submit":        {{"selector", func(a Action) string { return a.Selector }}},
-	"scroll_to":     {{"selector", func(a Action) string { return a.Selector }}},
-	"wait_for":      {{"selector", func(a Action) string { return a.Selector }}},
-	"wait_for_text": {{"text", func(a Action) string { return a.Text }}},
-	"hover":         {{"selector", func(a Action) string { return a.Selector }}},
-	"select_option": {{"selector", func(a Action) string { return a.Selector }}, {"value", func(a Action) string { return a.Value }}},
-	"execute_js":    {{"text", func(a Action) string { return a.Text }}},
-	"upload_file":   {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
-	"navigate":      {{"text", func(a Action) string { return a.Text }}},
+	"click":               {{"selector", func(a Action) string { return a.Selector }}},
+	"type":                {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
+	"submit":              {{"selector", func(a Action) string { return a.Selector }}},
+	"scroll_to":           {{"selector", func(a Action) string { return a.Selector }}},
+	"wait_for":            {{"selector", func(a Action) string { return a.Selector }}},
+	"wait_for_text":       {{"text", func(a Action) string { return a.Text }}},
+	"wait_for_navigation": {}, // no required fields — waits for URL change
+	"wait_for_content":    {}, // no required fields — waits for non-empty stable body
+	"hover":               {{"selector", func(a Action) string { return a.Selector }}},
+	"select_option":       {{"selector", func(a Action) string { return a.Selector }}, {"value", func(a Action) string { return a.Value }}},
+	"execute_js":          {{"text", func(a Action) string { return a.Text }}},
+	"upload_file":         {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
+	"navigate":            {{"text", func(a Action) string { return a.Text }}},
 }
 
 // RequiredField is the exported mirror of an entry in requiredFields: an
@@ -173,7 +201,6 @@ func validateAction(action Action, actionIndex int) error {
 	return nil
 }
 
-// ActionExecutor исполнитель действий
 type ActionExecutor struct {
 	logger    zerolog.Logger
 	stealth   *StealthActions
@@ -193,6 +220,18 @@ type ActionExecutor struct {
 	// action index. Cleared after the corresponding observation is captured.
 	baselineURL  map[int]string
 	baselineHash map[int]string
+
+	// smartSettle: when true, after a mutating action (click/submit/type/
+	// navigate/...) ExecuteActions waits for the page to settle (DOM content
+	// to emerge + hash to stabilize) before running the next action and before
+	// capturing an observation. This mirrors how a real browser/user behaves:
+	// an async auth fetch or SPA route change takes time, and snapshotting the
+	// page the instant the click returns captures an empty/stale state (the
+	// root cause of issue #71 "Bug B": size_bytes=0 after navigate on a SPA).
+	// Best-effort and non-fatal: a settle timeout just snapshots whatever we
+	// have. See settle.go.
+	smartSettle bool
+	settleCfg   SettleConfig
 }
 
 // GetJSResults возвращает результаты всех execute_js действий
@@ -236,13 +275,20 @@ func (e *ActionExecutor) recordResult(r ActionResult) {
 
 // NewActionExecutor создает новый экземпляр ActionExecutor.
 // observeChanges=true включает снятие PageObservation после mutating actions.
-func NewActionExecutor(logger zerolog.Logger, stealth *StealthActions, observeChanges bool) *ActionExecutor {
+// smartSettle=true включает post-action settle wait (см. settle.go).
+// settleCfg задаёт параметры settle (нулевое значение = DefaultSettleConfig).
+func NewActionExecutor(logger zerolog.Logger, stealth *StealthActions, observeChanges, smartSettle bool, settleCfg SettleConfig) *ActionExecutor {
+	if smartSettle && settleCfg.MaxWait <= 0 {
+		settleCfg = DefaultSettleConfig()
+	}
 	return &ActionExecutor{
-		logger:  logger,
-		stealth: stealth,
-		retries: 3,                // Дефолт: 3 ретрая
-		timeout: 30 * time.Second, // Дефолт: 30s timeout
-		observe: observeChanges,
+		logger:      logger,
+		stealth:     stealth,
+		retries:     3,                // Дефолт: 3 ретрая
+		timeout:     30 * time.Second, // Дефолт: 30s timeout
+		observe:     observeChanges,
+		smartSettle: smartSettle,
+		settleCfg:   settleCfg,
 	}
 }
 
@@ -372,9 +418,25 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 				i+1, action.Type, action.Selector, attemptMade, lastErr)
 		}
 
-		// Observation после mutating action (#72).
+		// Smart settle (#71): после mutating action дождаться, пока SPA
+		// отреагирует — body наполнится контентом и хэш стабилизируется.
+		// Без этого observation и следующий action видят пустой/stale state
+		// (корень "Bug B": navigate на SPA отдаёт size_bytes=0). Best-effort:
+		// таймаут не ошибка, просто снимаем что есть. wait_* actions не
+		// нуждаются в settle — они сами являются ожиданием.
+		var settleReport *SettleReport
+		if e.smartSettle && isMutatingAction(action.Type) {
+			report, serr := SmartSettle(ctx, e.logger, e.settleCfg)
+			if serr != nil && !errors.Is(serr, context.Canceled) {
+				e.logger.Debug().Err(serr).Int("action_number", i+1).Msg("smart settle ended (non-critical)")
+			}
+			settleReport = report
+		}
+
+		// Observation после mutating action (#72). SettleReport передаётся,
+		// чтобы LLM видел: страница застабилизировалась ("stable") или таймаут.
 		if e.observe && isMutatingAction(action.Type) {
-			if err := e.captureObservation(ctx, i); err != nil {
+			if err := e.captureObservation(ctx, i, settleReport); err != nil {
 				e.logger.Debug().Err(err).Msg("observation capture failed (non-critical)")
 			}
 		}
@@ -462,18 +524,24 @@ func (e *ActionExecutor) captureBaseline(ctx context.Context, actionIndex int) e
 // computed against the baseline captured by captureBaseline for the same index.
 //
 // The probe is a single chromedp.Evaluate call returning URL, title, headings,
-// error/alert texts, body hash and a text preview — all bounded to keep the
-// response small (~50-150 tokens). Designed so the LLM can judge whether a
-// login/navigation/loading action had the intended effect without guessing the
-// exact text to wait_for. See #72.
-func (e *ActionExecutor) captureObservation(ctx context.Context, actionIndex int) error {
+// error/alert texts, body hash, a text preview, and auth-state signals (cookie
+// length + auth-like localStorage key names) — all bounded to keep the response
+// small (~50-150 tokens). Designed so the LLM can judge whether a login /
+// navigation / loading action had the intended effect without guessing the exact
+// text to wait_for. See #72 (observations) and #71 (auth signals).
+//
+// settleReport (may be nil) is attached verbatim so the LLM can see whether the
+// post-action smart-settle reached a stable state or timed out still loading.
+func (e *ActionExecutor) captureObservation(ctx context.Context, actionIndex int, settleReport *SettleReport) error {
 	var probe struct {
-		URL      string   `json:"url"`
-		Title    string   `json:"title"`
-		Headings []string `json:"headings"`
-		Errors   []string `json:"errors"`
-		Hash     string   `json:"hash"`
-		Preview  string   `json:"preview"`
+		URL       string   `json:"url"`
+		Title     string   `json:"title"`
+		Headings  []string `json:"headings"`
+		Errors    []string `json:"errors"`
+		Hash      string   `json:"hash"`
+		Preview   string   `json:"preview"`
+		CookieLen int      `json:"cookie_len"`
+		AuthKeys  []string `json:"auth_keys"`
 	}
 	err := chromedp.Evaluate(`(() => {
 		const trunc = (s, n) => s ? s.trim().slice(0, n) : '';
@@ -488,13 +556,27 @@ func (e *ActionExecutor) captureObservation(ctx context.Context, actionIndex int
 		for (let i = 0; i < forHash.length; i++) {
 			h = ((h << 5) + h + forHash.charCodeAt(i)) | 0;
 		}
+		// #71 auth-state signals. We never read VALUES — only key NAMES and a
+		// coarse cookie-length proxy — so tokens never leak into metadata.
+		let cookieLen = 0;
+		try { cookieLen = document.cookie.length; } catch(e) {}
+		const authKeys = [];
+		try {
+			const re = /(auth|token|session|user|jwt|bearer)/i;
+			for (let i = 0; i < localStorage.length; i++) {
+				const k = localStorage.key(i);
+				if (k && re.test(k)) authKeys.push(k);
+			}
+		} catch(e) {}
 		return {
 			url: location.href,
 			title: document.title || '',
 			headings: heads,
 			errors: errs,
 			hash: String(h),
-			preview: trunc(trimmed, 300)
+			preview: trunc(trimmed, 300),
+			cookie_len: cookieLen,
+			auth_keys: authKeys
 		};
 	})()`, &probe).Do(ctx)
 	if err != nil {
@@ -515,6 +597,11 @@ func (e *ActionExecutor) captureObservation(ctx context.Context, actionIndex int
 		Errors:      probe.Errors,
 		BodyChanged: prevHash != "" && probe.Hash != prevHash,
 		TextPreview: probe.Preview,
+		AuthSignals: &AuthSignals{
+			Cookies:  probe.CookieLen,
+			AuthKeys: probe.AuthKeys,
+		},
+		Settle: settleReport,
 	}
 	e.observations = append(e.observations, obs)
 	return nil
@@ -541,6 +628,10 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actio
 		return e.ExecuteWaitFor(ctx, action.Selector, action.Timeout)
 	case "wait_for_text":
 		return e.ExecuteWaitForText(ctx, action.Text, action.Timeout)
+	case "wait_for_navigation":
+		return e.ExecuteWaitForNavigation(ctx, action.Timeout)
+	case "wait_for_content":
+		return e.ExecuteWaitForContent(ctx, action.Timeout)
 	case "hover":
 		return e.ExecuteHover(ctx, action.Selector)
 	case "select_option":
@@ -799,6 +890,104 @@ func (e *ActionExecutor) ExecuteWaitForText(ctx context.Context, text string, ti
 			}
 		}
 	}
+}
+
+// ExecuteWaitForNavigation ждёт, пока URL страницы изменится относительно
+// значения на момент запуска action. Полезно после click/submit на SPA, чтобы
+// дождаться клиентского роутинга (history API) или серверного редиректа, прежде
+// чем снимать snapshot или выполнять следующее действие.
+//
+// Таймаут — SoftTimeoutError (#72): НЕ прерывает цепочку. Если URL не сменился
+// за timeout, scrape продолжается и возвращает страницу в текущем состоянии —
+// LLM видит по observation, что навигации не произошло (например, логин провалился).
+//
+// Замечание по SPA-роутингу: client-side route change меняет URL через history
+// API без полной перезагрузки. DOM при этом может ещё не перерисоваться — для
+// контента используйте wait_for_content после wait_for_navigation.
+func (e *ActionExecutor) ExecuteWaitForNavigation(ctx context.Context, timeout time.Duration) error {
+	if timeout == 0 {
+		timeout = e.timeout
+	}
+
+	// Фиксируем исходный URL.
+	var startURL string
+	if err := chromedp.Location(&startURL).Do(ctx); err != nil {
+		return fmt.Errorf("wait_for_navigation: failed to read initial URL: %w", err)
+	}
+
+	e.logger.Debug().
+		Str("url", startURL).
+		Dur("timeout", timeout).
+		Msg("Waiting for navigation")
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return &SoftTimeoutError{
+				ActionType: "wait_for_navigation",
+				Message:    fmt.Sprintf("URL did not change from %s within %v", startURL, timeout),
+			}
+		case <-ticker.C:
+			var currentURL string
+			if err := chromedp.Location(&currentURL).Do(ctx); err != nil {
+				// Context canceled — propagate so the action loop can exit cleanly.
+				return err
+			}
+			if currentURL != startURL {
+				e.logger.Debug().
+					Str("from", startURL).
+					Str("to", currentURL).
+					Msg("Navigation detected")
+				return nil
+			}
+		}
+	}
+}
+
+// ExecuteWaitForContent ждёт, пока body страницы не наполнится осмысленным
+// контентом и его хэш не стабилизируется. Решает "Bug B" из issue #71: после
+// navigate на SPA страница загружается пустым shell'ом (<body></body>), а
+// React/Vue/Zustand рендерят контент асинхронно после data-fetch.
+//
+// По сути это явный, настраиваемый аналог smart-settle: polling body.innerText
+// до превышения min length + stabilisation window. Используйте после navigate
+// на SPA, либо после wait_for_navigation, когда нужно дождаться не только смены
+// URL, но и отрисовки контента.
+//
+// Таймаут — SoftTimeoutError (#72): НЕ прерывает цепочку.
+func (e *ActionExecutor) ExecuteWaitForContent(ctx context.Context, timeout time.Duration) error {
+	if timeout == 0 {
+		timeout = e.timeout
+	}
+
+	e.logger.Debug().
+		Dur("timeout", timeout).
+		Msg("Waiting for content")
+
+	// Переиспользуем механизм settle: emergence (non-empty body) + stabilize
+	// (hash stable). Кап = timeout действия.
+	cfg := DefaultSettleConfig()
+	cfg.MaxWait = timeout
+	report, err := SmartSettle(ctx, e.logger, cfg)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("wait_for_content: %w", err)
+	}
+	// SmartSettle всегда возвращает nil error на таймаут (best-effort), но мы
+	// хотим сообщить soft-timeout, если контент так и не появился — это даёт
+	// LLM явный сигнал в ActionResult.Warning.
+	if report != nil && (report.Phase == "emergence_timeout" || report.Phase == "stabilize_timeout") {
+		return &SoftTimeoutError{
+			ActionType: "wait_for_content",
+			Message:    fmt.Sprintf("content did not stabilize within %v (phase: %s)", timeout, report.Phase),
+		}
+	}
+	return nil
 }
 
 // ExecuteHover наводит мышь на элемент

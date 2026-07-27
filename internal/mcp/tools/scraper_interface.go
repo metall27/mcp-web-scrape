@@ -76,6 +76,18 @@ type Options struct {
 	// succeeded, content loaded, error appeared) without guessing exact text
 	// to wait_for. Off by default — zero overhead on static scrapes.
 	ObserveChanges bool
+
+	// SmartSettle (#71): when true, after each mutating action (click/submit/
+	// type/navigate/...) the scraper waits for the page to settle (DOM content
+	// to emerge + hash to stabilize, capped ~5s) before running the next action
+	// and before capturing an observation. Mirrors how a real browser/user
+	// behaves — an async auth fetch or SPA route change takes time, and
+	// snapshotting the instant a click returns captures an empty/stale state
+	// (the root cause of issue #71: size_bytes=0 after navigate on a SPA).
+	// Best-effort and non-fatal. Default ON when actions are present so the
+	// tool is helpful by default; set false to force instant post-action
+	// snapshots (rarely useful).
+	SmartSettle bool
 }
 
 // ScrapeError подробная информация об ошибке скрапинга

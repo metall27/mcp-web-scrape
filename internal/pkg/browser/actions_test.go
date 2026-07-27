@@ -55,6 +55,21 @@ func TestValidateAction(t *testing.T) {
 			wantValid: true,
 		},
 		{
+			name:      "wait_for_navigation with no fields is valid (#71)",
+			action:    Action{Type: "wait_for_navigation"},
+			wantValid: true,
+		},
+		{
+			name:      "wait_for_navigation with only timeout is valid (#71)",
+			action:    Action{Type: "wait_for_navigation", Timeout: 5000000000}, // 5s
+			wantValid: true,
+		},
+		{
+			name:      "wait_for_content with no fields is valid (#71)",
+			action:    Action{Type: "wait_for_content"},
+			wantValid: true,
+		},
+		{
 			name:      "select_option with selector and value is valid",
 			action:    Action{Type: "select_option", Selector: "#sel", Value: "opt"},
 			wantValid: true,
@@ -364,7 +379,7 @@ func TestRecordActionOutcome(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			e := NewActionExecutor(zerolog.Nop(), nil, false)
+			e := NewActionExecutor(zerolog.Nop(), nil, false, false, SettleConfig{})
 			e.recordActionOutcome(2, Action{Type: "wait_for_text", Text: "x"}, c.lastErr, 3)
 
 			results := e.GetResults()
@@ -406,7 +421,7 @@ func TestRecordActionOutcome(t *testing.T) {
 // per action after its retry loop; a future caller re-running an action must
 // not accumulate duplicate entries for the same index.
 func TestRecordResultUpsertOnIndex(t *testing.T) {
-	e := NewActionExecutor(zerolog.Nop(), nil, false)
+	e := NewActionExecutor(zerolog.Nop(), nil, false, false, SettleConfig{})
 
 	e.recordResult(ActionResult{Index: 0, Type: "click", Status: "completed"})
 	e.recordResult(ActionResult{Index: 0, Type: "click", Status: "failed", Error: "boom"})
@@ -424,11 +439,11 @@ func TestRecordResultUpsertOnIndex(t *testing.T) {
 // the constructor — captureObservation is only invoked when observe=true, so a
 // miswire would silently disable the whole observation feature.
 func TestNewActionExecutorObserveFlag(t *testing.T) {
-	off := NewActionExecutor(zerolog.Nop(), nil, false)
+	off := NewActionExecutor(zerolog.Nop(), nil, false, false, SettleConfig{})
 	if off.observe {
 		t.Error("observe=false constructor produced observe=true")
 	}
-	on := NewActionExecutor(zerolog.Nop(), nil, true)
+	on := NewActionExecutor(zerolog.Nop(), nil, true, false, SettleConfig{})
 	if !on.observe {
 		t.Error("observe=true constructor produced observe=false")
 	}

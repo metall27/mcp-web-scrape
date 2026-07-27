@@ -120,6 +120,27 @@ func buildActionsSchema() map[string]interface{} {
 		}
 	}
 
+	// noFields: oneOf branch for actions needing only {type} (+ optional
+	// timeout/retries). Used by wait_for_navigation and wait_for_content —
+	// escape-hatch wait actions introduced for SPA flows (issue #71).
+	noFields := func(actionType, desc string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{actionType},
+					"description": "Action type",
+				},
+				"timeout": timeoutProp(),
+				"retries": retriesProp(),
+			},
+			"required":             []string{"type"},
+			"additionalProperties": false,
+			"description":          desc,
+		}
+	}
+
 	return map[string]interface{}{
 		"type": "array",
 		"description": "Ordered list of interactive actions to run after page load (not cached). " +
@@ -163,6 +184,9 @@ func buildActionsSchema() map[string]interface{} {
 				textOnly("execute_js", "JavaScript code to execute. Do NOT use top-level 'return' — wrap in an IIFE: (() => { ... })(). The return value IS included in metadata.execute_js_results."),
 				textOnly("wait_for_text", "Text to wait for on the page (polls until document.body.innerText includes this string). Note: a timeout here is NON-FATAL (soft) — the scrape continues and the current page is still returned, so you can inspect the result and adapt. Prefer observe_changes=true for login flows instead of guessing exact text to wait for."),
 				textOnly("navigate", "URL to navigate to"),
+				// --- field-less wait actions (escape hatch for SPA flows, #71) ---
+				noFields("wait_for_navigation", "Wait until the page URL changes from its value at the moment this action starts (detects both server redirects and client-side SPA routing via the history API). Useful after click/submit to confirm a navigation actually happened. A timeout is NON-FATAL (soft) — the scrape continues. Note: a client-side route change may update the URL before the DOM re-renders; follow with wait_for_content if you need the rendered content."),
+				noFields("wait_for_content", "Wait until document.body has non-trivial content AND its hash stops changing (the page has settled). Solves the empty-page-after-navigate problem on SPAs: after navigate the page loads as an empty shell and React/Vue/Zustand render content asynchronously. A timeout is NON-FATAL (soft)."),
 			},
 		},
 	}
@@ -262,6 +286,11 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "After each mutating action (click/submit/type/select/navigate), capture a compact page snapshot (URL, title, top headings, visible error messages, body-changed flag, ~300-char text preview) and return it in metadata.action_observations. Lets you judge whether an action had its intended effect — login succeeded, content loaded, error appeared — WITHOUT guessing exact text to wait_for. Off by default (zero overhead on static scrapes). Recommended for login flows and multi-step interactive workflows. See issue #72.",
 				"default":     false,
 			},
+			"smart_settle": map[string]interface{}{
+				"type":        "boolean",
+				"description": "After each mutating action (click/submit/type/navigate/...), wait for the page to settle — DOM content emerges and stops changing (~5s cap) — before running the next action and before capturing an observation. This mirrors how a real browser behaves: an async auth fetch or SPA route change takes time, and snapshotting the instant a click returns captures an empty or stale state (the cause of empty content after navigate on SPA sites). ON by default when actions are present; set false only if you need instant post-action snapshots. Auth signals (cookie count + auth-like localStorage key names) are included in each observation so you can see whether a login actually took effect. See issue #71.",
+				"default":     true,
+			},
 			"actions": buildActionsSchema(),
 		},
 		"required":             []string{"url"},
@@ -293,7 +322,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait) supported for login-protected or dynamically-loaded content.\n\nFeedback loop for interactive actions: (1) wait_for / wait_for_text timeouts are NON-FATAL (soft) — the scrape continues and the current page is still returned, so you can inspect what actually happened instead of guessing. (2) Set observe_changes=true to receive compact page snapshots after each mutating action (click/submit/type/navigate) in metadata.action_observations: URL, title, headings, visible error messages, body-changed flag, text preview. This lets you judge whether an action had its intended effect (login succeeded, content loaded, error appeared) without having to predict the exact text to wait_for. Recommended for login flows and multi-step workflows.\n\nStealth mode (stealth_enabled=true) injects anti-detection scripts (hides navigator.webdriver, spoofs fingerprint) that persist across navigations — use for sites that conditionally hide elements (e.g. login buttons) from automated browsers.\n\nImportant execute_js notes: code runs via chromedp.Evaluate and does NOT support top-level 'return' — wrap code in an IIFE: (() => { ... })() or (function(){ ... })(). The return value IS included in metadata.execute_js_results of the response.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
+		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait, navigate) supported for login-protected or dynamically-loaded content.\n\nSmart feedback loop for interactive actions (issue #71): by default, when actions are present the scraper waits for the page to settle (DOM content emerges and stops changing, ~5s cap) after each mutating action before running the next one — no need to guess how long an async auth fetch or SPA route change takes. Set observe_changes=true to also receive compact page snapshots after each action in metadata.action_observations: URL, url_changed, title, headings, visible error messages, body_changed, auth signals (cookie count + auth-like localStorage key names), settle report, and a text preview. The auth signals let you see whether a login actually took effect even when the URL hasn't changed yet.\n\nAll wait-type actions (wait_for, wait_for_text, wait_for_navigation, wait_for_content) have NON-FATAL timeouts: the scrape continues and returns the current page state, so you can inspect what happened instead of guessing. For SPA login flows, prefer: type credentials -> click/submit -> (smart_settle handles the wait automatically) -> optionally wait_for_navigation + wait_for_content if you need explicit control.\n\nStealth mode (stealth_enabled=true) injects anti-detection scripts (hides navigator.webdriver, spoofs fingerprint) that persist across navigations — use for sites that conditionally hide elements (e.g. login buttons) from automated browsers.\n\nImportant execute_js notes: code runs via chromedp.Evaluate and does NOT support top-level 'return' — wrap code in an IIFE: (() => { ... })() or (function(){ ... })(). The return value IS included in metadata.execute_js_results of the response.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
 		schema,
 		handler,
 	)
@@ -629,6 +658,18 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		observeChanges = oc
 	}
 
+	// Extract smart_settle (#71): post-action DOM-stability wait. Default ON
+	// when actions are present (the tool is helpful by default — an async auth
+	// fetch or SPA route change needs time to settle, and snapshotting the
+	// instant a click returns captures an empty/stale state). Explicitly
+	// settable to false to force instant snapshots.
+	smartSettle := len(actions) > 0
+	if smartSettle {
+		if ss, ok := args["smart_settle"].(bool); ok {
+			smartSettle = ss
+		}
+	}
+
 	return Options{
 		Timeout:            time.Duration(timeout) * time.Second,
 		WaitForSelector:    waitFor,
@@ -648,6 +689,7 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		SessionID:          sessionID,
 		CloseSession:       closeSession,
 		ObserveChanges:     observeChanges,
+		SmartSettle:        smartSettle,
 	}
 }
 

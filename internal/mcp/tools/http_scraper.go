@@ -101,14 +101,14 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 		s.logger.Info().
 			Str("url", urlStr).
 			Str("platform", platform).
-			Msg("🎯 Platform detected - using intelligent API mode")
+			Msg("Platform detected - using intelligent API mode")
 
 		// Convert platform URL to API endpoint
 		apiURL := s.convertPlatformURL(urlStr)
 		s.logger.Info().
 			Str("original_url", urlStr).
 			Str("api_url", apiURL).
-			Msg("🔄 Converted platform URL to API endpoint")
+			Msg("Converted platform URL to API endpoint")
 
 		// Use API fallback
 		return s.platformAPIFallback(ctx, apiURL, urlStr, platform, startTime)
@@ -482,7 +482,7 @@ func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalU
 	s.logger.Info().
 		Str("api_url", apiURL).
 		Str("platform", platform).
-		Msg("🌐 Making API request")
+		Msg("Making API request")
 
 	// Execute request
 	resp, err := client.Do(req)
@@ -553,7 +553,7 @@ func (s *HTTPScraper) platformAPIFallback(ctx context.Context, apiURL, originalU
 	s.logger.Info().
 		Str("platform", platform).
 		Int("markdown_size", len(markdown)).
-		Msg("✅ Successfully converted API response to markdown")
+		Msg("Successfully converted API response to markdown")
 
 	return &Result{
 		HTML:        markdown,
