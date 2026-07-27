@@ -249,6 +249,11 @@ type scrapeAttemptResult struct {
 	// Per-action outcomes and page observations (#72)
 	actionResults      []browser.ActionResult
 	actionObservations []browser.PageObservation
+	// networkSummary is the CDP-observed network activity for this attempt
+	// (#77): real status codes, auth failures (401/403), CDN-blocking flags,
+	// request log. Surfaced in metadata so the LLM can diagnose auth-required
+	// and blocked pages without guessing.
+	networkSummary *browser.NetworkSummary
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -273,6 +278,18 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 
 	chromeErr := chromedp.Run(scrapeCtx.browserCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			// Start CDP network monitoring (#77). Captures real HTTP status
+			// codes (401/403 = auth required), inflight counter for true
+			// network-idle, and a request log for diagnostics. Non-fatal: if
+			// it fails, the scrape continues without network enrichment (the
+			// polling-based NetworkIdleAdvanced still works as fallback).
+			netMon := browser.NewNetworkMonitor()
+			if err := netMon.Start(ctx); err != nil {
+				s.logger.Debug().Err(err).Msg("CDP network monitor failed to start (non-critical, falling back to polling)")
+			} else {
+				defer netMon.Stop()
+			}
+
 			// Execute all tasks
 			for _, task := range tasks {
 				if err := task.Do(ctx); err != nil {
@@ -294,6 +311,11 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 			if err := chromedp.Location(&finalURL).Do(ctx); err != nil {
 				return err
 			}
+
+			// Capture the network summary now that all tasks (navigation +
+			// actions) have run. Surfaced in metadata for diagnostics (#77).
+			summary := netMon.Summary()
+			result.networkSummary = &summary
 
 			// Capture localStorage for named sessions. By now the page is on
 			// its real origin (post-navigation), so localStorage is readable
@@ -585,6 +607,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var jsResults []browser.JSResult
 	var actionResults []browser.ActionResult
 	var actionObservations []browser.PageObservation
+	var networkSummary *browser.NetworkSummary
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -723,6 +746,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		jsResults = attemptResult.jsResults
 		actionResults = attemptResult.actionResults
 		actionObservations = attemptResult.actionObservations
+		networkSummary = attemptResult.networkSummary
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -838,6 +862,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		JSResults:          jsResults,
 		ActionResults:      actionResults,
 		ActionObservations: actionObservations,
+		NetworkSummary:     networkSummary,
 		Method:             s.Name(),
 	}
 

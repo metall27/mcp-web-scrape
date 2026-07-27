@@ -156,6 +156,13 @@ type Result struct {
 	// Page observations (#72): compact page snapshots captured after mutating
 	// actions, only when ObserveChanges was requested. Empty otherwise.
 	ActionObservations []browser.PageObservation
+
+	// NetworkSummary (#77): CDP-observed network activity for this scrape —
+	// real HTTP status codes, auth failures (401/403), CDN-blocking flags,
+	// bounded request log. Surfaced in metadata so the LLM can diagnose
+	// auth-required and blocked pages without guessing. Nil if the CDP monitor
+	// failed to start (falls back to no network enrichment).
+	NetworkSummary *browser.NetworkSummary
 }
 
 // ActionsMetadata метаданные о выполненных действиях

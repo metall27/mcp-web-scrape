@@ -499,6 +499,49 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Msg("Page observations added to result")
 	}
 
+	// Add network summary to metadata (#77): CDP-observed real HTTP status
+	// codes, auth failures (401/403), CDN-blocking flags. Lets the LLM see
+	// WHY a page is auth-required or blocked without guessing. Always present
+	// for Chrome scrapes (the monitor is best-effort — nil only if CDP start
+	// failed, in which case nothing is added).
+	if result.NetworkSummary != nil {
+		ns := result.NetworkSummary
+		netMap := map[string]interface{}{
+			"total_requests": ns.TotalRequests,
+		}
+		if ns.BlockedByCDN {
+			netMap["blocked_by_cdn"] = true
+		}
+		if len(ns.AuthFailures) > 0 {
+			authFails := make([]map[string]interface{}, len(ns.AuthFailures))
+			for i, af := range ns.AuthFailures {
+				authFails[i] = map[string]interface{}{
+					"url":    af.URL,
+					"status": af.Status,
+				}
+			}
+			netMap["auth_failures"] = authFails
+			// Compact human-readable hint for the LLM.
+			netMap["auth_hint"] = ns.AuthFailureHint()
+		}
+		if len(ns.Requests) > 0 {
+			reqs := make([]map[string]interface{}, len(ns.Requests))
+			for i, r := range ns.Requests {
+				reqs[i] = map[string]interface{}{
+					"url":    r.URL,
+					"status": r.Status,
+				}
+			}
+			netMap["requests"] = reqs
+		}
+		metadata["network_summary"] = netMap
+		t.logger.Debug().
+			Int64("total_requests", ns.TotalRequests).
+			Int("auth_failures", len(ns.AuthFailures)).
+			Bool("blocked_by_cdn", ns.BlockedByCDN).
+			Msg("Network summary added to metadata")
+	}
+
 	// Add execute_js results to metadata if any execute_js actions were run
 	if len(result.JSResults) > 0 {
 		jsResultsMap := make([]map[string]interface{}, len(result.JSResults))
