@@ -375,7 +375,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	metadata := map[string]interface{}{
 		"url":          result.URL,
-		"final_url":    result.FinalURL,
+		"final_url":    RedactURL(result.FinalURL),
 		"status_code":  result.StatusCode,
 		"content_type": contentType,
 		"size_bytes":   result.SizeBytes,
@@ -453,7 +453,7 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 
 	t.logger.Info().
 		Str("url", urlStr).
-		Str("final_url", result.FinalURL).
+		Str("final_url", RedactURL(result.FinalURL)).
 		Int("size_bytes", result.SizeBytes).
 		Int64("duration_ms", result.Duration.Milliseconds()).
 		Bool("screenshot_included", includeScreenshot && len(result.Screenshot) > 0).

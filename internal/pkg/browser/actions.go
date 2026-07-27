@@ -385,7 +385,17 @@ func (e *ActionExecutor) ExecuteType(ctx context.Context, selector, text string)
 	return nil
 }
 
-// ExecuteSubmit отправляет форму
+// ExecuteSubmit отправляет форму.
+//
+// Стратегия: клик ПЕРВЫМ, нативный form.submit() — только как fallback.
+//
+// На React/Zustand/Vue SPA нативный HTMLFormElement.submit() (chromedp.Submit)
+// полностью обходит synthetic onSubmit-обработчик фреймворка: не диспатчится
+// React form submission, не сохраняется токен авторизации, а для форм с
+// method=GET креды физически попадают в query string (issue #69). Клик по
+// button[type=submit] корректно триггерит как React onClick, так и нативный
+// form submission через событийную модель — это то, что делает реальный
+// пользователь.
 func (e *ActionExecutor) ExecuteSubmit(ctx context.Context, selector string) error {
 	if selector == "" {
 		return fmt.Errorf("selector is required for submit action")
@@ -395,11 +405,20 @@ func (e *ActionExecutor) ExecuteSubmit(ctx context.Context, selector string) err
 		Str("selector", selector).
 		Msg("Submitting form")
 
-	// Кликаем на кнопку/элемент submit
-	err := chromedp.Submit(selector, chromedp.ByQuery).Do(ctx)
-	if err != nil {
-		// Fallback: обычный клик
-		return e.ExecuteClick(ctx, selector)
+	// 1. Click-first: симулирует реальный клик пользователя по кнопке submit.
+	// Это диспатчит synthetic onSubmit (React/Vue) и работает на SPA.
+	if err := e.ExecuteClick(ctx, selector); err == nil {
+		return nil
+	}
+
+	// 2. Fallback: нативный form.submit(). Помогает только на классических
+	// серверных формах (без JS-обработчиков). На SPA скорее всего бесполезен,
+	// но оставлен для совместимости с legacy-формами.
+	e.logger.Debug().
+		Str("selector", selector).
+		Msg("Click failed, falling back to native form.submit()")
+	if err := chromedp.Submit(selector, chromedp.ByQuery).Do(ctx); err != nil {
+		return fmt.Errorf("failed to submit form %s: %w", selector, err)
 	}
 
 	return nil
