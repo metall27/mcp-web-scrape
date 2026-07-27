@@ -161,7 +161,7 @@ func buildActionsSchema() map[string]interface{} {
 				},
 				// --- text-only actions ---
 				textOnly("execute_js", "JavaScript code to execute. Do NOT use top-level 'return' — wrap in an IIFE: (() => { ... })(). The return value IS included in metadata.execute_js_results."),
-				textOnly("wait_for_text", "Text to wait for on the page (polls until document.body.innerText includes this string)"),
+				textOnly("wait_for_text", "Text to wait for on the page (polls until document.body.innerText includes this string). Note: a timeout here is NON-FATAL (soft) — the scrape continues and the current page is still returned, so you can inspect the result and adapt. Prefer observe_changes=true for login flows instead of guessing exact text to wait for."),
 				textOnly("navigate", "URL to navigate to"),
 			},
 		},
@@ -257,6 +257,11 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 				"description": "Close the named session after this call (explicit cleanup). Only meaningful with session_id. Releases the browser context immediately instead of waiting for the inactivity TTL. Example: scrape_with_js(session_id=\"rebrain\", close_session=true) to free resources after a workflow completes.",
 				"default":     false,
 			},
+			"observe_changes": map[string]interface{}{
+				"type":        "boolean",
+				"description": "After each mutating action (click/submit/type/select/navigate), capture a compact page snapshot (URL, title, top headings, visible error messages, body-changed flag, ~300-char text preview) and return it in metadata.action_observations. Lets you judge whether an action had its intended effect — login succeeded, content loaded, error appeared — WITHOUT guessing exact text to wait_for. Off by default (zero overhead on static scrapes). Recommended for login flows and multi-step interactive workflows. See issue #72.",
+				"default":     false,
+			},
 			"actions": buildActionsSchema(),
 		},
 		"required":             []string{"url"},
@@ -288,7 +293,7 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 
 	tool.BaseTool = NewBaseTool(
 		"scrape_with_js",
-		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait) supported for login-protected or dynamically-loaded content.\n\nStealth mode (stealth_enabled=true) injects anti-detection scripts (hides navigator.webdriver, spoofs fingerprint) that persist across navigations — use for sites that conditionally hide elements (e.g. login buttons) from automated browsers.\n\nImportant execute_js notes: code runs via chromedp.Evaluate and does NOT support top-level 'return' — wrap code in an IIFE: (() => { ... })() or (function(){ ... })(). The return value IS included in metadata.execute_js_results of the response.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
+		"Scrape a URL with full JavaScript rendering (headless Chrome). Use for dynamic sites: SPAs, dashboards, interactive pages, or any site that requires JS. For static pages (blogs, news, docs), prefer scrape_url (faster).\n\nReturns the page content as Markdown (default, ~75% smaller than HTML) or raw HTML. Optional screenshot capture. Interactive actions (click, type, scroll, wait) supported for login-protected or dynamically-loaded content.\n\nFeedback loop for interactive actions: (1) wait_for / wait_for_text timeouts are NON-FATAL (soft) — the scrape continues and the current page is still returned, so you can inspect what actually happened instead of guessing. (2) Set observe_changes=true to receive compact page snapshots after each mutating action (click/submit/type/navigate) in metadata.action_observations: URL, title, headings, visible error messages, body-changed flag, text preview. This lets you judge whether an action had its intended effect (login succeeded, content loaded, error appeared) without having to predict the exact text to wait_for. Recommended for login flows and multi-step workflows.\n\nStealth mode (stealth_enabled=true) injects anti-detection scripts (hides navigator.webdriver, spoofs fingerprint) that persist across navigations — use for sites that conditionally hide elements (e.g. login buttons) from automated browsers.\n\nImportant execute_js notes: code runs via chromedp.Evaluate and does NOT support top-level 'return' — wrap code in an IIFE: (() => { ... })() or (function(){ ... })(). The return value IS included in metadata.execute_js_results of the response.\n\nAutomatic retry with exponential backoff on timeout/empty responses. Detects blocking (Cloudflare, captcha) and returns diagnostic hints. RAG auto-indexing applies only when RAG is enabled in server config.",
 		schema,
 		handler,
 	)
@@ -405,6 +410,64 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		t.logger.Info().
 			Int("actions_count", result.ActionsMetadata.Count).
 			Msg("Interactive actions metadata added to result")
+	}
+
+	// #72: per-action outcomes (status / soft_timeout warning / failed error).
+	// Lets the caller see what each action actually did, not just the overall
+	// success/failure. In particular, a soft_timeout wait_for_text no longer
+	// aborts the scrape — it appears here as a warning.
+	if hasActions && len(result.ActionResults) > 0 {
+		resultsMap := make([]map[string]interface{}, len(result.ActionResults))
+		for i, r := range result.ActionResults {
+			entry := map[string]interface{}{
+				"index":    r.Index,
+				"type":     r.Type,
+				"status":   r.Status,
+				"attempts": r.Attempts,
+			}
+			if r.Selector != "" {
+				entry["selector"] = r.Selector
+			}
+			if r.Warning != "" {
+				entry["warning"] = r.Warning
+			}
+			if r.Error != "" {
+				entry["error"] = r.Error
+			}
+			resultsMap[i] = entry
+		}
+		metadata["action_results"] = resultsMap
+	}
+
+	// #72: page observations after mutating actions (only when observe_changes
+	// was requested). Compact snapshots (URL, title, headings, errors,
+	// body_changed, text_preview) so the LLM can judge whether an action had
+	// its intended effect without guessing text to wait_for.
+	if hasActions && len(result.ActionObservations) > 0 {
+		obsMap := make([]map[string]interface{}, len(result.ActionObservations))
+		for i, o := range result.ActionObservations {
+			entry := map[string]interface{}{
+				"action_index": o.ActionIndex,
+				"url":          o.URL,
+				"url_changed":  o.URLChanged,
+				"title":        o.Title,
+				"body_changed": o.BodyChanged,
+			}
+			if len(o.Headings) > 0 {
+				entry["headings"] = o.Headings
+			}
+			if len(o.Errors) > 0 {
+				entry["errors"] = o.Errors
+			}
+			if o.TextPreview != "" {
+				entry["text_preview"] = o.TextPreview
+			}
+			obsMap[i] = entry
+		}
+		metadata["action_observations"] = obsMap
+		t.logger.Info().
+			Int("observations_count", len(result.ActionObservations)).
+			Msg("Page observations added to result")
 	}
 
 	// Add execute_js results to metadata if any execute_js actions were run
@@ -559,6 +622,13 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		closeSession = cs
 	}
 
+	// Extract observe_changes (#72): opt-in compact page snapshots after
+	// mutating actions, returned in metadata.action_observations.
+	observeChanges := false
+	if oc, ok := args["observe_changes"].(bool); ok {
+		observeChanges = oc
+	}
+
 	return Options{
 		Timeout:            time.Duration(timeout) * time.Second,
 		WaitForSelector:    waitFor,
@@ -577,6 +647,7 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 		Actions:            actions,
 		SessionID:          sessionID,
 		CloseSession:       closeSession,
+		ObserveChanges:     observeChanges,
 	}
 }
 
