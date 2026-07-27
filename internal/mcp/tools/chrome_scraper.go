@@ -405,7 +405,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 
 	s.logger.Info().
 		Str("url", urlStr).
-		Msg("🚀 Starting scrape for URL")
+		Msg("Starting scrape for URL")
 
 	// Apply tool-level timeout for scraping operations
 	toolTimeout := s.browserCfg.ToolTimeout
@@ -496,7 +496,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		Bool("is_gitea", isGitea).
 		Bool("is_gitlab", isGitLab).
 		Bool("has_actions", hasActions).
-		Msg("🔍 Platform detection debug")
+		Msg("Platform detection debug")
 
 	if (isGitHub || isGitea || isGitLab) && !hasActions {
 		platform := "GitHub"
@@ -509,7 +509,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		s.logger.Info().
 			Str("url", urlStr).
 			Str("platform", platform).
-			Msg("🎯 Platform detected - using intelligent API mode")
+			Msg("Platform detected - using intelligent API mode")
 
 		// Check if smart catalog mode is requested
 		if strings.Contains(urlStr, "?mode=catalog") || strings.Contains(urlStr, "&mode=catalog") {
@@ -552,7 +552,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		s.logger.Info().
 			Str("original_url", urlStr).
 			Str("platform_url", platformURL).
-			Msg("🔄 Converted platform URL to API endpoint")
+			Msg("Converted platform URL to API endpoint")
 
 		// Get User-Agent for HTTP fallback
 		userAgent := opts.UserAgent
@@ -977,7 +977,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 				if err := stealth.InjectAntiDetectionScripts(fp).Do(ctx); err != nil {
 					s.logger.Warn().Err(err).Msg("Failed to inject anti-detection scripts (non-critical)")
 				} else {
-					s.logger.Info().Msg("✅ Extended Stealth scripts injected successfully")
+					s.logger.Info().Msg("Extended Stealth scripts injected successfully")
 				}
 			}
 
@@ -1008,7 +1008,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 					} else {
 						s.logger.Info().
 							Int("keys", len(localStorageData)).
-							Msg("✅ Pre-navigation localStorage injection registered")
+							Msg("Pre-navigation localStorage injection registered")
 					}
 				}
 			}
@@ -1080,7 +1080,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 	// Execute interactive actions if provided
 	var actionExecutor *browser.ActionExecutor
 	if len(opts.Actions) > 0 {
-		actionExecutor = browser.NewActionExecutor(s.logger, stealth, opts.ObserveChanges)
+		actionExecutor = browser.NewActionExecutor(s.logger, stealth, opts.ObserveChanges, opts.SmartSettle, browser.SettleConfig{})
 		tasks = append(tasks, chromedp.ActionFunc(func(ctx context.Context) error {
 			s.logger.Info().
 				Int("actions_count", len(opts.Actions)).
@@ -1112,7 +1112,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 // очистка пропускается — логин из предыдущих вызовов сохраняется.
 func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *browser.StealthActions, preserveSession bool) chromedp.Action {
 	navigationAction := chromedp.ActionFunc(func(ctx context.Context) error {
-		s.logger.Info().Msg("🌐 Starting navigation...")
+		s.logger.Info().Msg("Starting navigation...")
 		startTime := time.Now()
 
 		// CRITICAL: Clear ALL session data before navigation to prevent session conflicts
@@ -1129,7 +1129,7 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 				if err := network.ClearBrowserCookies().Do(ctx); err != nil {
 					s.logger.Debug().Err(err).Msg("Failed to clear browser cookies (non-critical)")
 				} else {
-					s.logger.Debug().Msg("✅ Cleared browser cookies")
+					s.logger.Debug().Msg("Cleared browser cookies")
 				}
 
 				// Clear localStorage and sessionStorage via JS
@@ -1161,7 +1161,7 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 			`, &result).Do(ctx); err != nil {
 					s.logger.Debug().Err(err).Msg("Failed to clear storage via JS (non-critical)")
 				} else {
-					s.logger.Debug().Msg("✅ Cleared localStorage/sessionStorage/cookies")
+					s.logger.Debug().Msg("Cleared localStorage/sessionStorage/cookies")
 				}
 
 				return nil
@@ -1187,14 +1187,14 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 				s.logger.Error().
 					Dur("nav_timeout", navTimeout).
 					Dur("actual_duration", time.Since(navStart)).
-					Msg("❌ Navigation timeout - site too slow or unresponsive")
+					Msg("Navigation timeout - site too slow or unresponsive")
 				return fmt.Errorf("navigation timeout after %v", navTimeout)
 			}
-			s.logger.Error().Err(err).Msg("❌ Navigation failed")
+			s.logger.Error().Err(err).Msg("Navigation failed")
 			return err
 		}
 
-		s.logger.Info().Dur("nav_duration", time.Since(navStart)).Dur("url_change_duration", time.Since(startTime)).Msg("✅ Navigation complete")
+		s.logger.Info().Dur("nav_duration", time.Since(navStart)).Dur("url_change_duration", time.Since(startTime)).Msg("Navigation complete")
 
 		// Wait for body to appear using configurable polling
 		startTime = time.Now()
@@ -1232,7 +1232,7 @@ func (s *ChromeScraper) buildNavigationTask(urlStr, userAgent string, stealth *b
 			return fmt.Errorf("body not found after %d attempts (%v)", maxAttempts, time.Since(startTime))
 		}
 
-		s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("✅ Body found")
+		s.logger.Info().Dur("wait_body_duration", time.Since(startTime)).Msg("Body found")
 		return nil
 	})
 
@@ -1647,7 +1647,7 @@ func (s *ChromeScraper) httpFallback(ctx context.Context, urlStr, userAgent, rea
 		// Success with simple HTTP
 		s.logger.Info().
 			Int("size", len(result.HTML)).
-			Msg("✅ Successfully scraped with simple HTTP fallback")
+			Msg("Successfully scraped with simple HTTP fallback")
 
 		result.Method = "HTTP (simple fallback)"
 		return s.finalizeFallbackResult(result, reason, urlStr)

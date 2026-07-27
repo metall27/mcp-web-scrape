@@ -145,7 +145,8 @@ MCP-сервер для веб-скрапинга с унифицированн�
 - `stealth_mouse` — эмуляция движений мыши
 - `session_id` — именованная persistent-сессия браузера. Позволяет переиспользовать контекст (cookies, localStorage, sessionStorage) между вызовами — залогиниться один раз, затем обходить страницы без ре-аутентификации. Сессии авто-закрываются после неактивности (TTL по умолчанию 30м). Если пусто — каждый вызов ephemeral (cookies очищаются перед навигацией)
 - `close_session` — закрыть именованную сессию после этого вызова (явная очистка). Имеет смысл только с `session_id` — освобождает контекст браузера немедленно, не дожидаясь TTL
-- `observe_changes` — **(#72)** feedback loop для интерактивных действий. По умолчанию `false` (ноль накладных на статичных скрейпах). Когда `true` — после каждого mutating action (click/submit/type/select/navigate) снимается компактный снимок страницы и возвращается в `metadata.action_observations`: URL, `url_changed`, title, top h1/h2 заголовки, видимые error-сообщения, `body_changed` (хэш изменился?), ~300 символов текста. Позволяет LLM понять, сработало ли действие (логин прошёл / контент загрузился / выскочила ошибка), НЕ угадывая точный текст для `wait_for_text`. Рекомендуется для login flows и многошаговых сценариев.
+- `observe_changes` — **(#72)** feedback loop для интерактивных действий. По умолчанию `false` (ноль накладных на статичных скрейпах). Когда `true` — после каждого mutating action (click/submit/type/select/navigate) снимается компактный снимок страницы и возвращается в `metadata.action_observations`: URL, `url_changed`, title, top h1/h2 заголовки, видимые error-сообщения, `body_changed` (хэш изменился?), **auth signals** (cookie count + auth-like localStorage keys — позволяет увидеть что логин прошёл даже если URL не сменился), `settle` report, ~300 символов текста. Позволяет LLM понять, сработало ли действие, НЕ угадывая точный текст для `wait_for_text`. Рекомендуется для login flows и многошаговых сценариев.
+- `smart_settle` — **(#71)** post-action DOM-stability wait. По умолчанию `true` когда есть `actions`. После каждого mutating action (click/submit/type/navigate/...) скрейпер ждёт, пока страница «успокоится»: body наполнится контентом (emergence) и хэш перестанет меняться (stabilize), общий кап ~5с. Эмулирует поведение реального браузера — async auth-fetch или SPA route change занимает время, и снимок мгновенно после клика ловит пустой/stale state (корень проблемы: `size_bytes=0` после navigate на SPA). Best-effort и non-fatal: таймаут settle просто снимает текущее состояние. Поставьте `false` только если нужны мгновенные снимки после action.
 - `actions` — массив интерактивных действий (см. ниже)
 
 **Интерактивные действия** (click, type, scroll):
@@ -166,16 +167,19 @@ MCP-сервер для веб-скрапинга с унифицированн�
 - `wait_for`, `wait_for_text`, `hover`
 - `select_option`, `execute_js`, `upload_file`
 - `navigate` — переход на новый URL внутри той же сессии
+- `wait_for_navigation` — **(#71)** ждать смены URL (server redirect или client-side SPA routing). Таймаут NON-FATAL (soft)
+- `wait_for_content` — **(#71)** ждать, пока body наполнится контентом и хэш стабилизируется (решает проблему пустой страницы после navigate на SPA). Таймаут NON-FATAL (soft)
 
-Требуемые поля по типу: click/submit/scroll_to/wait_for/hover → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text/navigate → {text}. Опционально для всех: {timeout, retries}.
+Требуемые поля по типу: click/submit/scroll_to/wait_for/hover → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text/navigate → {text}; wait_for_navigation/wait_for_content → {} (без обязательных полей). Опционально для всех: {timeout, retries}.
 
-> **(#72) Soft-wait:** таймаут `wait_for` / `wait_for_text` — НЕ фатальный. Ранее такой таймаут абортил весь scrape (до 90с впустую, страница не возвращалась). Теперь цепочка продолжается, а в `metadata.action_results` появляется запись со `status: "soft_timeout"` и warning. Страница отдаётся в текущем состоянии — LLM может её посмотреть и адаптироваться, а не гадать о причине.
+> **(#72) Soft-wait:** таймаут всех wait-действий (`wait_for`, `wait_for_text`, `wait_for_navigation`, `wait_for_content`) — НЕ фатальный. Ранее такой таймаут абортил весь scrape (до 90с впустую, страница не возвращалась). Теперь цепочка продолжается, а в `metadata.action_results` появляется запись со `status: "soft_timeout"` и warning. Страница отдаётся в текущем состоянии — LLM может её посмотреть и адаптироваться.
 
-**Feedback loop для login-сценариев (#72):**
+**Smart feedback loop для login-сценариев (#71):**
 ```json
 {
   "url": "https://example.com/login",
   "observe_changes": true,
+  "session_id": "mysite",
   "actions": [
     {"type": "type", "selector": "#username", "text": "user"},
     {"type": "type", "selector": "#password", "text": "pass"},
@@ -183,7 +187,7 @@ MCP-сервер для веб-скрапинга с унифицированн�
   ]
 }
 ```
-После каждого mutating action в `metadata.action_observations` приходит компактный снимок (URL, title, заголовки, ошибки, `body_changed`, превью текста). LLM видит: URL сменился с `/login` на `/dashboard` и `errors: []` → логин прошёл. Или `url_changed: false` и `errors: ["Invalid credentials"]` → не прошёл, надо адаптировать. Не нужно угадывать текст для `wait_for_text`.
+`smart_settle=true` (дефолт) автоматически дожидается, пока SPA отреагирует на клик (auth fetch, route change) — не нужно вручную подбирать `wait_for_text` или `wait_time`. В `metadata.action_observations` после каждого action приходит снимок: URL, `url_changed`, заголовки, ошибки, `body_changed`, **auth signals** (cookie count + auth-like localStorage keys — явный сигнал «логин прошёл» даже если URL не сменился), `settle` report, превью текста. LLM видит: cookies 0→2, `auth_keys: ["auth-store"]` → логин прошёл. Или `errors: ["Invalid credentials"]` → не прошёл. Для защищённого контента используйте второй вызов с тем же `session_id` (логин уже сохранён).
 
 **Особенности:**
 - 🌐 JavaScript рендеринг
@@ -845,7 +849,8 @@ Universal tool for **dynamic sites**: GitHub, SPAs, dashboards.
 - `stealth_mouse` — mouse movement emulation
 - `session_id` — named persistent browser session. Reuses the browser context (cookies, localStorage, sessionStorage) across calls — log in once, then browse pages without re-authenticating. Sessions auto-close after inactivity (default TTL 30m). If empty, each call is ephemeral (cookies cleared before navigation)
 - `close_session` — close the named session after this call (explicit cleanup). Only meaningful with `session_id` — releases the browser context immediately instead of waiting for TTL
-- `observe_changes` — **(#72)** feedback loop for interactive actions. Default `false` (zero overhead on static scrapes). When `true`, after each mutating action (click/submit/type/select/navigate) a compact page snapshot is captured and returned in `metadata.action_observations`: URL, `url_changed`, title, top h1/h2 headings, visible error messages, `body_changed` (hash changed?), ~300-char text preview. Lets the LLM judge whether an action had its intended effect (login succeeded / content loaded / error appeared) WITHOUT guessing the exact text for `wait_for_text`. Recommended for login flows and multi-step workflows.
+- `observe_changes` — **(#72)** feedback loop for interactive actions. Default `false` (zero overhead on static scrapes). When `true`, after each mutating action (click/submit/type/select/navigate) a compact page snapshot is captured and returned in `metadata.action_observations`: URL, `url_changed`, title, top h1/h2 headings, visible error messages, `body_changed` (hash changed?), **auth signals** (cookie count + auth-like localStorage keys — lets you see a login actually took effect even when the URL hasn't changed), `settle` report, ~300-char text preview. Lets the LLM judge whether an action had its intended effect WITHOUT guessing the exact text for `wait_for_text`. Recommended for login flows and multi-step workflows.
+- `smart_settle` — **(#71)** post-action DOM-stability wait. Default `true` when `actions` are present. After each mutating action (click/submit/type/navigate/...) the scraper waits for the page to settle — body content emerges and its hash stops changing (~5s cap). This mirrors how a real browser behaves: an async auth fetch or SPA route change takes time, and snapshotting the instant a click returns captures an empty/stale state (the root cause of `size_bytes=0` after navigate on a SPA). Best-effort and non-fatal: a settle timeout just snapshots the current state. Set `false` only if you need instant post-action snapshots.
 - `actions` — array of interactive actions (see below)
 
 **Interactive actions** (click, type, scroll):
@@ -866,16 +871,19 @@ Available actions:
 - `wait_for`, `wait_for_text`, `hover`
 - `select_option`, `execute_js`, `upload_file`
 - `navigate` — navigate to a new URL within the same session
+- `wait_for_navigation` — **(#71)** wait for the page URL to change (server redirect or client-side SPA routing). NON-FATAL timeout (soft)
+- `wait_for_content` — **(#71)** wait until body has non-trivial content AND its hash stops changing (solves the empty-page-after-navigate problem on SPAs). NON-FATAL timeout (soft)
 
-Required fields by type: click/submit/scroll_to/wait_for/hover → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text/navigate → {text}. Optional on all: {timeout, retries}.
+Required fields by type: click/submit/scroll_to/wait_for/hover → {selector}; type/upload_file → {selector, text}; select_option → {selector, value}; execute_js/wait_for_text/navigate → {text}; wait_for_navigation/wait_for_content → {} (no required fields). Optional on all: {timeout, retries}.
 
-> **(#72) Soft-wait:** a `wait_for` / `wait_for_text` timeout is NON-FATAL. Previously such a timeout aborted the entire scrape (up to 90s wasted, page never returned). Now the action chain continues, and `metadata.action_results` carries an entry with `status: "soft_timeout"` and a warning. The page is returned in its current state — the LLM can inspect it and adapt, instead of guessing at the cause.
+> **(#72) Soft-wait:** a timeout on any wait action (`wait_for`, `wait_for_text`, `wait_for_navigation`, `wait_for_content`) is NON-FATAL. Previously such a timeout aborted the entire scrape (up to 90s wasted, page never returned). Now the action chain continues, and `metadata.action_results` carries an entry with `status: "soft_timeout"` and a warning. The page is returned in its current state — the LLM can inspect it and adapt, instead of guessing at the cause.
 
-**Feedback loop for login scenarios (#72):**
+**Smart feedback loop for login scenarios (#71):**
 ```json
 {
   "url": "https://example.com/login",
   "observe_changes": true,
+  "session_id": "mysite",
   "actions": [
     {"type": "type", "selector": "#username", "text": "user"},
     {"type": "type", "selector": "#password", "text": "pass"},
@@ -883,7 +891,7 @@ Required fields by type: click/submit/scroll_to/wait_for/hover → {selector}; t
   ]
 }
 ```
-After each mutating action, `metadata.action_observations` receives a compact snapshot (URL, title, headings, errors, `body_changed`, text preview). The LLM sees: URL changed from `/login` to `/dashboard` and `errors: []` → login succeeded. Or `url_changed: false` and `errors: ["Invalid credentials"]` → failed, adapt. No need to guess the `wait_for_text` text.
+`smart_settle=true` (default) automatically waits for the SPA to react to the click (auth fetch, route change) — no need to manually pick a `wait_for_text` or `wait_time`. After each action, `metadata.action_observations` receives a snapshot: URL, `url_changed`, headings, errors, `body_changed`, **auth signals** (cookie count + auth-like localStorage keys — an explicit "login succeeded" signal even when the URL hasn't changed), `settle` report, text preview. The LLM sees: cookies 0→2, `auth_keys: ["auth-store"]` → login succeeded. Or `errors: ["Invalid credentials"]` → failed. For protected content use a second call with the same `session_id` (the login is already persisted). No need to guess the `wait_for_text` text.
 
 **Features:**
 - 🌐 JavaScript rendering

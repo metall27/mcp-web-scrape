@@ -163,6 +163,52 @@ func TestScrapeJSSchemaHasObserveChanges(t *testing.T) {
 	}
 }
 
+// TestScrapeJSSchemaHasSmartSettle guards issue #71: the scrape_with_js tool
+// schema must advertise the smart_settle parameter and it must default to true.
+// smart_settle is the post-action DOM-stability wait that solves empty-content
+// snapshots after navigate/click on SPAs — a missing or mis-defaulted entry
+// means the LLM never learns the feature exists and falls back to stale behavior.
+func TestScrapeJSSchemaHasSmartSettle(t *testing.T) {
+	tool := newSchemaOnlyScrapeJSTool(t)
+	props, ok := tool.InputSchema()["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("schema has no properties object")
+	}
+	ss, ok := props["smart_settle"].(map[string]interface{})
+	if !ok {
+		t.Fatal("smart_settle missing from scrape_with_js schema properties")
+	}
+	if ss["type"] != "boolean" {
+		t.Errorf("smart_settle.type = %v, want boolean", ss["type"])
+	}
+	if ss["default"] != true {
+		t.Errorf("smart_settle.default = %v, want true", ss["default"])
+	}
+	desc, _ := ss["description"].(string)
+	if !strings.Contains(desc, "settle") {
+		t.Errorf("smart_settle description does not mention settle; got %q", desc)
+	}
+}
+
+// TestActionsSchemaIncludesNewWaitActions guards issue #71: the schema must
+// advertise wait_for_navigation and wait_for_content — the escape-hatch wait
+// actions for SPA login/navigation flows. Without them the LLM has no way to
+// explicitly wait for URL change or content emergence.
+func TestActionsSchemaIncludesNewWaitActions(t *testing.T) {
+	schemaFields := schemaRequiredFields(t)
+	for _, actionType := range []string{"wait_for_navigation", "wait_for_content"} {
+		if _, ok := schemaFields[actionType]; !ok {
+			t.Errorf("action type %q missing from schema oneOf (issue #71)", actionType)
+			continue
+		}
+		// Both are field-less wait actions: no selector/text required.
+		if len(schemaFields[actionType]) != 0 {
+			t.Errorf("action %q should require no fields beyond type; got %v",
+				actionType, schemaFields[actionType])
+		}
+	}
+}
+
 // newSchemaOnlyScrapeJSTool returns a ScrapeJSTool whose schema is populated.
 // We cannot call NewScrapeJSTool (it needs a browser pool); instead replicate
 // the schema map via buildActionsSchema + the known property set by invoking
