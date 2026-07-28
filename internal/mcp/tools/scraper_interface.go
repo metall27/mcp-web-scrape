@@ -188,6 +188,21 @@ type Result struct {
 	// action ran. Surfaced in metadata so the LLM understands WHY auth
 	// succeeded or failed instead of guessing from an empty body.
 	LoginResult *browser.LoginResult
+
+	// ExtractedData (#77 Tier-3): values pulled from the DOM by an
+	// extract_structured action. Shape depends on the action: an object
+	// {field:value,...} when no container selector was supplied (single
+	// record), or an array of such objects when a container was matched
+	// (catalog/listing mode). Values are always strings (selector + attr
+	// only, no type coercion — variant 2 of the #77 design). Nil when no
+	// extract action ran. Surfaced in metadata.extracted_data.
+	ExtractedData interface{}
+
+	// ExtractReport (#77 Tier-3): qualitative feedback on the extraction —
+	// how many records/fields, which selectors matched nothing (missing),
+	// partial-match warnings. Lets the LLM judge whether the extraction
+	// succeeded and fix selectors when it didn't. Nil when no extract ran.
+	ExtractReport *browser.ExtractReport
 }
 
 // PageDiagnostics is the structured failure payload attached to ScrapeError

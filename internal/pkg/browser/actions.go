@@ -33,6 +33,32 @@ type Action struct {
 	// SubmitSelector is the form submit button (optional — defaults to the
 	// first button[type=submit] inside the password field's <form>).
 	SubmitSelector string
+
+	// Extract structured (#77 Tier-3). The extract_structured action pulls
+	// field values from the DOM by CSS selectors into a JSON object/array,
+	// surfaced in metadata.extracted_data. This is the deterministic,
+	// no-magic counterpart to returning raw markdown and asking the LLM to
+	// parse it: the LLM supplies a field→selector mapping and the tool
+	// returns clean values. See extract.go.
+	//
+	// ExtractSchema maps an output field name to a FieldSpec (selector +
+	// attribute). When Container is empty the result is a single object
+	// {field:value,...}; when set, the tool runs the schema against every
+	// element matching Container and returns an array of objects — the
+	// catalog/listing use case (e.g. one record per .product-card).
+	ExtractSchema map[string]FieldSpec
+	Container     string
+}
+
+// FieldSpec describes one field in an extract_structured schema (#77 Tier-3).
+// Variant 2 of the design discussion: selector + attr only, everything comes
+// back as a string. No numeric/boolean coercion — the LLM parses values in
+// downstream logic, which is both simpler and avoids silent truncation of
+// locale-formatted numbers ("1,299.00" → 1). attr defaults to "text"
+// (element.innerText); "href"/"src"/"data-*" pull the named attribute.
+type FieldSpec struct {
+	Selector string `json:"selector"` // CSS selector within the container (or page when no container)
+	Attr     string `json:"attr"`     // "text" (default) | attribute name: href, src, data-sku, ...
 }
 
 // JSResult хранит результат выполнения execute_js action
@@ -169,6 +195,18 @@ var requiredFields = map[string][]struct {
 		{"password_selector", func(a Action) string { return a.PasswordSelector }},
 		{"password", func(a Action) string { return a.Password }},
 	},
+	// extract_structured (#77 Tier-3): the schema map is required. The
+	// accessor returns "1" when non-empty so the generic empty-string check
+	// in validateAction treats a populated map as valid. container is
+	// optional (single-record mode when omitted).
+	"extract_structured": {
+		{"schema", func(a Action) string {
+			if len(a.ExtractSchema) > 0 {
+				return "1"
+			}
+			return ""
+		}},
+	},
 }
 
 // RequiredField is the exported mirror of an entry in requiredFields: an
@@ -256,6 +294,11 @@ type ActionExecutor struct {
 	// Tier-2), surfaced in metadata so the LLM sees the auth verdict + evidence.
 	// nil when no login action ran in this executor.
 	lastLoginResult *LoginResult
+
+	// lastExtractData / lastExtractReport hold the outcome of the most recent
+	// extract_structured action (#77 Tier-3). Nil/empty when none ran.
+	lastExtractData   interface{}
+	lastExtractReport *ExtractReport
 }
 
 // GetJSResults возвращает результаты всех execute_js действий
@@ -278,6 +321,20 @@ func (e *ActionExecutor) GetObservations() []PageObservation {
 // + evidence — почему сделан такой вывод.
 func (e *ActionExecutor) GetLoginResult() *LoginResult {
 	return e.lastLoginResult
+}
+
+// GetExtractData возвращает извлечённые данные последнего extract_structured
+// action (#77 Tier-3) или nil, если extract не выполнялся. Форма: object для
+// single-режима (без container), array of objects — для container-режима.
+func (e *ActionExecutor) GetExtractData() interface{} {
+	return e.lastExtractData
+}
+
+// GetExtractReport возвращает отчёт последнего extract_structured action
+// (#77 Tier-3) или nil. Содержит records/fields/missing/warnings — качественный
+// фидбек, помогающий LLM понять, какие селекторы не сработали.
+func (e *ActionExecutor) GetExtractReport() *ExtractReport {
+	return e.lastExtractReport
 }
 
 // recordJSResult добавляет или перезаписывает результат execute_js по actionIndex.
@@ -675,6 +732,8 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actio
 		return e.ExecuteNavigate(ctx, action.Text)
 	case "login":
 		return e.ExecuteLogin(ctx, action)
+	case "extract_structured":
+		return e.ExecuteExtract(ctx, action)
 	default:
 		return &ActionValidationError{
 			ActionIndex: actionIndex,
@@ -1271,6 +1330,46 @@ func ParseActions(actionsData []interface{}) ([]Action, error) {
 
 		if retries, ok := actionMap["retries"].(float64); ok {
 			action.Retries = int(retries)
+		}
+
+		// Login composite action fields (#77 Tier-2). These are top-level
+		// string fields on Action; ParseActions must populate them from the
+		// JSON the MCP client sends, or validateAction rejects the action as
+		// "username_selector is required" before Chrome ever runs. This was
+		// missed when login was added — the round-trip test exercised
+		// json.Marshal/Unmarshal (PascalCase field tags), not ParseActions
+		// (snake_case from a map[string]interface{}).
+		if s, ok := actionMap["username_selector"].(string); ok {
+			action.UsernameSelector = s
+		}
+		if s, ok := actionMap["username"].(string); ok {
+			action.Username = s
+		}
+		if s, ok := actionMap["password_selector"].(string); ok {
+			action.PasswordSelector = s
+		}
+		if s, ok := actionMap["password"].(string); ok {
+			action.Password = s
+		}
+		if s, ok := actionMap["submit_selector"].(string); ok {
+			action.SubmitSelector = s
+		}
+
+		// Extract structured action fields (#77 Tier-3). schema is an object
+		// mapping output field names to {selector,attr}; container is an
+		// optional CSS selector enabling array mode. Both arrive as nested
+		// JSON via the MCP action; marshal the schema back to JSON and
+		// unmarshal into the typed FieldSpec map so field names are validated
+		// and attr defaults are applied centrally.
+		if rawSchema, ok := actionMap["schema"]; ok {
+			schema, serr := parseExtractSchema(rawSchema)
+			if serr != nil {
+				return nil, fmt.Errorf("action %d: %w", i, serr)
+			}
+			action.ExtractSchema = schema
+		}
+		if s, ok := actionMap["container"].(string); ok {
+			action.Container = s
 		}
 
 		// Validate required fields eagerly. Rejecting an invalid action here

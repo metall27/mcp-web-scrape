@@ -262,6 +262,10 @@ type scrapeAttemptResult struct {
 	// (#77 Tier-2): success/ambiguous/auth_failed + evidence. nil when no
 	// login action ran. Surfaced in metadata so the LLM sees the auth verdict.
 	loginResult *browser.LoginResult
+	// extractData / extractReport hold the outcome of the most recent
+	// extract_structured action (#77 Tier-3). Nil/empty when none ran.
+	extractData   interface{}
+	extractReport *browser.ExtractReport
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -439,6 +443,9 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 		result.actionObservations = actionExecutor.GetObservations()
 		// #77 Tier-2: login composite action verdict + evidence.
 		result.loginResult = actionExecutor.GetLoginResult()
+		// #77 Tier-3: extract_structured data + report.
+		result.extractData = actionExecutor.GetExtractData()
+		result.extractReport = actionExecutor.GetExtractReport()
 	}
 
 	return result
@@ -633,6 +640,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var networkSummary *browser.NetworkSummary
 	var domSignals *browser.DOMSignals
 	var loginResult *browser.LoginResult
+	var extractData interface{}
+	var extractReport *browser.ExtractReport
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -774,6 +783,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		networkSummary = attemptResult.networkSummary
 		domSignals = attemptResult.domSignals
 		loginResult = attemptResult.loginResult
+		extractData = attemptResult.extractData
+		extractReport = attemptResult.extractReport
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -892,6 +903,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		NetworkSummary:     networkSummary,
 		DOMSignals:         domSignals,
 		LoginResult:        loginResult,
+		ExtractedData:      extractData,
+		ExtractReport:      extractReport,
 		Method:             s.Name(),
 	}
 

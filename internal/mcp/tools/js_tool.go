@@ -222,6 +222,44 @@ func buildActionsSchema() map[string]interface{} {
 					"required":             []string{"type", "username_selector", "username", "password_selector", "password"},
 					"additionalProperties": false,
 				},
+				// --- extract structured action (#77 Tier-3) ---
+				map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"extract_structured"},
+							"description": "Composite extraction action (#77 Tier-3): pulls field values from the DOM by CSS selectors into a clean JSON object (single record) or array (catalog/listing). Returns metadata.extracted_data + metadata.extract_report (records/fields/missing/warnings) so you see which selectors resolved and which missed. Prefer this over returning raw markdown and parsing it yourself for structured data — tables, product cards, listings. Design: selector + attr only, values are always strings (no type coercion); parse numbers/dates in your downstream logic. No container → one object; container selector → one object per matched element.",
+						},
+						"schema": map[string]interface{}{
+							"type":        "object",
+							"description": "Map of output field name → {selector, attr}. selector (required): CSS selector for the value source within the container (or page when no container). attr (optional, default \"text\"): attribute to read — \"text\" for innerText, or any HTML attribute (href, src, data-sku, data-price, ...). Example: {\"name\":{\"selector\":\"h1\"},\"price\":{\"selector\":\".price\"},\"link\":{\"selector\":\"a\",\"attr\":\"href\"}}. All values come back as strings.",
+							"additionalProperties": map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"selector": map[string]interface{}{
+										"type":        "string",
+										"description": "CSS selector for this field's value source",
+									},
+									"attr": map[string]interface{}{
+										"type":        "string",
+										"description": "Attribute to read (default \"text\" = innerText). Use \"href\", \"src\", \"data-*\", or any HTML attribute.",
+									},
+								},
+								"required":             []string{"selector"},
+								"additionalProperties": false,
+							},
+						},
+						"container": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional CSS selector enabling array mode: the schema runs against each matched element, producing one record per element (e.g. \".product-card\"). Omit for single-record mode (one object).",
+						},
+						"timeout": timeoutProp(),
+						"retries": retriesProp(),
+					},
+					"required":             []string{"type", "schema"},
+					"additionalProperties": false,
+				},
 			},
 		},
 	}
@@ -629,6 +667,33 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Str("login_status", string(lr.Status)).
 			Strs("evidence", lr.Evidence).
 			Msg("Login result added to metadata")
+	}
+
+	// Add extract_structured results to metadata (#77 Tier-3): the extracted
+	// data (object or array) + a qualitative report (records/fields/missing/
+	// warnings). Lets the LLM consume clean structured values instead of
+	// parsing markdown, and see which selectors missed. Nil when no extract
+	// action ran.
+	if result.ExtractedData != nil {
+		metadata["extracted_data"] = result.ExtractedData
+		if result.ExtractReport != nil {
+			er := result.ExtractReport
+			reportMap := map[string]interface{}{
+				"records": er.Records,
+				"fields":  er.Fields,
+			}
+			if len(er.Missing) > 0 {
+				reportMap["missing"] = er.Missing
+			}
+			if len(er.Warnings) > 0 {
+				reportMap["warnings"] = er.Warnings
+			}
+			metadata["extract_report"] = reportMap
+			t.logger.Info().
+				Int("extract_records", er.Records).
+				Int("extract_fields", er.Fields).
+				Msg("Extract report added to metadata")
+		}
 	}
 
 	// Add execute_js results to metadata if any execute_js actions were run
