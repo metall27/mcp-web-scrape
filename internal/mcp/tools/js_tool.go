@@ -542,6 +542,38 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 			Msg("Network summary added to metadata")
 	}
 
+	// Add DOM signals to metadata (#77): read-only page classification —
+	// login-form presence, SPA/framework markers, anti-bot challenge hints.
+	// Passive observations that help the LLM decide how to proceed (supply
+	// credentials, expect async hydration, retry differently). They never
+	// alter the scrape flow. Nil for HTTP-only scrapes.
+	if result.DOMSignals != nil {
+		ds := result.DOMSignals
+		dsMap := map[string]interface{}{}
+		if ds.HasLoginForm {
+			dsMap["has_login_form"] = true
+		}
+		if ds.IsSPA {
+			dsMap["is_spa"] = true
+		}
+		if ds.Framework != "" {
+			dsMap["framework"] = ds.Framework
+		}
+		if ds.BlockedHint != "" {
+			dsMap["blocked_hint"] = ds.BlockedHint
+		}
+		// Only attach when at least one signal fired — an empty map adds noise.
+		if len(dsMap) > 0 {
+			metadata["dom_signals"] = dsMap
+			t.logger.Debug().
+				Bool("has_login_form", ds.HasLoginForm).
+				Bool("is_spa", ds.IsSPA).
+				Str("framework", ds.Framework).
+				Str("blocked_hint", ds.BlockedHint).
+				Msg("DOM signals added to metadata")
+		}
+	}
+
 	// Add execute_js results to metadata if any execute_js actions were run
 	if len(result.JSResults) > 0 {
 		jsResultsMap := make([]map[string]interface{}, len(result.JSResults))

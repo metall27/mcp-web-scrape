@@ -254,6 +254,10 @@ type scrapeAttemptResult struct {
 	// request log. Surfaced in metadata so the LLM can diagnose auth-required
 	// and blocked pages without guessing.
 	networkSummary *browser.NetworkSummary
+	// domSignals is the read-only classify_page result for this attempt
+	// (#77): login-form presence, SPA/framework, anti-bot hints. Passive
+	// observations — they inform the LLM but never alter scrape flow.
+	domSignals *browser.DOMSignals
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -321,6 +325,14 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 				summary := netMon.Summary()
 				result.networkSummary = &summary
 			}
+
+			// classify_page (#77): read-only DOM probe for login-form
+			// presence, SPA/framework markers, and anti-bot challenge hints.
+			// Run after settle + actions so it sees the final page state.
+			// Non-fatal: a failed Evaluate leaves zero signals. Passive
+			// observation — informs the LLM, never mutates page state.
+			signals := browser.ClassifyPage(ctx)
+			result.domSignals = &signals
 
 			// Capture localStorage for named sessions. By now the page is on
 			// its real origin (post-navigation), so localStorage is readable
@@ -613,6 +625,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var actionResults []browser.ActionResult
 	var actionObservations []browser.PageObservation
 	var networkSummary *browser.NetworkSummary
+	var domSignals *browser.DOMSignals
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -752,6 +765,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		actionResults = attemptResult.actionResults
 		actionObservations = attemptResult.actionObservations
 		networkSummary = attemptResult.networkSummary
+		domSignals = attemptResult.domSignals
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -868,6 +882,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		ActionResults:      actionResults,
 		ActionObservations: actionObservations,
 		NetworkSummary:     networkSummary,
+		DOMSignals:         domSignals,
 		Method:             s.Name(),
 	}
 
