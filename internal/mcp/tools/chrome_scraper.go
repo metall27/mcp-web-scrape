@@ -258,6 +258,10 @@ type scrapeAttemptResult struct {
 	// (#77): login-form presence, SPA/framework, anti-bot hints. Passive
 	// observations — they inform the LLM but never alter scrape flow.
 	domSignals *browser.DOMSignals
+	// loginResult is the outcome of the most recent login composite action
+	// (#77 Tier-2): success/ambiguous/auth_failed + evidence. nil when no
+	// login action ran. Surfaced in metadata so the LLM sees the auth verdict.
+	loginResult *browser.LoginResult
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -433,6 +437,8 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 		// #72: collect per-action outcomes and page observations
 		result.actionResults = actionExecutor.GetResults()
 		result.actionObservations = actionExecutor.GetObservations()
+		// #77 Tier-2: login composite action verdict + evidence.
+		result.loginResult = actionExecutor.GetLoginResult()
 	}
 
 	return result
@@ -626,6 +632,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var actionObservations []browser.PageObservation
 	var networkSummary *browser.NetworkSummary
 	var domSignals *browser.DOMSignals
+	var loginResult *browser.LoginResult
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -766,6 +773,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		actionObservations = attemptResult.actionObservations
 		networkSummary = attemptResult.networkSummary
 		domSignals = attemptResult.domSignals
+		loginResult = attemptResult.loginResult
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -883,6 +891,7 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		ActionObservations: actionObservations,
 		NetworkSummary:     networkSummary,
 		DOMSignals:         domSignals,
+		LoginResult:        loginResult,
 		Method:             s.Name(),
 	}
 

@@ -14,12 +14,25 @@ import (
 
 // Action представляет одно интерактивное действие
 type Action struct {
-	Type     string        // Тип действия: click, type, scroll_to, wait_for, etc.
+	Type     string        // Тип действия: click, type, scroll_to, wait_for, login, etc.
 	Selector string        // CSS selector для элемента
-	Text     string        // Текст для ввода (для type)
+	Text     string        // Текст для ввода (для type) или URL (для navigate)
 	Value    string        // Значение (для select_option)
 	Timeout  time.Duration // Timeout для ожидания
 	Retries  int           // Количество ретраев при ошибке
+
+	// Login composite action (#77 Tier-2). login fills the username + password
+	// fields, submits, and verifies the outcome (URL left the login form / auth
+	// signals appeared). Unlike a manual type→type→click chain, login returns
+	// a structured LoginResult with evidence so the LLM sees WHY auth
+	// succeeded or failed. All four fields below are required for type=login.
+	UsernameSelector string // CSS selector for the username/email field
+	Username         string // credential value for the username field
+	PasswordSelector string // CSS selector for the password field
+	Password         string // credential value for the password field
+	// SubmitSelector is the form submit button (optional — defaults to the
+	// first button[type=submit] inside the password field's <form>).
+	SubmitSelector string
 }
 
 // JSResult хранит результат выполнения execute_js action
@@ -150,6 +163,12 @@ var requiredFields = map[string][]struct {
 	"execute_js":          {{"text", func(a Action) string { return a.Text }}},
 	"upload_file":         {{"selector", func(a Action) string { return a.Selector }}, {"text", func(a Action) string { return a.Text }}},
 	"navigate":            {{"text", func(a Action) string { return a.Text }}},
+	"login": {
+		{"username_selector", func(a Action) string { return a.UsernameSelector }},
+		{"username", func(a Action) string { return a.Username }},
+		{"password_selector", func(a Action) string { return a.PasswordSelector }},
+		{"password", func(a Action) string { return a.Password }},
+	},
 }
 
 // RequiredField is the exported mirror of an entry in requiredFields: an
@@ -232,6 +251,11 @@ type ActionExecutor struct {
 	// have. See settle.go.
 	smartSettle bool
 	settleCfg   SettleConfig
+
+	// lastLoginResult holds the outcome of the most recent login action (#77
+	// Tier-2), surfaced in metadata so the LLM sees the auth verdict + evidence.
+	// nil when no login action ran in this executor.
+	lastLoginResult *LoginResult
 }
 
 // GetJSResults возвращает результаты всех execute_js действий
@@ -247,6 +271,13 @@ func (e *ActionExecutor) GetResults() []ActionResult {
 // GetObservations возвращает наблюдения страницы после mutating actions (#72).
 func (e *ActionExecutor) GetObservations() []PageObservation {
 	return e.observations
+}
+
+// GetLoginResult возвращает результат последнего login action (#77 Tier-2) или
+// nil, если login не выполнялся. Содержит verdict (success/ambiguous/auth_failed)
+// + evidence — почему сделан такой вывод.
+func (e *ActionExecutor) GetLoginResult() *LoginResult {
+	return e.lastLoginResult
 }
 
 // recordJSResult добавляет или перезаписывает результат execute_js по actionIndex.
@@ -457,7 +488,7 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 // are read-only w.r.t. the document and are skipped to avoid noise.
 func isMutatingAction(t string) bool {
 	switch t {
-	case "click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js":
+	case "click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js", "login":
 		return true
 	}
 	return false
@@ -642,6 +673,8 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actio
 		return e.ExecuteUploadFile(ctx, action.Selector, action.Text)
 	case "navigate":
 		return e.ExecuteNavigate(ctx, action.Text)
+	case "login":
+		return e.ExecuteLogin(ctx, action)
 	default:
 		return &ActionValidationError{
 			ActionIndex: actionIndex,
