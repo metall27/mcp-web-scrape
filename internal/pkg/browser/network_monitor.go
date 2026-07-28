@@ -99,13 +99,19 @@ func (m *NetworkMonitor) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		return nil
 	}
-	m.started = true
 	m.mu.Unlock()
 
 	// Enable the Network domain so CDP emits request/response events.
 	if err := network.Enable().Do(ctx); err != nil {
 		return err
 	}
+
+	// Mark started only after Enable() succeeded — if Enable fails,
+	// Started() returns false and callers skip Summary() (avoiding
+	// an all-zero snapshot that misleads consumers).
+	m.mu.Lock()
+	m.started = true
+	m.mu.Unlock()
 
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch e := ev.(type) {
