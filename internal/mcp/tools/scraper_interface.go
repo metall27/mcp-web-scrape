@@ -181,6 +181,13 @@ type Result struct {
 	// LLM decide how to proceed; they never alter scrape flow. Nil when no
 	// Chrome scrape ran (HTTP-only) or classify_page was skipped.
 	DOMSignals *browser.DOMSignals
+
+	// LoginResult (#77 Tier-2): structured outcome of the login composite
+	// action — success/ambiguous/auth_failed verdict + qualitative evidence
+	// (URL changed, cookies grew, auth keys appeared). Nil when no login
+	// action ran. Surfaced in metadata so the LLM understands WHY auth
+	// succeeded or failed instead of guessing from an empty body.
+	LoginResult *browser.LoginResult
 }
 
 // PageDiagnostics is the structured failure payload attached to ScrapeError

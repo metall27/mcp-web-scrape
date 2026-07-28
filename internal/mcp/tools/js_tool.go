@@ -187,6 +187,41 @@ func buildActionsSchema() map[string]interface{} {
 				// --- field-less wait actions (escape hatch for SPA flows, #71) ---
 				noFields("wait_for_navigation", "Wait until the page URL changes from its value at the moment this action starts (detects both server redirects and client-side SPA routing via the history API). Useful after click/submit to confirm a navigation actually happened. A timeout is NON-FATAL (soft) — the scrape continues. Note: a client-side route change may update the URL before the DOM re-renders; follow with wait_for_content if you need the rendered content."),
 				noFields("wait_for_content", "Wait until document.body has non-trivial content AND its hash stops changing (the page has settled). Solves the empty-page-after-navigate problem on SPAs: after navigate the page loads as an empty shell and React/Vue/Zustand render content asynchronously. A timeout is NON-FATAL (soft)."),
+				// --- login composite action (#77 Tier-2) ---
+				map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"login"},
+							"description": "Composite login action (#77 Tier-2): fills username + password fields, submits, and verifies the outcome. Returns a structured login_result in metadata with a verdict (success/ambiguous/auth_failed) and evidence (URL changed, cookies grew, auth keys appeared) — so you see WHY auth worked or failed, not just success/error. Prefer this over a manual type→type→click chain for login flows. The submit selector is optional: if omitted, the tool auto-detects button[type=submit] nearest the password field. Credentials are used only for this action; pair with session_id to persist the authenticated session across calls.",
+						},
+						"username_selector": map[string]interface{}{
+							"type":        "string",
+							"description": "CSS selector for the username/email input field",
+						},
+						"username": map[string]interface{}{
+							"type":        "string",
+							"description": "Username or email credential value",
+						},
+						"password_selector": map[string]interface{}{
+							"type":        "string",
+							"description": "CSS selector for the password input field (input[type=password])",
+						},
+						"password": map[string]interface{}{
+							"type":        "string",
+							"description": "Password credential value",
+						},
+						"submit_selector": map[string]interface{}{
+							"type":        "string",
+							"description": "CSS selector for the submit button (optional — auto-detected as button[type=submit] nearest the password field when omitted)",
+						},
+						"timeout": timeoutProp(),
+						"retries": retriesProp(),
+					},
+					"required":             []string{"type", "username_selector", "username", "password_selector", "password"},
+					"additionalProperties": false,
+				},
 			},
 		},
 	}
@@ -572,6 +607,28 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 				Str("blocked_hint", ds.BlockedHint).
 				Msg("DOM signals added to metadata")
 		}
+	}
+
+	// Add login result to metadata (#77 Tier-2): the verdict + evidence of a
+	// login composite action. Lets the LLM see WHY auth succeeded or failed
+	// (URL changed, cookies grew, auth keys appeared) instead of guessing.
+	// Nil when no login action ran.
+	if result.LoginResult != nil {
+		lr := result.LoginResult
+		loginMap := map[string]interface{}{
+			"status": string(lr.Status),
+		}
+		if len(lr.Evidence) > 0 {
+			loginMap["evidence"] = lr.Evidence
+		}
+		if lr.SubmitSelectorUsed != "" {
+			loginMap["submit_selector_used"] = lr.SubmitSelectorUsed
+		}
+		metadata["login_result"] = loginMap
+		t.logger.Info().
+			Str("login_status", string(lr.Status)).
+			Strs("evidence", lr.Evidence).
+			Msg("Login result added to metadata")
 	}
 
 	// Add execute_js results to metadata if any execute_js actions were run
