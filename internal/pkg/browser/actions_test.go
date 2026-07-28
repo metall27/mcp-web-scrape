@@ -348,13 +348,19 @@ func TestSoftTimeoutError(t *testing.T) {
 // (and thus warrant a PageObservation snapshot). The classification is part of
 // the #72 contract — changing it silently changes which actions get observed.
 func TestIsMutatingAction(t *testing.T) {
-	mutating := []string{"click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js"}
+	// These action types change page state and thus warrant a
+	// PageObservation snapshot + smart-settle wait. Mirrors isMutatingAction
+	// in actions.go — keep both lists in lockstep when adding/changing types.
+	mutating := []string{"click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js", "login"}
 	for _, mt := range mutating {
 		if !isMutatingAction(mt) {
 			t.Errorf("isMutatingAction(%q) = false, want true", mt)
 		}
 	}
-	nonMutating := []string{"wait_for", "wait_for_text", "scroll_to", "hover"}
+	// Read-only actions: wait/scroll/hover don't change the document, so
+	// snapshotting after them is noise. extract_structured (#77 Tier-3) is
+	// also read-only — it only reads the DOM, no click/type/navigate.
+	nonMutating := []string{"wait_for", "wait_for_text", "wait_for_navigation", "wait_for_content", "scroll_to", "hover", "extract_structured"}
 	for _, nt := range nonMutating {
 		if isMutatingAction(nt) {
 			t.Errorf("isMutatingAction(%q) = true, want false", nt)
