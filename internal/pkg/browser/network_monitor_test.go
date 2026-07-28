@@ -169,6 +169,22 @@ func TestNetworkMonitorIsIdleEmpty(t *testing.T) {
 	}
 }
 
+// TestNetworkMonitorStarted verifies the Started() guard: a fresh monitor
+// reports false, after the started flag is set it reports true. chrome_scraper
+// uses this to skip Summary() when Start() errored (avoiding all-zero metadata).
+func TestNetworkMonitorStarted(t *testing.T) {
+	m := NewNetworkMonitor()
+	if m.Started() {
+		t.Error("fresh monitor should report Started() == false")
+	}
+	m.mu.Lock()
+	m.started = true
+	m.mu.Unlock()
+	if !m.Started() {
+		t.Error("monitor with started=true should report Started() == true")
+	}
+}
+
 // TestNetworkMonitorStartIdempotent verifies Start can be called twice without
 // re-registering the listener (the started guard).
 func TestNetworkMonitorStartIdempotent(t *testing.T) {

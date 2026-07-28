@@ -314,8 +314,13 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 
 			// Capture the network summary now that all tasks (navigation +
 			// actions) have run. Surfaced in metadata for diagnostics (#77).
-			summary := netMon.Summary()
-			result.networkSummary = &summary
+			// Only populate it when the monitor actually started — otherwise
+			// Summary() returns all zeros and total_requests:0 in metadata
+			// misleads the LLM into thinking the page made no requests.
+			if netMon.Started() {
+				summary := netMon.Summary()
+				result.networkSummary = &summary
+			}
 
 			// Capture localStorage for named sessions. By now the page is on
 			// its real origin (post-navigation), so localStorage is readable

@@ -34,7 +34,9 @@ type NetworkMonitor struct {
 	mu sync.Mutex
 
 	// inflight counts requests started but not yet finished. Atomic for the hot
-	// path. Decrement happens on EventLoadingFinished.
+	// path. Decrement happens on EventLoadingFinished AND EventLoadingFailed
+	// (failed requests never reach Finished — without the Failed handler the
+	// counter leaks and IsIdle() sticks false forever).
 	inflight int64
 
 	// lastActivityAt tracks when the most recent network response arrived, for
@@ -116,6 +118,12 @@ func (m *NetworkMonitor) Start(ctx context.Context) error {
 		case *network.EventLoadingFinished:
 			atomic.AddInt64(&m.inflight, -1)
 			atomic.AddInt64(&m.completed, 1)
+		case *network.EventLoadingFailed:
+			// Failed requests (DNS error, timeout, connection refused) never
+			// fire EventLoadingFinished — without this handler inflight would
+			// leak on every failed request, making IsIdle() return false forever.
+			atomic.AddInt64(&m.inflight, -1)
+			atomic.AddInt64(&m.completed, 1)
 		}
 	})
 	return nil
@@ -156,6 +164,16 @@ func (m *NetworkMonitor) recordResponse(e *network.EventResponseReceived) {
 	if status == 429 || status == 503 {
 		m.blockedCDN = true
 	}
+}
+
+// Started reports whether the CDP listener was successfully registered.
+// Callers that captured a *NetworkMonitor but may have skipped Start (e.g. it
+// errored) should guard Summary() with this to avoid emitting an all-zero
+// summary that misleads consumers.
+func (m *NetworkMonitor) Started() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.started
 }
 
 // Inflight returns the current count of started-but-not-finished requests.
