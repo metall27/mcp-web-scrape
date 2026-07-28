@@ -141,8 +141,10 @@ func (e *ActionExecutor) detectSubmitSelector(ctx context.Context, passwordSel s
 	}
 	switch where {
 	case "button":
-		sel = passwordSel + " ~ button[type=submit], " + passwordSel + " ~ input[type=submit]"
-		// The closest(form) approach found one; use a form-scoped CSS path.
+		// The closest(form) probe found a submit button in the password
+		// field's <form>. Use a form-scoped CSS path so chromedp.Click targets
+		// it. TrimLeft(passwordSel, "> ") strips a leading combinator if the
+		// caller passed a child selector — keeps the :has() argument valid.
 		sel = fmt.Sprintf(`form:has(%s) button[type="submit"], form:has(%s) input[type="submit"]`,
 			strings.TrimLeft(passwordSel, "> "), strings.TrimLeft(passwordSel, "> "))
 	case "page":
@@ -204,7 +206,7 @@ func (e *ActionExecutor) loginProbe(ctx context.Context, tag string) loginProbeR
 	var probe loginProbeResult
 	js := `(() => {
 		let cookies = 0;
-		try { cookies = document.cookie.length; } catch(e) {}
+		try { cookies = document.cookie.split(';').filter(c => c.trim()).length; } catch(e) {}
 		const authKeys = [];
 		try {
 			const re = /(auth|token|session|user|jwt|bearer)/i;
