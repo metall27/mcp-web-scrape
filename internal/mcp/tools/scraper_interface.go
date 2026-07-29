@@ -203,6 +203,21 @@ type Result struct {
 	// partial-match warnings. Lets the LLM judge whether the extraction
 	// succeeded and fix selectors when it didn't. Nil when no extract ran.
 	ExtractReport *browser.ExtractReport
+
+	// ContentCandidates (#83): API/XHR responses that looked like they
+	// might carry the page's real content — detected when a SPA has large
+	// JSON/text API responses but a thin rendered DOM (content in the API,
+	// not the DOM). Surfaced in metadata as a hint. Empty for non-SPA pages
+	// or when detection didn't fire.
+	ContentCandidates []browser.ContentCandidate
+
+	// CapturedResponses (#83): the actual bodies of content-candidate
+	// responses, fetched via CDP GetResponseBody after the detection
+	// heuristic fired. Each body is truncated per CaptureConfig to keep
+	// metadata bounded. Lets the LLM access content that the DOM doesn't
+	// reflect without a second scrape call. Empty when detection didn't
+	// fire or no bodies could be captured.
+	CapturedResponses []browser.CapturedResponse
 }
 
 // PageDiagnostics is the structured failure payload attached to ScrapeError

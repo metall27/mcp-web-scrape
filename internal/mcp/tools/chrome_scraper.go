@@ -266,6 +266,18 @@ type scrapeAttemptResult struct {
 	// extract_structured action (#77 Tier-3). Nil/empty when none ran.
 	extractData   interface{}
 	extractReport *browser.ExtractReport
+
+	// contentCandidates holds API/XHR responses that looked like they might
+	// carry the page's real content (#83). Populated by the detection
+	// heuristic when the DOM is thin relative to API responses. Surfaced in
+	// metadata so the LLM knows the content is in the API.
+	contentCandidates []browser.ContentCandidate
+
+	// capturedResponses holds the bodies of content-candidate responses that
+	// were fetched via CDP GetResponseBody (#83). Populated when the detection
+	// heuristic fires AND auto-capture is not disabled. Each body is truncated
+	// per CaptureConfig to keep metadata bounded.
+	capturedResponses []browser.CapturedResponse
 }
 
 // scrapeAttempt performs a single scrape attempt (Phase 5: Retry Loop)
@@ -341,6 +353,30 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 			// observation — informs the LLM, never mutates page state.
 			signals := browser.ClassifyPage(ctx)
 			result.domSignals = &signals
+
+			// #83 Content detection + auto-capture. Some SPAs (e.g. rebrainme)
+			// receive their content via API/XHR but never mount it into the DOM —
+			// the HTML stays a thin shell. When we detect this pattern (SPA +
+			// large API responses + thin DOM), we capture the response bodies via
+			// CDP GetResponseBody so the LLM gets the actual content instead of
+			// an empty shell. See issue #83 for the full diagnosis.
+			if netMon.Started() && signals.IsSPA {
+				candidates := detectContentCandidates(ctx, netMon, &signals)
+				result.contentCandidates = candidates
+
+				if len(candidates) > 0 {
+					// Detection fired — capture the response bodies.
+					reqIDs := netMon.ContentCandidateRequestIDs(browser.DefaultContentCandidateFilter())
+					captured := browser.CaptureResponseBodies(ctx, netMon, reqIDs, browser.DefaultCaptureConfig())
+					result.capturedResponses = captured
+
+					s.logger.Info().
+						Str("url", urlStr).
+						Int("candidates", len(candidates)).
+						Int("captured", len(captured)).
+						Msg("Content in API, not DOM — captured response bodies (#83)")
+				}
+			}
 
 			// Capture localStorage for named sessions. By now the page is on
 			// its real origin (post-navigation), so localStorage is readable
@@ -642,6 +678,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var loginResult *browser.LoginResult
 	var extractData interface{}
 	var extractReport *browser.ExtractReport
+	var contentCandidates []browser.ContentCandidate
+	var capturedResponses []browser.CapturedResponse
 
 	// Retry loop
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -785,6 +823,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		loginResult = attemptResult.loginResult
 		extractData = attemptResult.extractData
 		extractReport = attemptResult.extractReport
+		contentCandidates = attemptResult.contentCandidates
+		capturedResponses = attemptResult.capturedResponses
 		successfulAttempt = true
 
 		// Mark proxy as successful if applicable
@@ -905,6 +945,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		LoginResult:        loginResult,
 		ExtractedData:      extractData,
 		ExtractReport:      extractReport,
+		ContentCandidates:  contentCandidates,
+		CapturedResponses:  capturedResponses,
 		Method:             s.Name(),
 	}
 

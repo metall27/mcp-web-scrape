@@ -696,6 +696,31 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 		}
 	}
 
+	// Add captured API responses to metadata (#83). When the scraper detects
+	// that the page's content lives in API responses rather than the rendered
+	// DOM (SPA + large API responses + thin DOM), it captures the response
+	// bodies via CDP and surfaces them here so the LLM gets the actual content
+	// instead of an empty shell. This is automatic — no opt-in flag needed.
+	if len(result.CapturedResponses) > 0 {
+		captured := make([]map[string]interface{}, len(result.CapturedResponses))
+		for i, cr := range result.CapturedResponses {
+			entry := map[string]interface{}{
+				"url":       cr.URL,
+				"mime_type": cr.MimeType,
+				"size":      cr.Size,
+				"body":      cr.Body,
+			}
+			if cr.Truncated {
+				entry["truncated"] = true
+			}
+			captured[i] = entry
+		}
+		metadata["captured_api_responses"] = captured
+		t.logger.Info().
+			Int("captured_count", len(result.CapturedResponses)).
+			Msg("Captured API responses added to metadata (#83 content-in-API)")
+	}
+
 	// Add execute_js results to metadata if any execute_js actions were run
 	if len(result.JSResults) > 0 {
 		jsResultsMap := make([]map[string]interface{}, len(result.JSResults))
