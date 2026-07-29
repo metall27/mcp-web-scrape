@@ -361,7 +361,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 			// CDP GetResponseBody so the LLM gets the actual content instead of
 			// an empty shell. See issue #83 for the full diagnosis.
 			if netMon.Started() && signals.IsSPA {
-				candidates := detectContentCandidates(ctx, netMon, &signals, html)
+				candidates := detectContentCandidates(ctx, netMon, &signals)
 				result.contentCandidates = candidates
 
 				if len(candidates) > 0 {

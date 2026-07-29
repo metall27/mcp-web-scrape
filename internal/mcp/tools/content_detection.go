@@ -37,7 +37,7 @@ const minAPIContentSize int64 = 10240 // 10KB
 //
 // ctx is currently unused (detection is pure computation on already-collected
 // data), but accepted for future probes that may need a CDP round-trip.
-func detectContentCandidates(_ context.Context, monitor *browser.NetworkMonitor, signals *browser.DOMSignals, html string) []browser.ContentCandidate {
+func detectContentCandidates(_ context.Context, monitor *browser.NetworkMonitor, signals *browser.DOMSignals) []browser.ContentCandidate {
 	if monitor == nil || signals == nil || !signals.IsSPA {
 		return nil
 	}

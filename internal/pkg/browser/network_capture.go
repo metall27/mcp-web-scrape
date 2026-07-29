@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/chromedp/cdproto/network"
 )
@@ -140,36 +139,4 @@ func (m *NetworkMonitor) findRequestByID(idStr string) *NetworkRequest {
 		}
 	}
 	return nil
-}
-
-// ContentCandidatesFromCaptured converts captured response bodies to
-// ContentCandidate entries (URL + MIME + size) for diagnostics metadata. Used
-// when the caller wants to report WHAT was captured without including the
-// bodies themselves.
-func ContentCandidatesFromCaptured(captured []CapturedResponse) []ContentCandidate {
-	if len(captured) == 0 {
-		return nil
-	}
-	out := make([]ContentCandidate, len(captured))
-	for i, c := range captured {
-		out[i] = ContentCandidate{
-			URL:               c.URL,
-			MimeType:          c.MimeType,
-			EncodedDataLength: c.Size,
-		}
-	}
-	return out
-}
-
-// formatCaptureSummary returns a compact one-line description of captured
-// responses for logging, e.g. "2 responses, 42.5KB total".
-func formatCaptureSummary(captured []CapturedResponse) string {
-	if len(captured) == 0 {
-		return "0 responses"
-	}
-	total := int64(0)
-	for _, c := range captured {
-		total += c.Size
-	}
-	return fmt.Sprintf("%d responses, %.1fKB total", len(captured), float64(total)/1024)
 }
