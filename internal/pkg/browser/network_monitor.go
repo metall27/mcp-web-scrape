@@ -73,9 +73,13 @@ type AuthFailure struct {
 
 // NetworkRequest is a single observed request/response, for diagnostics.
 type NetworkRequest struct {
-	Method string `json:"method,omitempty"` // GET, POST, ... (from request)
-	URL    string `json:"url"`
-	Status int    `json:"status"`
+	Method            string `json:"method,omitempty"` // GET, POST, ... (from request)
+	URL               string `json:"url"`
+	Status            int    `json:"status"`
+	RequestID         string `json:"-"`                             // CDP request id — internal, not serialized
+	MimeType          string `json:"mime_type,omitempty"`           // application/json, text/html, ...
+	ResourceType      string `json:"resource_type,omitempty"`       // XHR, Fetch, Document, ...
+	EncodedDataLength int64  `json:"encoded_data_length,omitempty"` // final body size in bytes (updated on LoadingFinished)
 }
 
 // maxRecordedRequests caps the request log so a request-heavy SPA doesn't
@@ -122,6 +126,7 @@ func (m *NetworkMonitor) Start(ctx context.Context) error {
 		case *network.EventResponseReceived:
 			m.recordResponse(e)
 		case *network.EventLoadingFinished:
+			m.recordFinalSize(e.RequestID, int64(e.EncodedDataLength))
 			atomic.AddInt64(&m.inflight, -1)
 			atomic.AddInt64(&m.completed, 1)
 		case *network.EventLoadingFailed:
@@ -154,8 +159,11 @@ func (m *NetworkMonitor) recordResponse(e *network.EventResponseReceived) {
 		// the request via a separate listener below is overkill — leave blank,
 		// status+url is what diagnostics need.
 		m.requests = append(m.requests, NetworkRequest{
-			URL:    url,
-			Status: status,
+			URL:          url,
+			Status:       status,
+			RequestID:    string(e.RequestID),
+			MimeType:     e.Response.MimeType,
+			ResourceType: string(e.Type),
 		})
 	}
 
@@ -170,6 +178,125 @@ func (m *NetworkMonitor) recordResponse(e *network.EventResponseReceived) {
 	if status == 429 || status == 503 {
 		m.blockedCDN = true
 	}
+}
+
+// recordFinalSize updates EncodedDataLength for a request when its body has
+// finished loading. EventResponseReceived only carries a partial size; the
+// authoritative total arrives on EventLoadingFinished. Called from the
+// ListenTarget goroutine.
+func (m *NetworkMonitor) recordFinalSize(reqID network.RequestID, size int64) {
+	if reqID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.requests {
+		if m.requests[i].RequestID == string(reqID) {
+			m.requests[i].EncodedDataLength = size
+			return
+		}
+	}
+}
+
+// ContentCandidateFilter defines which captured responses are worth surfacing
+// to the LLM as potential content sources (#83). These are responses that
+// likely carry the page's real content in a form the DOM doesn't reflect —
+// the classic "lazy-loaded SPA" pattern where the API returns 87KB of JSON
+// but the DOM stays thin.
+type ContentCandidateFilter struct {
+	// MinSize is the minimum response body size in bytes. Responses smaller
+	// than this are ignored — they're almost certainly not the main content.
+	// Default: 2048 (2KB).
+	MinSize int64
+
+	// MimeTypes lists acceptable MIME types (prefix match). Defaults to
+	// application/json and text/.
+	MimeTypes []string
+}
+
+// DefaultContentCandidateFilter returns the standard filter: XHR/Fetch
+// responses, JSON or text, at least 2KB, status 200.
+func DefaultContentCandidateFilter() ContentCandidateFilter {
+	return ContentCandidateFilter{
+		MinSize:   2048,
+		MimeTypes: []string{"application/json", "text/"},
+	}
+}
+
+// ContentCandidate is a response that likely carries page content in a format
+// the DOM doesn't reflect (e.g. a lazy-loaded SPA API call). Surfaced when the
+// scraper detects that the DOM is thin relative to API responses (#83).
+type ContentCandidate struct {
+	URL               string `json:"url"`
+	MimeType          string `json:"mime_type,omitempty"`
+	EncodedDataLength int64  `json:"encoded_data_length,omitempty"`
+}
+
+// matchesContentFilter tests a single recorded request against the content
+// candidate filter. Shared by ContentCandidates and ContentCandidateRequestIDs
+// to keep the filter logic in one place.
+func matchesContentFilter(r NetworkRequest, filter ContentCandidateFilter) bool {
+	if r.Status != 200 {
+		return false
+	}
+	// Only XHR/Fetch — Document, Script, Image etc. are not content APIs.
+	if r.ResourceType != string(network.ResourceTypeXHR) &&
+		r.ResourceType != string(network.ResourceTypeFetch) {
+		return false
+	}
+	if r.EncodedDataLength < filter.MinSize {
+		return false
+	}
+	for _, mt := range filter.MimeTypes {
+		if strings.HasPrefix(r.MimeType, mt) {
+			return true
+		}
+	}
+	return false
+}
+
+// ContentCandidates returns API/XHR responses that might carry the page's real
+// content. Filters on ResourceType (XHR/Fetch only), status 200, MIME type, and
+// minimum body size. Returns a copy; safe to call after the scrape.
+//
+// This is the detection half of #83: when these candidates collectively dwarf
+// the rendered DOM, the content is in the API, not the DOM. The caller decides
+// whether to capture bodies (GetResponseBody) based on this signal.
+func (m *NetworkMonitor) ContentCandidates(filter ContentCandidateFilter) []ContentCandidate {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []ContentCandidate
+	for _, r := range m.requests {
+		if !matchesContentFilter(r, filter) {
+			continue
+		}
+		out = append(out, ContentCandidate{
+			URL:               r.URL,
+			MimeType:          r.MimeType,
+			EncodedDataLength: r.EncodedDataLength,
+		})
+	}
+	return out
+}
+
+// ContentCandidateRequestIDs returns the CDP request IDs for responses that
+// match the content-candidate filter. Needed by CaptureResponseBodies to fetch
+// response bodies via network.GetResponseBody after the page has loaded.
+func (m *NetworkMonitor) ContentCandidateRequestIDs(filter ContentCandidateFilter) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var ids []string
+	for _, r := range m.requests {
+		if !matchesContentFilter(r, filter) {
+			continue
+		}
+		if r.RequestID != "" {
+			ids = append(ids, r.RequestID)
+		}
+	}
+	return ids
 }
 
 // Started reports whether the CDP listener was successfully registered.
@@ -226,6 +353,23 @@ func (m *NetworkMonitor) Summary() NetworkSummary {
 // and exits when that context is canceled (scrape ends). Provided for explicit
 // lifecycle clarity and future use (e.g. detaching the listener early).
 func (m *NetworkMonitor) Stop() {}
+
+// RecordResponseForTest is a test helper that simulates a CDP response event
+// with the given parameters. It records both the response and the final size
+// (as if LoadingFinished fired). For unit tests only — production code uses
+// the ListenTarget event handler.
+func (m *NetworkMonitor) RecordResponseForTest(reqID, url string, status int, mimeType, resourceType string, finalSize int64) {
+	m.recordResponse(&network.EventResponseReceived{
+		RequestID: network.RequestID(reqID),
+		Type:      network.ResourceType(resourceType),
+		Response: &network.Response{
+			URL:      url,
+			Status:   int64(status),
+			MimeType: mimeType,
+		},
+	})
+	m.recordFinalSize(network.RequestID(reqID), finalSize)
+}
 
 // NetworkSummary is the diagnostics-facing snapshot of observed network
 // activity. Returned in scrape metadata so the LLM can see what the page
