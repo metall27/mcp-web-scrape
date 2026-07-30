@@ -138,6 +138,112 @@ func OptsToMap(opts Options) map[string]interface{} {
 	return result
 }
 
+// authFailureCount returns the number of 401/403 failures in result, 0 if nil.
+func authFailureCount(result *Result) int {
+	if result == nil || result.NetworkSummary == nil {
+		return 0
+	}
+	return len(result.NetworkSummary.AuthFailures)
+}
+
+// buildDiagnosticBanner inspects a scrape Result for auth-failure / blocking /
+// fallback signals and, when any are present, returns a human-readable banner
+// that explains what went wrong and what to do next. The banner is meant to be
+// PREPENDED to content[0].text so that any MCP client — even ones that discard
+// the non-standard _metadata field — delivers the diagnosis to the LLM in the
+// one channel guaranteed to reach it (issue #87).
+//
+// Returns "" (no banner) for clean scrapes — zero overhead on success.
+func buildDiagnosticBanner(result *Result) string {
+	if result == nil {
+		return ""
+	}
+
+	// Collect the individual problems detected.
+	var lines []string
+	var actions []string
+
+	requested := result.URL
+	final := result.FinalURL
+
+	// 1. Auth failures (401/403 observed via CDP).
+	if result.NetworkSummary != nil && len(result.NetworkSummary.AuthFailures) > 0 {
+		hint := result.NetworkSummary.AuthFailureHint()
+		if hint != "" {
+			lines = append(lines, "Auth failures: "+hint)
+		}
+	}
+
+	// 2. Login form present + URL changed → redirected to login page.
+	redirectedToLogin := false
+	if result.DOMSignals != nil && result.DOMSignals.HasLoginForm {
+		if final != "" && requested != "" && final != requested {
+			redirectedToLogin = true
+			lines = append(lines, "Redirected to login page: "+final)
+		} else {
+			// Login form on the page even without a redirect.
+			lines = append(lines, "Login form detected on the page")
+		}
+	}
+
+	// 3. CDN / anti-bot blocking.
+	blocked := false
+	if result.DOMSignals != nil && result.DOMSignals.BlockedHint != "" {
+		blocked = true
+		lines = append(lines, "Anti-bot challenge detected: "+result.DOMSignals.BlockedHint)
+	}
+	if result.NetworkSummary != nil && result.NetworkSummary.BlockedByCDN && !blocked {
+		blocked = true
+		lines = append(lines, "CDN-level blocking detected (429/503 responses)")
+	}
+
+	// 4. HTTP fallback after Chrome failure.
+	if result.FallbackReason != "" {
+		lines = append(lines, "HTTP fallback: "+result.FallbackReason)
+		if result.FallbackWarning != "" {
+			lines = append(lines, "  "+result.FallbackWarning)
+		}
+	}
+
+	// Nothing detected — no banner.
+	if len(lines) == 0 {
+		return ""
+	}
+
+	// Build actionable guidance based on the problem type.
+	switch {
+	case authFailureCount(result) > 0 || redirectedToLogin:
+		actions = append(actions,
+			"Auth is required or the session expired. Do NOT blindly retry the same URL.",
+			"To fix: call scrape_with_js with a `login` action (username_selector, password_selector, username, password) and the same session_id, then retry.",
+		)
+	case blocked:
+		actions = append(actions,
+			"The site blocked the request. Try a different user_agent, enable stealth_enabled, or use scrape_url for a static fetch.",
+		)
+	case result.FallbackReason != "":
+		actions = append(actions,
+			"Chrome rendering failed and the body came from a plain HTTP fallback — it may lack dynamic content or session state.",
+		)
+	}
+
+	var b strings.Builder
+	b.WriteString("⚠️ DIAGNOSTIC ALERT — the page content below may NOT be what you requested.\n\n")
+	if requested != "" && final != "" && final != requested {
+		b.WriteString("Requested: " + requested + "\n")
+		b.WriteString("Got: " + final + "\n\n")
+	}
+	for _, l := range lines {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString("\n")
+	for _, a := range actions {
+		b.WriteString(a + "\n")
+	}
+	b.WriteString("\n---\n")
+	return b.String()
+}
+
 // sensitiveQueryKeys — список имён query-параметров, значения которых
 // маскируются в логах/метаданных, чтобы предотвратить утечку кредов (issue #69).
 // Сравнение нечувствительно к регистру.
