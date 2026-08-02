@@ -50,6 +50,35 @@ func buildActionsSchema() map[string]interface{} {
 		}
 	}
 
+	// extractSchemaProp / containerProp are shared by the extract_structured
+	// and paginate oneOf branches (identical semantics). Defined once to keep
+	// the two branches in sync.
+	extractSchemaProp := map[string]interface{}{
+		"type":        "object",
+		"description": "Map of output field name → {selector, attr}. selector (required): CSS selector for the value source within the container (or page when no container). attr (optional, default \"text\"): attribute to read — \"text\" for innerText, or any HTML attribute (href, src, data-sku, data-price, ...). Example: {\"name\":{\"selector\":\"h1\"},\"price\":{\"selector\":\".price\"},\"link\":{\"selector\":\"a\",\"attr\":\"href\"}}. All values come back as strings.",
+		"additionalProperties": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"selector": map[string]interface{}{
+					"type":        "string",
+					"description": "CSS selector for this field's value source",
+				},
+				"attr": map[string]interface{}{
+					"type":        "string",
+					"description": "Attribute to read (default \"text\" = innerText). Use \"href\", \"src\", \"data-*\", or any HTML attribute.",
+				},
+			},
+			"required":             []string{"selector"},
+			"additionalProperties": false,
+		},
+	}
+	containerProp := func(desc string) map[string]interface{} {
+		return map[string]interface{}{
+			"type":        "string",
+			"description": desc,
+		}
+	}
+
 	// selectorOnly: oneOf branch for actions needing {selector}.
 	selectorOnly := func(actionType, selDesc string) map[string]interface{} {
 		return map[string]interface{}{
@@ -231,33 +260,42 @@ func buildActionsSchema() map[string]interface{} {
 							"enum":        []string{"extract_structured"},
 							"description": "Composite extraction action (#77 Tier-3): pulls field values from the DOM by CSS selectors into a clean JSON object (single record) or array (catalog/listing). Returns metadata.extracted_data + metadata.extract_report (records/fields/missing/warnings) so you see which selectors resolved and which missed. Prefer this over returning raw markdown and parsing it yourself for structured data — tables, product cards, listings. Design: selector + attr only, values are always strings (no type coercion); parse numbers/dates in your downstream logic. No container → one object; container selector → one object per matched element.",
 						},
-						"schema": map[string]interface{}{
-							"type":        "object",
-							"description": "Map of output field name → {selector, attr}. selector (required): CSS selector for the value source within the container (or page when no container). attr (optional, default \"text\"): attribute to read — \"text\" for innerText, or any HTML attribute (href, src, data-sku, data-price, ...). Example: {\"name\":{\"selector\":\"h1\"},\"price\":{\"selector\":\".price\"},\"link\":{\"selector\":\"a\",\"attr\":\"href\"}}. All values come back as strings.",
-							"additionalProperties": map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"selector": map[string]interface{}{
-										"type":        "string",
-										"description": "CSS selector for this field's value source",
-									},
-									"attr": map[string]interface{}{
-										"type":        "string",
-										"description": "Attribute to read (default \"text\" = innerText). Use \"href\", \"src\", \"data-*\", or any HTML attribute.",
-									},
-								},
-								"required":             []string{"selector"},
-								"additionalProperties": false,
-							},
-						},
-						"container": map[string]interface{}{
+						"schema":    extractSchemaProp,
+						"container": containerProp("Optional CSS selector enabling array mode: the schema runs against each matched element, producing one record per element (e.g. \".product-card\"). Omit for single-record mode (one object)."),
+						"timeout":   timeoutProp(),
+						"retries":   retriesProp(),
+					},
+					"required":             []string{"type", "schema"},
+					"additionalProperties": false,
+				},
+				// --- paginate composite action (#77 Tier-3) ---
+				map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"type": map[string]interface{}{
 							"type":        "string",
-							"description": "Optional CSS selector enabling array mode: the schema runs against each matched element, producing one record per element (e.g. \".product-card\"). Omit for single-record mode (one object).",
+							"enum":        []string{"paginate"},
+							"description": "Composite pagination action (#77 Tier-3): walks a listing by extracting records (schema + container), clicking the next-page / load-more control, waiting for the page to settle, and repeating — accumulating DEDUPLICATED records across all visited pages in a single tool call. Returns metadata.paginated_data (array of records) + metadata.paginate_result (pages_collected, total_records, deduped_records, stop_reason, per_page, warnings). Stop reasons: end_reached (next control gone/disabled), max_pages (cap reached), no_change (click produced no new records). Solves the pain of the LLM driving scrape_with_js N times by hand for paginated catalogs. schema/container semantics are identical to extract_structured (selector + attr only, values are strings). Prefer this over a manual click→wait→extract loop for multi-page catalogs and infinite-scroll feeds.",
+						},
+						"next_selector": map[string]interface{}{
+							"type":        "string",
+							"description": "CSS selector for the \"next page\" / \"load more\" control. The loop clicks it after extracting each page, then waits for the page to settle. Stops when the control is gone, disabled (aria-disabled/disabled/class disabled), or a click yields no new records.",
+						},
+						"max_pages": map[string]interface{}{
+							"type":        "integer",
+							"description": "Maximum number of pages to visit (cap, >= 1). The loop also stops earlier when the next control disappears or a click produces no new records.",
+							"minimum":     1,
+						},
+						"schema":    extractSchemaProp,
+						"container": containerProp("Required for paginate: CSS selector for one record element (e.g. \".product-card\"). The schema runs against each matched element on each page, producing one record per element. Unlike extract_structured, container is mandatory (paginate always yields an array)."),
+						"dedupe_key": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional name of a schema field whose value uniquely identifies a record (e.g. \"sku\", \"url\", \"id\"). Used to deduplicate across pages (handles both replace-style and load-more pagination). When omitted, empty, or absent from the schema, full-record dedup is used.",
 						},
 						"timeout": timeoutProp(),
 						"retries": retriesProp(),
 					},
-					"required":             []string{"type", "schema"},
+					"required":             []string{"type", "next_selector", "max_pages", "schema", "container"},
 					"additionalProperties": false,
 				},
 			},
@@ -706,6 +744,39 @@ func (t *ScrapeJSTool) Execute(ctx context.Context, args map[string]interface{})
 				Int("extract_fields", er.Fields).
 				Msg("Extract report added to metadata")
 		}
+	}
+
+	// Add paginate outcome to metadata (#77 Tier-3). When a paginate action
+	// ran, surface the accumulated, deduplicated records (paginated_data) plus
+	// a qualitative report (paginate_result: pages_collected, total_records,
+	// deduped_records, stop_reason, per_page, warnings). Lets the LLM harvest
+	// a whole catalog in one tool call and see why the loop stopped. Nil/empty
+	// when no paginate action ran.
+	if len(result.PaginatedData) > 0 {
+		metadata["paginated_data"] = result.PaginatedData
+	}
+	if result.PaginateResult != nil {
+		pr := result.PaginateResult
+		prMap := map[string]interface{}{
+			"pages_collected": pr.PagesCollected,
+			"total_records":   pr.TotalRecords,
+			"stop_reason":     string(pr.StopReason),
+		}
+		if pr.DedupedRecords > 0 {
+			prMap["deduped_records"] = pr.DedupedRecords
+		}
+		if len(pr.PerPage) > 0 {
+			prMap["per_page"] = pr.PerPage
+		}
+		if len(pr.Warnings) > 0 {
+			prMap["warnings"] = pr.Warnings
+		}
+		metadata["paginate_result"] = prMap
+		t.logger.Info().
+			Int("paginate_pages", pr.PagesCollected).
+			Int("paginate_records", pr.TotalRecords).
+			Str("stop_reason", string(pr.StopReason)).
+			Msg("Paginate result added to metadata")
 	}
 
 	// Add captured API responses to metadata (#83). When the scraper detects

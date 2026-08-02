@@ -204,6 +204,20 @@ type Result struct {
 	// succeeded and fix selectors when it didn't. Nil when no extract ran.
 	ExtractReport *browser.ExtractReport
 
+	// PaginatedData (#77 Tier-3): accumulated, deduplicated records from a
+	// paginate action across all visited pages. Always an array of objects
+	// (container mode is mandatory for paginate). Nil when no paginate ran.
+	// Surfaced in metadata.paginated_data.
+	PaginatedData []map[string]string
+
+	// PaginateResult (#77 Tier-3): structured outcome of the paginate
+	// composite action — pages_collected, total_records, deduped_records,
+	// stop_reason (end_reached/max_pages/no_change), per_page counts, and
+	// warnings. Lets the LLM judge whether pagination reached the end or
+	// stopped early. Nil when no paginate ran. Surfaced in
+	// metadata.paginate_result.
+	PaginateResult *browser.PaginateResult
+
 	// ContentCandidates (#83): API/XHR responses that looked like they
 	// might carry the page's real content — detected when a SPA has large
 	// JSON/text API responses but a thin rendered DOM (content in the API,

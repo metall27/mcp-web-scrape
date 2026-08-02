@@ -48,6 +48,22 @@ type Action struct {
 	// catalog/listing use case (e.g. one record per .product-card).
 	ExtractSchema map[string]FieldSpec
 	Container     string
+
+	// Paginate (#77 Tier-3). The paginate action walks a listing by repeatedly
+	// extracting records (using ExtractSchema + Container) then clicking
+	// NextSelector and waiting for the page to settle, until the next control
+	// disappears/is disabled, MaxPages is reached, or a click produces no new
+	// records. Records are deduplicated across pages (by DedupeKey when set,
+	// otherwise by full-record signature). See paginate.go.
+	//
+	// NextSelector is the CSS selector for the "next page" / "load more"
+	// control. MaxPages caps the number of pages visited (>= 1). DedupeKey
+	// optionally names a schema field whose value uniquely identifies a record
+	// (e.g. "sku", "url"); when empty or absent from the schema, full-record
+	// dedup is used. Container is required (paginate always yields an array).
+	NextSelector string
+	MaxPages     int
+	DedupeKey    string
 }
 
 // FieldSpec describes one field in an extract_structured schema (#77 Tier-3).
@@ -207,6 +223,27 @@ var requiredFields = map[string][]struct {
 			return ""
 		}},
 	},
+	// paginate (#77 Tier-3): next_selector + schema + container are required;
+	// max_pages must be > 0. The accessor pattern mirrors extract_structured
+	// for the schema map (sentinel "1") and converts max_pages to a non-empty
+	// string iff it is positive, so validateAction's generic empty-string
+	// check rejects max_pages <= 0.
+	"paginate": {
+		{"next_selector", func(a Action) string { return a.NextSelector }},
+		{"schema", func(a Action) string {
+			if len(a.ExtractSchema) > 0 {
+				return "1"
+			}
+			return ""
+		}},
+		{"container", func(a Action) string { return a.Container }},
+		{"max_pages", func(a Action) string {
+			if a.MaxPages > 0 {
+				return fmt.Sprintf("%d", a.MaxPages)
+			}
+			return ""
+		}},
+	},
 }
 
 // RequiredField is the exported mirror of an entry in requiredFields: an
@@ -299,6 +336,11 @@ type ActionExecutor struct {
 	// extract_structured action (#77 Tier-3). Nil/empty when none ran.
 	lastExtractData   interface{}
 	lastExtractReport *ExtractReport
+
+	// lastPaginateData / lastPaginateResult hold the outcome of the most recent
+	// paginate action (#77 Tier-3). Nil/empty when none ran.
+	lastPaginateData   []map[string]string
+	lastPaginateResult *PaginateResult
 }
 
 // GetJSResults возвращает результаты всех execute_js действий
@@ -335,6 +377,21 @@ func (e *ActionExecutor) GetExtractData() interface{} {
 // фидбек, помогающий LLM понять, какие селекторы не сработали.
 func (e *ActionExecutor) GetExtractReport() *ExtractReport {
 	return e.lastExtractReport
+}
+
+// GetPaginateData returns the accumulated, deduplicated records from the most
+// recent paginate action (#77 Tier-3), or nil when no paginate ran. Always an
+// array of objects (container mode is mandatory for paginate).
+func (e *ActionExecutor) GetPaginateData() []map[string]string {
+	return e.lastPaginateData
+}
+
+// GetPaginateResult returns the structured outcome of the most recent paginate
+// action (#77 Tier-3) or nil. Carries pages_collected / total_records /
+// deduped_records / stop_reason / per_page / warnings — the feedback the LLM
+// uses to judge whether the pagination reached the end or stopped early.
+func (e *ActionExecutor) GetPaginateResult() *PaginateResult {
+	return e.lastPaginateResult
 }
 
 // recordJSResult добавляет или перезаписывает результат execute_js по actionIndex.
@@ -545,7 +602,7 @@ func (e *ActionExecutor) ExecuteActions(ctx context.Context, actions []Action) e
 // are read-only w.r.t. the document and are skipped to avoid noise.
 func isMutatingAction(t string) bool {
 	switch t {
-	case "click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js", "login":
+	case "click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js", "login", "paginate":
 		return true
 	}
 	return false
@@ -734,6 +791,8 @@ func (e *ActionExecutor) ExecuteAction(ctx context.Context, action Action, actio
 		return e.ExecuteLogin(ctx, action)
 	case "extract_structured":
 		return e.ExecuteExtract(ctx, action)
+	case "paginate":
+		return e.ExecutePaginate(ctx, action)
 	default:
 		return &ActionValidationError{
 			ActionIndex: actionIndex,
@@ -1370,6 +1429,20 @@ func ParseActions(actionsData []interface{}) ([]Action, error) {
 		}
 		if s, ok := actionMap["container"].(string); ok {
 			action.Container = s
+		}
+
+		// Paginate action fields (#77 Tier-3). next_selector is the "next page" /
+		// "load more" control; max_pages caps the loop (>= 1); dedupe_key optionally
+		// names a schema field for cross-page dedupe. schema/container are parsed
+		// by the extract block above (paginate reuses them).
+		if s, ok := actionMap["next_selector"].(string); ok {
+			action.NextSelector = s
+		}
+		if n, ok := actionMap["max_pages"].(float64); ok {
+			action.MaxPages = int(n)
+		}
+		if s, ok := actionMap["dedupe_key"].(string); ok {
+			action.DedupeKey = s
 		}
 
 		// Validate required fields eagerly. Rejecting an invalid action here

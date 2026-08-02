@@ -266,6 +266,10 @@ type scrapeAttemptResult struct {
 	// extract_structured action (#77 Tier-3). Nil/empty when none ran.
 	extractData   interface{}
 	extractReport *browser.ExtractReport
+	// paginateData / paginateResult hold the outcome of the most recent
+	// paginate composite action (#77 Tier-3). Nil when none ran.
+	paginateData   []map[string]string
+	paginateResult *browser.PaginateResult
 
 	// contentCandidates holds API/XHR responses that looked like they might
 	// carry the page's real content (#83). Populated by the detection
@@ -482,6 +486,9 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 		// #77 Tier-3: extract_structured data + report.
 		result.extractData = actionExecutor.GetExtractData()
 		result.extractReport = actionExecutor.GetExtractReport()
+		// #77 Tier-3: paginate composite action data + report.
+		result.paginateData = actionExecutor.GetPaginateData()
+		result.paginateResult = actionExecutor.GetPaginateResult()
 	}
 
 	return result
@@ -678,6 +685,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 	var loginResult *browser.LoginResult
 	var extractData interface{}
 	var extractReport *browser.ExtractReport
+	var paginateData []map[string]string
+	var paginateResult *browser.PaginateResult
 	var contentCandidates []browser.ContentCandidate
 	var capturedResponses []browser.CapturedResponse
 
@@ -823,6 +832,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		loginResult = attemptResult.loginResult
 		extractData = attemptResult.extractData
 		extractReport = attemptResult.extractReport
+		paginateData = attemptResult.paginateData
+		paginateResult = attemptResult.paginateResult
 		contentCandidates = attemptResult.contentCandidates
 		capturedResponses = attemptResult.capturedResponses
 		successfulAttempt = true
@@ -945,6 +956,8 @@ func (s *ChromeScraper) Scrape(ctx context.Context, urlStr string, opts Options)
 		LoginResult:        loginResult,
 		ExtractedData:      extractData,
 		ExtractReport:      extractReport,
+		PaginatedData:      paginateData,
+		PaginateResult:     paginateResult,
 		ContentCandidates:  contentCandidates,
 		CapturedResponses:  capturedResponses,
 		Method:             s.Name(),

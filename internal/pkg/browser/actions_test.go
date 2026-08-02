@@ -351,7 +351,7 @@ func TestIsMutatingAction(t *testing.T) {
 	// These action types change page state and thus warrant a
 	// PageObservation snapshot + smart-settle wait. Mirrors isMutatingAction
 	// in actions.go — keep both lists in lockstep when adding/changing types.
-	mutating := []string{"click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js", "login"}
+	mutating := []string{"click", "submit", "type", "select_option", "upload_file", "navigate", "execute_js", "login", "paginate"}
 	for _, mt := range mutating {
 		if !isMutatingAction(mt) {
 			t.Errorf("isMutatingAction(%q) = false, want true", mt)
