@@ -148,6 +148,20 @@ func (s *HTTPScraper) Scrape(ctx context.Context, urlStr string, opts Options) (
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
+	// Sec-Fetch-* + Upgrade-Insecure-Requests: a real Chrome browser always
+	// sends these on a top-level document navigation. Anti-bot layers
+	// (Cloudflare/Imperva-style, e.g. wowhead.com) reject requests that claim
+	// a Chrome User-Agent but omit them — the exact cause of the stable 403 in
+	// TestE2EScenarios/Wowhead (#75/#90). uTLS already mimics Chrome at the TLS
+	// layer; these headers complete the picture at the application layer.
+	// Values are correct for a top-level GET navigation only — do NOT reuse
+	// for sub-resource/AJAX requests (Sec-Fetch-Dest would differ).
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+
 	// Set User-Agent
 	if opts.UserAgent != "" {
 		req.Header.Set("User-Agent", opts.UserAgent)
