@@ -106,22 +106,17 @@ const extractProbeJS = `(() => {
 // extraction (all fields blank) is NOT a hard error — the page loaded and the
 // LLM should see it plus the report so it can fix its selectors (mirrors the
 // login auth_failed-is-not-fatal principle).
-func (e *ActionExecutor) ExecuteExtract(ctx context.Context, action Action) error {
-	schema := action.ExtractSchema
-	if len(schema) == 0 {
-		// validateAction already guards this, but keep defense-in-depth.
-		return &ActionValidationError{
-			ActionType: action.Type,
-			Reason:     "schema is required for extract_structured action",
-		}
-	}
+// fieldDesc is a stable, ordered descriptor for one schema field, used by the
+// JS probe. Shared by ExecuteExtract and ExecutePaginate via runExtractProbe.
+type fieldDesc struct {
+	Name     string `json:"name"`
+	Selector string `json:"selector"`
+	Attr     string `json:"attr"`
+}
 
-	// Build a stable, ordered list of field descriptors for the JS probe.
-	type fieldDesc struct {
-		Name     string `json:"name"`
-		Selector string `json:"selector"`
-		Attr     string `json:"attr"`
-	}
+// buildFieldDescs turns a schema map into a stable ordered list of descriptors,
+// applying the default attr ("text") centrally.
+func buildFieldDescs(schema map[string]FieldSpec) []fieldDesc {
 	descs := make([]fieldDesc, 0, len(schema))
 	for name, spec := range schema {
 		attr := spec.Attr
@@ -130,13 +125,23 @@ func (e *ActionExecutor) ExecuteExtract(ctx context.Context, action Action) erro
 		}
 		descs = append(descs, fieldDesc{Name: name, Selector: spec.Selector, Attr: attr})
 	}
+	return descs
+}
+
+// runExtractProbe is the shared DOM-extraction core used by both
+// extract_structured and paginate. It builds the field descriptors, injects
+// them plus the container selector into the probe template, and runs a single
+// chromedp.Evaluate. Returns the raw probe result (records/missing/warnings).
+// The caller normalizes the shape and builds the ExtractReport.
+func runExtractProbe(ctx context.Context, schema map[string]FieldSpec, container string) (extractResult, error) {
+	descs := buildFieldDescs(schema)
 	fieldsJSON, err := json.Marshal(descs)
 	if err != nil {
-		return fmt.Errorf("extract: marshal field descriptors: %w", err)
+		return extractResult{}, fmt.Errorf("extract: marshal field descriptors: %w", err)
 	}
-	containerJSON, err := json.Marshal(action.Container)
+	containerJSON, err := json.Marshal(container)
 	if err != nil {
-		return fmt.Errorf("extract: marshal container: %w", err)
+		return extractResult{}, fmt.Errorf("extract: marshal container: %w", err)
 	}
 
 	// Inject the JSON values into the probe template. Both are valid JSON
@@ -147,33 +152,55 @@ func (e *ActionExecutor) ExecuteExtract(ctx context.Context, action Action) erro
 
 	var raw extractResult
 	if err := chromedp.Evaluate(js, &raw).Do(ctx); err != nil {
-		return fmt.Errorf("extract: DOM probe failed: %w", err)
+		return extractResult{}, fmt.Errorf("extract: DOM probe failed: %w", err)
 	}
+	return raw, nil
+}
 
-	report := ExtractReport{
+// extractReport builds the qualitative ExtractReport from a raw probe result.
+func extractReport(raw extractResult, schemaFields int) ExtractReport {
+	return ExtractReport{
 		Records:  len(raw.Records),
-		Fields:   len(schema),
+		Fields:   schemaFields,
 		Missing:  raw.Missing,
 		Warnings: raw.Warnings,
 	}
+}
+
+// normalizeExtractData shapes the raw probe result for single vs container
+// mode: container-less → one object; container set → array of objects.
+func normalizeExtractData(raw extractResult, container string) interface{} {
+	if container == "" {
+		if len(raw.Records) > 0 {
+			return raw.Records[0]
+		}
+		return map[string]string{}
+	}
+	if raw.Records == nil {
+		return []map[string]string{}
+	}
+	return raw.Records
+}
+
+func (e *ActionExecutor) ExecuteExtract(ctx context.Context, action Action) error {
+	schema := action.ExtractSchema
+	if len(schema) == 0 {
+		// validateAction already guards this, but keep defense-in-depth.
+		return &ActionValidationError{
+			ActionType: action.Type,
+			Reason:     "schema is required for extract_structured action",
+		}
+	}
+
+	raw, err := runExtractProbe(ctx, schema, action.Container)
+	if err != nil {
+		return err
+	}
+
+	report := extractReport(raw, len(schema))
 
 	// Normalize the data shape: container-less extract returns one record.
-	var data interface{}
-	if action.Container == "" {
-		if len(raw.Records) > 0 {
-			data = raw.Records[0]
-		} else {
-			// Probe returned no records (document was null-ish); emit an
-			// empty object so metadata.extracted_data is always the right
-			// shape for the single mode.
-			data = map[string]string{}
-		}
-	} else {
-		if raw.Records == nil {
-			raw.Records = []map[string]string{}
-		}
-		data = raw.Records
-	}
+	data := normalizeExtractData(raw, action.Container)
 
 	e.lastExtractData = data
 	e.lastExtractReport = &report
