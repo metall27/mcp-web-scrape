@@ -74,13 +74,13 @@ func GenerateCacheKeyJS(url string, params map[string]interface{}) string {
 	// Different parameters = different result
 	// Core format options
 	keys := []string{
-		"format",          // html vs markdown (CRITICAL - affects output content)
-		"screenshot_mode", // never, auto, always (affects response structure)
-		"wait_for",        // CSS selector (affects page state)
-		"wait_time",       // delay in ms (affects page state)
-		"viewport_width",  // viewport width (affects responsive layout)
-		"viewport_height", // viewport height (affects responsive layout)
-		"block_images",    // image blocking (affects page content)
+		"format",                // html vs markdown (CRITICAL - affects output content)
+		"screenshot_mode",       // never, auto, always (affects response structure)
+		"wait_for",              // CSS selector (affects page state)
+		"wait_time",             // delay in ms (affects page state)
+		"viewport_width",        // viewport width (affects responsive layout)
+		"viewport_height",       // viewport height (affects responsive layout)
+		"block_images",          // image blocking (affects page content)
 		"wait_for_network_idle", // network idle waiting (affects page state)
 	}
 	for _, key := range keys {
@@ -100,10 +100,10 @@ func GenerateCacheKeyJS(url string, params map[string]interface{}) string {
 // OptsToMap converts Options to map for cache key generation
 func OptsToMap(opts Options) map[string]interface{} {
 	result := map[string]interface{}{
-		"user_agent":        opts.UserAgent,
-		"timeout":           opts.Timeout.String(),
-		"format":            opts.OutputFormat,
-		"screenshot_mode":   opts.ScreenshotMode,
+		"user_agent":      opts.UserAgent,
+		"timeout":         opts.Timeout.String(),
+		"format":          opts.OutputFormat,
+		"screenshot_mode": opts.ScreenshotMode,
 	}
 
 	// Add JS-specific options if relevant

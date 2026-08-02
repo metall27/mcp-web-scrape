@@ -64,7 +64,7 @@ var defaultUserAgents = []string{
 
 func New(cfg Config) *Rotator {
 	r := &Rotator{
-		userAgents: make([]string, 0, len(defaultUserAgents) + len(cfg.CustomUserAgents)),
+		userAgents: make([]string, 0, len(defaultUserAgents)+len(cfg.CustomUserAgents)),
 		rnd:        rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
@@ -197,13 +197,13 @@ func (r *Rotator) Stats() map[string]int {
 	defer r.mu.RUnlock()
 
 	stats := map[string]int{
-		"chrome":     0,
-		"firefox":    0,
-		"safari":     0,
-		"edge":       0,
-		"mobile":     0,
-		"desktop":    0,
-		"total":      len(r.userAgents),
+		"chrome":  0,
+		"firefox": 0,
+		"safari":  0,
+		"edge":    0,
+		"mobile":  0,
+		"desktop": 0,
+		"total":   len(r.userAgents),
 	}
 
 	for _, ua := range r.userAgents {

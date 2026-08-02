@@ -267,9 +267,9 @@ func (t *Transport) handleHTTPPost(w http.ResponseWriter, r *http.Request) {
 
 func (t *Transport) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]interface{}{
-		"name":        t.server.GetServerInfo().Name,
-		"version":     t.server.GetServerInfo().Version,
-		"protocol":    "MCP over HTTP/SSE",
+		"name":         t.server.GetServerInfo().Name,
+		"version":      t.server.GetServerInfo().Version,
+		"protocol":     "MCP over HTTP/SSE",
 		"capabilities": t.server.GetCapabilities(),
 	}
 

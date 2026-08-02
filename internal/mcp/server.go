@@ -105,7 +105,7 @@ func (s *Server) registerDefaultTools() error {
 		tools.NewSearchTool(),    // Web search
 		tools.NewParseHTMLTool(), // HTML parsing
 		tools.NewSmartExtractorTool(s.cache, s.uaRotator, s.proxyRotator), // Content extraction with URL support
-		tools.NewSessionInfoTool(s.browserPool), // Named session inspection (#42) — cookies/storage dump for debugging login flows
+		tools.NewSessionInfoTool(s.browserPool),                           // Named session inspection (#42) — cookies/storage dump for debugging login flows
 	)
 
 	for _, tool := range defaultTools {

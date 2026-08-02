@@ -12,14 +12,14 @@ import (
 
 // StealthConfig настройки для stealth режима
 type StealthConfig struct {
-	RandomDelay      bool          // Рандомные задержки между действиями
-	MinDelay         time.Duration // Минимальная задержка
-	MaxDelay         time.Duration // Максимальная задержка
-	EmulateScroll    bool          // Эмуляция скролла
-	ScrollSteps      int           // Количество шагов скролла
-	MouseMovement    bool          // Эмуляция движений мыши
-	RandomViewport   bool          // Рандомный viewport
-	RandomUserAgent  bool          // Рандомный UA (уже есть отдельно)
+	RandomDelay     bool          // Рандомные задержки между действиями
+	MinDelay        time.Duration // Минимальная задержка
+	MaxDelay        time.Duration // Максимальная задержка
+	EmulateScroll   bool          // Эмуляция скролла
+	ScrollSteps     int           // Количество шагов скролла
+	MouseMovement   bool          // Эмуляция движений мыши
+	RandomViewport  bool          // Рандомный viewport
+	RandomUserAgent bool          // Рандомный UA (уже есть отдельно)
 }
 
 // DefaultStealthConfig дефолтные настройки
@@ -28,7 +28,7 @@ var DefaultStealthConfig = StealthConfig{
 	MinDelay:       50 * time.Millisecond,  // Balance between speed and realism
 	MaxDelay:       200 * time.Millisecond, // Faster but still human-like
 	EmulateScroll:  true,
-	ScrollSteps:    2,  // Reduced from 3 for speed
+	ScrollSteps:    2,     // Reduced from 3 for speed
 	MouseMovement:  false, // Disabled by default (can be enabled)
 	RandomViewport: false, // Выключен по умолчанию (может ломать layout)
 }
@@ -256,8 +256,8 @@ func (s *StealthActions) RandomViewport() (width, height int) {
 	}
 
 	// Иначе случайные размеры в разумных пределах
-	width = 1200 + s.rnd.Intn(1400)  // 1200-2600
-	height = 700 + s.rnd.Intn(700)   // 700-1400
+	width = 1200 + s.rnd.Intn(1400) // 1200-2600
+	height = 700 + s.rnd.Intn(700)  // 700-1400
 
 	return width, height
 }
@@ -311,13 +311,13 @@ func (s *StealthActions) ApplyStealthWithScroll(task chromedp.Action) chromedp.A
 
 // GenerateRandomFingerprint генерирует случайный fingerprint браузера
 type BrowserFingerprint struct {
-	ViewportWidth   int
-	ViewportHeight  int
-	Timezone        string
-	Language        string
-	Platform        string
-	WebGLVendor     string
-	WebGLRenderer   string
+	ViewportWidth  int
+	ViewportHeight int
+	Timezone       string
+	Language       string
+	Platform       string
+	WebGLVendor    string
+	WebGLRenderer  string
 }
 
 func (s *StealthActions) GenerateRandomFingerprint() BrowserFingerprint {

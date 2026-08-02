@@ -15,11 +15,11 @@ import (
 
 // CatalogPage represents a discovered catalog page
 type CatalogPage struct {
-	URL           string
-	Title         string
-	ProductCount  int
-	HasPagination bool
-	LastChecked   time.Time
+	URL             string
+	Title           string
+	ProductCount    int
+	HasPagination   bool
+	LastChecked     time.Time
 	DiscoveryMethod string // "sitemap", "links", "patterns"
 }
 
@@ -41,8 +41,8 @@ type CatalogDiscovery struct {
 	cache         *cache.Cache
 
 	// Configurable parameters
-	productThreshold int    // Minimum products to validate as catalog page
-	maxPages         int    // Maximum pages to discover
+	productThreshold int      // Minimum products to validate as catalog page
+	maxPages         int      // Maximum pages to discover
 	catalogPatterns  []string // Known catalog path patterns
 }
 
@@ -51,10 +51,10 @@ func NewCatalogDiscovery(cache *cache.Cache, httpScraper *HTTPScraper) *CatalogD
 	return &CatalogDiscovery{
 		sitemapParser:    NewSitemapParser(cache, httpScraper),
 		httpScraper:      httpScraper,
-		cache:           cache,
-		logger:          logger.Get(),
+		cache:            cache,
+		logger:           logger.Get(),
 		productThreshold: 3, // Default: at least 3 products to be valid catalog
-		maxPages:        3,  // Default: discover up to 3 catalog pages
+		maxPages:         3, // Default: discover up to 3 catalog pages
 		catalogPatterns: []string{
 			"/catalog/", "/shop/", "/products/", "/store/",
 			"/goods/", "/product/", "/category/", "/categories/",
@@ -198,7 +198,7 @@ func (c *CatalogDiscovery) discoverFromLinks(ctx context.Context, baseURL string
 		isCatalogLink := false
 		for _, pattern := range c.catalogPatterns {
 			if strings.Contains(href, pattern) ||
-			   strings.Contains(linkText, strings.Trim(pattern, "/")) {
+				strings.Contains(linkText, strings.Trim(pattern, "/")) {
 				isCatalogLink = true
 				break
 			}
@@ -844,8 +844,8 @@ func (c *CatalogDiscovery) parseProductDescription(text string) Product {
 			if freqMatch := freqRegex.FindStringSubmatch(part); len(freqMatch) > 1 {
 				// Убеждаемся что это не просто число (может быть размер)
 				if strings.Contains(strings.ToLower(part), "гц") ||
-				   strings.Contains(strings.ToLower(part), "hz") ||
-				   len(strings.Fields(part)) == 1 {
+					strings.Contains(strings.ToLower(part), "hz") ||
+					len(strings.Fields(part)) == 1 {
 					frequency = freqMatch[1] + "Hz"
 					c.logger.Debug().Str("extracted_frequency", frequency).Msg("Found frequency")
 					continue

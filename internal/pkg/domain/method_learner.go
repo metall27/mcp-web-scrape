@@ -24,11 +24,11 @@ type DomainStats struct {
 
 // MethodLearner управляет статистикой методов по доменам
 type MethodLearner struct {
-	config   Config
-	domains  map[string]*DomainStats // domain -> stats
-	mutex    sync.RWMutex
+	config      Config
+	domains     map[string]*DomainStats // domain -> stats
+	mutex       sync.RWMutex
 	storageFile string
-	logger   zerolog.Logger
+	logger      zerolog.Logger
 }
 
 // Config конфигурация MethodLearner
@@ -40,10 +40,10 @@ type Config struct {
 // NewMethodLearner создает новый MethodLearner
 func NewMethodLearner(config Config) *MethodLearner {
 	ml := &MethodLearner{
-		config:     config,
-		domains:    make(map[string]*DomainStats),
+		config:      config,
+		domains:     make(map[string]*DomainStats),
 		storageFile: filepath.Join(config.StorageDir, "site_methods.yaml"),
-		logger:     logger.Get(),
+		logger:      logger.Get(),
 	}
 
 	if config.Enabled {
@@ -166,8 +166,8 @@ func (ml *MethodLearner) getOrCreateStats(domain string) *DomainStats {
 	}
 
 	stats := &DomainStats{
-		Domain:       domain,
-		LastAttempt:  time.Now(),
+		Domain:      domain,
+		LastAttempt: time.Now(),
 	}
 	ml.domains[domain] = stats
 	return stats
@@ -269,12 +269,12 @@ func (ml *MethodLearner) GetAllStats() map[string]*DomainStats {
 // CatalogMethod хранит паттерны каталога для конкретного домена
 type CatalogMethod struct {
 	Domain            string    `yaml:"domain"`
-	CatalogPaths      []string  `yaml:"catalog_paths"`       // Обнаруженные пути к каталогам
-	ProductPattern    string    `yaml:"product_pattern"`     // CSS паттерн для карточек продуктов
-	PricePattern      string    `yaml:"price_pattern"`       // Паттерн для извлечения цен
-	PaginationPattern string    `yaml:"pagination_pattern"`  // Паттерн для навигации по страницам
-	SuccessRate       float64   `yaml:"success_rate"`        // Успешность применения паттернов
-	LastSeen          time.Time `yaml:"last_seen"`           // Когда последний раз использовался
+	CatalogPaths      []string  `yaml:"catalog_paths"`      // Обнаруженные пути к каталогам
+	ProductPattern    string    `yaml:"product_pattern"`    // CSS паттерн для карточек продуктов
+	PricePattern      string    `yaml:"price_pattern"`      // Паттерн для извлечения цен
+	PaginationPattern string    `yaml:"pagination_pattern"` // Паттерн для навигации по страницам
+	SuccessRate       float64   `yaml:"success_rate"`       // Успешность применения паттернов
+	LastSeen          time.Time `yaml:"last_seen"`          // Когда последний раз использовался
 }
 
 // CatalogPatterns хранит паттерны для всех доменов

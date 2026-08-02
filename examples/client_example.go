@@ -58,11 +58,11 @@ func main() {
 </html>`
 
 	parseResult, err := callTool(serverURL, "parse_html", map[string]interface{}{
-		"html":     htmlContent,
-		"selector": "a.link",
-		"extract":  "attr",
+		"html":      htmlContent,
+		"selector":  "a.link",
+		"extract":   "attr",
 		"attribute": "href",
-		"metadata": true,
+		"metadata":  true,
 	})
 	if err != nil {
 		fmt.Printf("Parse failed: %v\n", err)
@@ -192,10 +192,10 @@ type MCPRequest struct {
 }
 
 type MCPResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
-	Result  interface{}     `json:"result,omitempty"`
-	Error   *MCPError       `json:"error,omitempty"`
+	JSONRPC string      `json:"jsonrpc"`
+	ID      int         `json:"id"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *MCPError   `json:"error,omitempty"`
 }
 
 type MCPError struct {

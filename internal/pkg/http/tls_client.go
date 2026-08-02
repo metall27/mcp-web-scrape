@@ -36,7 +36,7 @@ type TLSClientConfig struct {
 // DefaultTLSClientConfig дефолтные настройки
 var DefaultTLSClientConfig = TLSClientConfig{
 	ChromeVersion:       "HelloChrome_120", // Chrome 120 - стабильная версия
-	RandomizeExtensions: true,               // Важно для JA4 protection
+	RandomizeExtensions: true,              // Важно для JA4 protection
 	HandshakeTimeout:    10 * time.Second,
 }
 

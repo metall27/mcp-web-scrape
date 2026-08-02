@@ -26,7 +26,7 @@ func TestNavigationTimeout(t *testing.T) {
 	// Setup browser pool
 	browserCfg := config.BrowserConfig{
 		Headless: true,
-		MaxTabs:   1,
+		MaxTabs:  1,
 	}
 
 	browserPool, err := browser.New(browser.Config{
