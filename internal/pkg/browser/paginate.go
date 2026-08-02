@@ -229,6 +229,19 @@ func (e *ActionExecutor) ExecutePaginate(ctx context.Context, action Action) err
 		result.PagesCollected++
 		result.PerPage = append(result.PerPage, newCount)
 
+		// no_change: a non-first page that yielded zero NEW records means the
+		// last click produced nothing — the listing ended or the next control
+		// is a no-op (broken JS, infinite-scroll that silently stopped).
+		// Detecting this HERE (inside the loop, right after the extract) is
+		// critical: without it, a load-more page whose next control never
+		// disappears would loop until max_pages, wasting requests. The first
+		// page is exempt — a zero there means broken selectors, and the LLM
+		// should still see the page + report (never a hard error).
+		if result.PagesCollected > 1 && newCount == 0 {
+			result.StopReason = PaginateStopNoChange
+			break
+		}
+
 		// Stop: max_pages cap reached.
 		if result.PagesCollected >= maxPages {
 			result.StopReason = PaginateStopMaxPages
@@ -260,18 +273,6 @@ func (e *ActionExecutor) ExecutePaginate(ctx context.Context, action Action) err
 			break
 		}
 		settle()
-	}
-
-	// no_change detection: re-examine the last iteration. If the last page
-	// contributed zero NEW records and the loop did not stop for end/max, it
-	// means the final click produced nothing new.
-	if result.StopReason == "" {
-		if len(result.PerPage) > 0 && result.PerPage[len(result.PerPage)-1] == 0 {
-			result.StopReason = PaginateStopNoChange
-		} else {
-			// Fallback (should not normally happen): treat as end reached.
-			result.StopReason = PaginateStopEndReached
-		}
 	}
 
 	result.TotalRecords = len(allRecords)
