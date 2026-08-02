@@ -222,7 +222,7 @@ func main() {
 	// Metrics endpoint (basic)
 	router.GET("/metrics", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"rate_limit":  mcpServer.GetRateLimitInfo(),
+			"rate_limit": mcpServer.GetRateLimitInfo(),
 			"cache": gin.H{
 				"enabled": cacheInstance.IsEnabled(),
 			},

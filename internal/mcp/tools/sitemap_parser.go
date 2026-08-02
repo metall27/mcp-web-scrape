@@ -30,13 +30,13 @@ type Sitemap struct {
 
 // SitemapIndex represents a sitemap index file (sitemap of sitemaps)
 type SitemapIndex struct {
-	XMLName xml.Name      `xml:"sitemapindex"`
+	XMLName  xml.Name     `xml:"sitemapindex"`
 	Sitemaps []SitemapRef `xml:"sitemap"`
 }
 
 // SitemapRef represents a reference to another sitemap
 type SitemapRef struct {
-	Loc     string `xml:"loc"`
+	Loc     string    `xml:"loc"`
 	LastMod time.Time `xml:"lastmod,omitempty"`
 }
 
@@ -113,8 +113,8 @@ func (s *SitemapParser) validateSitemapURL(sitemapURL string) bool {
 	// Check if content looks like a sitemap
 	content := strings.ToLower(result.HTML)
 	return strings.Contains(content, "<urlset") ||
-	       strings.Contains(content, "<sitemapindex") ||
-	       strings.Contains(content, "xmlns=")
+		strings.Contains(content, "<sitemapindex") ||
+		strings.Contains(content, "xmlns=")
 }
 
 // ParseSitemap parses a sitemap XML and extracts all entries
@@ -203,9 +203,9 @@ func (s *SitemapParser) ParseSitemap(ctx context.Context, sitemapURL string) ([]
 // FindCatalogURLs finds catalog-related URLs from sitemap entries
 func (s *SitemapParser) FindCatalogURLs(entries []SitemapEntry) []string {
 	catalogPatterns := []struct {
-		pattern    string
-		priority   float64
-		keywords   []string
+		pattern  string
+		priority float64
+		keywords []string
 	}{
 		// High priority: direct catalog paths
 		{pattern: `/(catalog|shop|store|products|goods)/`, priority: 1.0, keywords: []string{}},

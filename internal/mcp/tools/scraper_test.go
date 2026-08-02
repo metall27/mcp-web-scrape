@@ -13,15 +13,15 @@ import (
 
 func TestGenerateCacheKey(t *testing.T) {
 	tests := []struct {
-		name     string
-		url      string
-		params   map[string]interface{}
+		name       string
+		url        string
+		params     map[string]interface{}
 		wantPrefix bool // check if key starts with "scrape:"
 	}{
 		{
-			name: "Simple URL",
-			url:  "https://example.com",
-			params: map[string]interface{}{},
+			name:       "Simple URL",
+			url:        "https://example.com",
+			params:     map[string]interface{}{},
 			wantPrefix: true,
 		},
 		{
@@ -33,9 +33,9 @@ func TestGenerateCacheKey(t *testing.T) {
 			wantPrefix: true,
 		},
 		{
-			name: "Different URLs should have different keys",
-			url:  "https://example.com/page2",
-			params: map[string]interface{}{},
+			name:       "Different URLs should have different keys",
+			url:        "https://example.com/page2",
+			params:     map[string]interface{}{},
 			wantPrefix: true,
 		},
 	}
@@ -73,12 +73,12 @@ func TestGenerateCacheKey(t *testing.T) {
 func TestGenerateCacheKeyJS(t *testing.T) {
 	// Test JS cache key generation
 	key1 := GenerateCacheKeyJS("https://example.com", map[string]interface{}{
-		"wait_for": ".content",
+		"wait_for":  ".content",
 		"wait_time": "3s",
 	})
 
 	key2 := GenerateCacheKeyJS("https://example.com", map[string]interface{}{
-		"wait_for": ".header",
+		"wait_for":  ".header",
 		"wait_time": "3s",
 	})
 
@@ -98,23 +98,23 @@ func TestValidateURL(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "Valid HTTP URL",
-			url:  "http://example.com",
+			name:    "Valid HTTP URL",
+			url:     "http://example.com",
 			wantErr: false,
 		},
 		{
-			name: "Valid HTTPS URL",
-			url:  "https://example.com",
+			name:    "Valid HTTPS URL",
+			url:     "https://example.com",
 			wantErr: false,
 		},
 		{
-			name: "Invalid URL",
-			url:  "not-a-url",
+			name:    "Invalid URL",
+			url:     "not-a-url",
 			wantErr: true,
 		},
 		{
-			name: "Unsupported scheme",
-			url:  "ftp://example.com",
+			name:    "Unsupported scheme",
+			url:     "ftp://example.com",
 			wantErr: true,
 		},
 	}
@@ -132,8 +132,8 @@ func TestValidateURL(t *testing.T) {
 func TestCacheIntegration(t *testing.T) {
 	// Create a cache with short TTL for testing
 	cfg := config.CacheConfig{
-		Enabled:    true,
-		TTL:        1 * time.Minute,
+		Enabled: true,
+		TTL:     1 * time.Minute,
 		TTLByType: map[string]time.Duration{
 			"text/html": 30 * time.Second,
 		},
@@ -419,10 +419,10 @@ func TestUnifiedScraperJSSitesDetection(t *testing.T) {
 	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil, scrapingCfg)
 
 	tests := []struct {
-		name          string
-		url           string
-		expectJS      bool
-		reason        string
+		name     string
+		url      string
+		expectJS bool
+		reason   string
 	}{
 		{
 			name:     "GitHub URL (in config)",
@@ -482,10 +482,10 @@ func TestNeedsJSTestWithOptions(t *testing.T) {
 	chromeScraper := NewChromeScraper(nil, nil, config.RAGConfig{}, config.BrowserConfig{}, nil, nil, config.GitHubConfig{})
 
 	scrapingCfg := config.ScrapingConfig{
-		Timeout:    30 * time.Second,
+		Timeout:      30 * time.Second,
 		MaxRedirects: 10,
-		MaxBodySize: 10 * 1024 * 1024,
-		JSSites:     []string{},
+		MaxBodySize:  10 * 1024 * 1024,
+		JSSites:      []string{},
 	}
 
 	unified := NewUnifiedScraper([]Scraper{httpScraper, chromeScraper}, nil, scrapingCfg)

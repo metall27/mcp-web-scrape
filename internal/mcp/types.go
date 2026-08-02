@@ -7,12 +7,12 @@ import (
 
 // JSON-RPC 2.0 types
 type JSONRPCMessage struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  interface{}     `json:"params,omitempty"`
-	Result  interface{}     `json:"result,omitempty"`
-	Error   *JSONRPCError   `json:"error,omitempty"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      interface{}   `json:"id,omitempty"`
+	Method  string        `json:"method,omitempty"`
+	Params  interface{}   `json:"params,omitempty"`
+	Result  interface{}   `json:"result,omitempty"`
+	Error   *JSONRPCError `json:"error,omitempty"`
 }
 
 type JSONRPCError struct {
@@ -53,11 +53,11 @@ type InitializeParams struct {
 }
 
 type ClientCapabilities struct {
-	Roots      *RootsCapability      `json:"roots,omitempty"`
-	Sampling   *SamplingCapability   `json:"sampling,omitempty"`
-	Resources  *ResourcesCapability  `json:"resources,omitempty"`
-	Tools      *ToolsCapability      `json:"tools,omitempty"`
-	Prompts    *PromptsCapability    `json:"prompts,omitempty"`
+	Roots     *RootsCapability     `json:"roots,omitempty"`
+	Sampling  *SamplingCapability  `json:"sampling,omitempty"`
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+	Tools     *ToolsCapability     `json:"tools,omitempty"`
+	Prompts   *PromptsCapability   `json:"prompts,omitempty"`
 }
 
 type ClientInfo struct {
@@ -66,9 +66,9 @@ type ClientInfo struct {
 }
 
 type InitializeResult struct {
-	ProtocolVersion string             `json:"protocolVersion"`
-	Capabilities    ServerCapabilities `json:"capabilities"`
-	ServerInfo      ServerInfo         `json:"serverInfo"`
+	ProtocolVersion string                 `json:"protocolVersion"`
+	Capabilities    ServerCapabilities     `json:"capabilities"`
+	ServerInfo      ServerInfo             `json:"serverInfo"`
 	Meta            map[string]interface{} `json:"meta,omitempty"`
 }
 
@@ -101,8 +101,8 @@ type ToolCallParams struct {
 }
 
 type ToolCallResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content []ContentBlock         `json:"content"`
+	IsError bool                   `json:"isError,omitempty"`
 	Meta    map[string]interface{} `json:"meta,omitempty"`
 }
 
@@ -128,10 +128,10 @@ type ResourcesCapability struct {
 }
 
 type ResourceContent struct {
-	URI      string       `json:"uri"`
-	MimeType string       `json:"mimeType,omitempty"`
-	Text     string       `json:"text,omitempty"`
-	Blob     []byte       `json:"blob,omitempty"`
+	URI      string                 `json:"uri"`
+	MimeType string                 `json:"mimeType,omitempty"`
+	Text     string                 `json:"text,omitempty"`
+	Blob     []byte                 `json:"blob,omitempty"`
 	Meta     map[string]interface{} `json:"meta,omitempty"`
 }
 

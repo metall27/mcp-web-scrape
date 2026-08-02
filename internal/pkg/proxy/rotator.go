@@ -39,12 +39,12 @@ type Config struct {
 }
 
 type Stats struct {
-	TotalRequests    uint64
-	SuccessfulReqs   uint64
-	FailedReqs       uint64
-	LastUsedIndex    uint64
-	LastError        string
-	LastFailureTime  time.Time
+	TotalRequests   uint64
+	SuccessfulReqs  uint64
+	FailedReqs      uint64
+	LastUsedIndex   uint64
+	LastError       string
+	LastFailureTime time.Time
 }
 
 func New(cfg Config) (*Rotator, error) {

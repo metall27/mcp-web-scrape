@@ -9,20 +9,20 @@ import (
 )
 
 type Config struct {
-	Server         ServerConfig         `mapstructure:"server"`
-	MCP            MCPConfig            `mapstructure:"mcp"`
-	Scraping       ScrapingConfig       `mapstructure:"scraping"`
-	Browser        BrowserConfig        `mapstructure:"browser"`
-	Search         SearchConfig         `mapstructure:"search"`
-	RAG            RAGConfig            `mapstructure:"rag"`
-	UserAgent      UserAgentConfig      `mapstructure:"user_agent"`
-	Proxy          ProxyConfig          `mapstructure:"proxy"`
-	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
-	Cache          CacheConfig          `mapstructure:"cache"`
-	Log            LogConfig            `mapstructure:"log"`
-	GitHub         GitHubConfig         `mapstructure:"github"`
-	SiteMethod     SiteMethodConfig     `mapstructure:"site_method"`
-	Catalog        CatalogConfig        `mapstructure:"catalog"`
+	Server     ServerConfig     `mapstructure:"server"`
+	MCP        MCPConfig        `mapstructure:"mcp"`
+	Scraping   ScrapingConfig   `mapstructure:"scraping"`
+	Browser    BrowserConfig    `mapstructure:"browser"`
+	Search     SearchConfig     `mapstructure:"search"`
+	RAG        RAGConfig        `mapstructure:"rag"`
+	UserAgent  UserAgentConfig  `mapstructure:"user_agent"`
+	Proxy      ProxyConfig      `mapstructure:"proxy"`
+	RateLimit  RateLimitConfig  `mapstructure:"rate_limit"`
+	Cache      CacheConfig      `mapstructure:"cache"`
+	Log        LogConfig        `mapstructure:"log"`
+	GitHub     GitHubConfig     `mapstructure:"github"`
+	SiteMethod SiteMethodConfig `mapstructure:"site_method"`
+	Catalog    CatalogConfig    `mapstructure:"catalog"`
 }
 
 type ServerConfig struct {
@@ -33,19 +33,19 @@ type ServerConfig struct {
 }
 
 type MCPConfig struct {
-	Endpoint    string   `mapstructure:"endpoint"`
-	APIKey      string   `mapstructure:"api_key"`
-	APIKeyHeader string  `mapstructure:"api_key_header"`
+	Endpoint     string `mapstructure:"endpoint"`
+	APIKey       string `mapstructure:"api_key"`
+	APIKeyHeader string `mapstructure:"api_key_header"`
 }
 
 type ScrapingConfig struct {
-	UserAgent        string        `mapstructure:"user_agent"`
-	Timeout          time.Duration `mapstructure:"timeout"`
-	MaxRedirects     int           `mapstructure:"max_redirects"`
-	MaxBodySize      int64         `mapstructure:"max_body_size"`
-	AllowedDomains   []string      `mapstructure:"allowed_domains"`
-	Timeouts         TimeoutConfig `mapstructure:"timeouts"` // Fast-fail timeout configuration
-	JSSites          []string      `mapstructure:"js_sites"`  // Known JavaScript-heavy sites
+	UserAgent      string        `mapstructure:"user_agent"`
+	Timeout        time.Duration `mapstructure:"timeout"`
+	MaxRedirects   int           `mapstructure:"max_redirects"`
+	MaxBodySize    int64         `mapstructure:"max_body_size"`
+	AllowedDomains []string      `mapstructure:"allowed_domains"`
+	Timeouts       TimeoutConfig `mapstructure:"timeouts"` // Fast-fail timeout configuration
+	JSSites        []string      `mapstructure:"js_sites"` // Known JavaScript-heavy sites
 }
 
 // TimeoutConfig конфигурация агрессивных таймаутов для улучшения UX
@@ -55,29 +55,29 @@ type TimeoutConfig struct {
 }
 
 type BrowserConfig struct {
-	Enabled         bool          `mapstructure:"enabled"`
-	Timeout         time.Duration `mapstructure:"timeout"`
-	WaitTime        time.Duration `mapstructure:"wait_time"`
-	ViewportWidth   int           `mapstructure:"viewport_width"`
-	ViewportHeight  int           `mapstructure:"viewport_height"`
-	UserAgent       string        `mapstructure:"user_agent"`
-	Headless        bool          `mapstructure:"headless"`
-	BlockImages     bool          `mapstructure:"block_images"`
-	DisableGPU      bool          `mapstructure:"disable_gpu"`
-	NoSandbox       bool          `mapstructure:"no_sandbox"`
-	MaxTabs         int           `mapstructure:"max_tabs"` // Maximum concurrent browser tabs
-	PollingConfig   PollingConfig `mapstructure:"polling"` // Navigation polling configuration
-	SessionConfig   SessionConfig `mapstructure:"sessions"` // Named session configuration
-	ToolTimeout     time.Duration `mapstructure:"tool_timeout"` // Tool-level timeout for scraping operations
-	BlockDetection  bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
-	MaxRetries      int           `mapstructure:"max_retries"` // Maximum retries with different proxies on blocking
+	Enabled        bool          `mapstructure:"enabled"`
+	Timeout        time.Duration `mapstructure:"timeout"`
+	WaitTime       time.Duration `mapstructure:"wait_time"`
+	ViewportWidth  int           `mapstructure:"viewport_width"`
+	ViewportHeight int           `mapstructure:"viewport_height"`
+	UserAgent      string        `mapstructure:"user_agent"`
+	Headless       bool          `mapstructure:"headless"`
+	BlockImages    bool          `mapstructure:"block_images"`
+	DisableGPU     bool          `mapstructure:"disable_gpu"`
+	NoSandbox      bool          `mapstructure:"no_sandbox"`
+	MaxTabs        int           `mapstructure:"max_tabs"`        // Maximum concurrent browser tabs
+	PollingConfig  PollingConfig `mapstructure:"polling"`         // Navigation polling configuration
+	SessionConfig  SessionConfig `mapstructure:"sessions"`        // Named session configuration
+	ToolTimeout    time.Duration `mapstructure:"tool_timeout"`    // Tool-level timeout for scraping operations
+	BlockDetection bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
+	MaxRetries     int           `mapstructure:"max_retries"`     // Maximum retries with different proxies on blocking
 }
 
 // PollingConfig конфигурация для polling навигации
 type PollingConfig struct {
 	MaxAttempts int           `mapstructure:"max_attempts"` // Maximum polling attempts for body detection
-	Interval    time.Duration `mapstructure:"interval"`      // Polling interval between attempts
-	Timeout     time.Duration `mapstructure:"timeout"`       // Total timeout for polling operations
+	Interval    time.Duration `mapstructure:"interval"`     // Polling interval between attempts
+	Timeout     time.Duration `mapstructure:"timeout"`      // Total timeout for polling operations
 }
 
 // SessionConfig configures named persistent browser sessions.
@@ -90,17 +90,17 @@ type SessionConfig struct {
 }
 
 type SearchConfig struct {
-	Provider       string `mapstructure:"provider"` // brave, bing, duckduckgo
-	APIKey         string `mapstructure:"api_key"`
-	MaxResults     int    `mapstructure:"max_results"`
-	SafeSearch     bool   `mapstructure:"safe_search"`
+	Provider   string `mapstructure:"provider"` // brave, bing, duckduckgo
+	APIKey     string `mapstructure:"api_key"`
+	MaxResults int    `mapstructure:"max_results"`
+	SafeSearch bool   `mapstructure:"safe_search"`
 }
 
 type RAGConfig struct {
-	BaseURL     string `mapstructure:"base_url"`     // RAG service base URL
-	Enabled     bool   `mapstructure:"enabled"`       // Enable auto-indexing to RAG
-	MaxRetries  int    `mapstructure:"max_retries"`   // Maximum retry attempts for RAG requests
-	RetryDelay  int    `mapstructure:"retry_delay"`   // Delay between retries in seconds
+	BaseURL    string `mapstructure:"base_url"`    // RAG service base URL
+	Enabled    bool   `mapstructure:"enabled"`     // Enable auto-indexing to RAG
+	MaxRetries int    `mapstructure:"max_retries"` // Maximum retry attempts for RAG requests
+	RetryDelay int    `mapstructure:"retry_delay"` // Delay between retries in seconds
 }
 
 type UserAgentConfig struct {
@@ -109,10 +109,10 @@ type UserAgentConfig struct {
 }
 
 type ProxyConfig struct {
-	Enabled       bool     `mapstructure:"enabled"`        // Enable proxy rotation
-	Proxies       []string `mapstructure:"proxies"`        // List of proxy URLs
+	Enabled       bool     `mapstructure:"enabled"`         // Enable proxy rotation
+	Proxies       []string `mapstructure:"proxies"`         // List of proxy URLs
 	TestOnStartup bool     `mapstructure:"test_on_startup"` // Test proxies on startup
-	TestTimeout   int      `mapstructure:"test_timeout"`   // Proxy test timeout in seconds
+	TestTimeout   int      `mapstructure:"test_timeout"`    // Proxy test timeout in seconds
 }
 
 type RateLimitConfig struct {
@@ -126,10 +126,10 @@ type GitHubConfig struct {
 }
 
 type CacheConfig struct {
-	Enabled       bool                       `mapstructure:"enabled"`
-	TTL           time.Duration              `mapstructure:"ttl"`             // default TTL
-	TTLByType     map[string]time.Duration   `mapstructure:"ttl_by_type"`     // TTL по Content-Type
-	CleanupInt    time.Duration              `mapstructure:"cleanup_interval"`
+	Enabled    bool                     `mapstructure:"enabled"`
+	TTL        time.Duration            `mapstructure:"ttl"`         // default TTL
+	TTLByType  map[string]time.Duration `mapstructure:"ttl_by_type"` // TTL по Content-Type
+	CleanupInt time.Duration            `mapstructure:"cleanup_interval"`
 }
 
 type LogConfig struct {
@@ -144,15 +144,15 @@ type SiteMethodConfig struct {
 
 // CatalogConfig конфигурация для обнаружения и извлечения каталогов
 type CatalogConfig struct {
-	AutoDiscovery       bool     `mapstructure:"auto_discovery"`        // Автоматическое обнаружение каталогов
-	MaxPages            int      `mapstructure:"max_pages"`              // Максимальное количество страниц для анализа (default: 3)
-	MaxPagesLimit       int      `mapstructure:"max_pages_limit"`        // Максимальный лимит страниц (default: 10)
-	ProductThreshold    int      `mapstructure:"product_threshold"`      // Минимум продуктов для валидации (default: 3)
-	EnableRAG           bool     `mapstructure:"enable_rag"`             // Интеграция с RAG для семантического поиска
-	PatternLearning     bool     `mapstructure:"pattern_learning"`       // Изучение паттернов для каждого домена
-	LearningStorage     string   `mapstructure:"learning_storage"`       // Хранение изученных паттернов (cache, file, memory)
-	CatalogPaths        []string `mapstructure:"catalog_paths"`          // Известные пути каталогов
-	ECommerceDomains    []string `mapstructure:"ecommerce_domains"`       // Известные e-commerce домены
+	AutoDiscovery    bool     `mapstructure:"auto_discovery"`    // Автоматическое обнаружение каталогов
+	MaxPages         int      `mapstructure:"max_pages"`         // Максимальное количество страниц для анализа (default: 3)
+	MaxPagesLimit    int      `mapstructure:"max_pages_limit"`   // Максимальный лимит страниц (default: 10)
+	ProductThreshold int      `mapstructure:"product_threshold"` // Минимум продуктов для валидации (default: 3)
+	EnableRAG        bool     `mapstructure:"enable_rag"`        // Интеграция с RAG для семантического поиска
+	PatternLearning  bool     `mapstructure:"pattern_learning"`  // Изучение паттернов для каждого домена
+	LearningStorage  string   `mapstructure:"learning_storage"`  // Хранение изученных паттернов (cache, file, memory)
+	CatalogPaths     []string `mapstructure:"catalog_paths"`     // Известные пути каталогов
+	ECommerceDomains []string `mapstructure:"ecommerce_domains"` // Известные e-commerce домены
 }
 
 func Load(configPath string) (*Config, error) {
@@ -217,8 +217,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scraping.max_body_size", 10*1024*1024) // 10MB
 
 	// Fast-fail timeout defaults
-	v.SetDefault("scraping.timeouts.first_scraper_timeout", 5*time.Second)   // 5s fast fail for first attempt
-	v.SetDefault("scraping.timeouts.fallback_timeout", 15*time.Second)       // 15s aggressive fallback
+	v.SetDefault("scraping.timeouts.first_scraper_timeout", 5*time.Second) // 5s fast fail for first attempt
+	v.SetDefault("scraping.timeouts.fallback_timeout", 15*time.Second)     // 15s aggressive fallback
 
 	// JavaScript sites defaults (known JS-heavy sites that require Chrome)
 	v.SetDefault("scraping.js_sites", []string{
@@ -278,19 +278,19 @@ func setDefaults(v *viper.Viper) {
 
 	// RAG defaults
 	v.SetDefault("rag.base_url", "https://rag.0x27.ru")
-	v.SetDefault("rag.enabled", false)  // Disabled by default until RAG server is stable
+	v.SetDefault("rag.enabled", false) // Disabled by default until RAG server is stable
 	v.SetDefault("rag.max_retries", 3)
 	v.SetDefault("rag.retry_delay", 2)
 
 	// User-Agent rotation defaults
-	v.SetDefault("user_agent.enabled", true)   // Enable by default for better stealth
+	v.SetDefault("user_agent.enabled", true) // Enable by default for better stealth
 	v.SetDefault("user_agent.custom_user_agents", []string{})
 
 	// Proxy defaults
-	v.SetDefault("proxy.enabled", false)                  // Disabled by default
-	v.SetDefault("proxy.proxies", []string{})             // No proxies by default
-	v.SetDefault("proxy.test_on_startup", false)         // Don't test on startup by default
-	v.SetDefault("proxy.test_timeout", 10)                // 10 seconds test timeout
+	v.SetDefault("proxy.enabled", false)         // Disabled by default
+	v.SetDefault("proxy.proxies", []string{})    // No proxies by default
+	v.SetDefault("proxy.test_on_startup", false) // Don't test on startup by default
+	v.SetDefault("proxy.test_timeout", 10)       // 10 seconds test timeout
 
 	// Rate limiting defaults
 	v.SetDefault("rate_limit.requests_per_second", 10.0)
@@ -312,22 +312,22 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.pretty", true)
 
 	// Site method learning defaults
-	v.SetDefault("site_method.enabled", false)               // Disabled by default
-	v.SetDefault("site_method.storage_dir", "./data")        // Default storage directory
+	v.SetDefault("site_method.enabled", false)        // Disabled by default
+	v.SetDefault("site_method.storage_dir", "./data") // Default storage directory
 
 	// Catalog discovery defaults
-	v.SetDefault("catalog.auto_discovery", true)              // Автоматическое обнаружение каталогов
-	v.SetDefault("catalog.max_pages", 3)                       // Default: анализируем 3 страницы
-	v.SetDefault("catalog.max_pages_limit", 10)               // Максимальный лимит страниц
-	v.SetDefault("catalog.product_threshold", 3)             // Минимум продуктов для валидации
-	v.SetDefault("catalog.enable_rag", true)                 // Интеграция с RAG
-	v.SetDefault("catalog.pattern_learning", true)            // Изучение паттернов
-	v.SetDefault("catalog.learning_storage", "cache")         // Хранение в cache
-	v.SetDefault("catalog.catalog_paths", []string{           // Известные пути каталогов
+	v.SetDefault("catalog.auto_discovery", true)      // Автоматическое обнаружение каталогов
+	v.SetDefault("catalog.max_pages", 3)              // Default: анализируем 3 страницы
+	v.SetDefault("catalog.max_pages_limit", 10)       // Максимальный лимит страниц
+	v.SetDefault("catalog.product_threshold", 3)      // Минимум продуктов для валидации
+	v.SetDefault("catalog.enable_rag", true)          // Интеграция с RAG
+	v.SetDefault("catalog.pattern_learning", true)    // Изучение паттернов
+	v.SetDefault("catalog.learning_storage", "cache") // Хранение в cache
+	v.SetDefault("catalog.catalog_paths", []string{   // Известные пути каталогов
 		"/catalog/", "/shop/", "/products/", "/store/", "/goods/",
 		"/product/", "/category/", "/categories/", "/items/",
 	})
-	v.SetDefault("catalog.ecommerce_domains", []string{       // Известные e-commerce домены
+	v.SetDefault("catalog.ecommerce_domains", []string{ // Известные e-commerce домены
 		"wildberries.ru", "ozon.ru", "lamoda.ru", "eldorado.ru",
 		"dns-shop.ru", "mvideo.ru", "citilink.ru", "sportsmaster.ru",
 		"sedmo.ru", "kuycon-russia.ru",

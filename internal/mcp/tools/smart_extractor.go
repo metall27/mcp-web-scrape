@@ -18,10 +18,10 @@ import (
 
 type SmartExtractorTool struct {
 	*BaseTool
-	logger     zerolog.Logger
-	cache      *cache.Cache
-	uaRotator  *useragent.Rotator
-	proxy      *proxy.Rotator
+	logger      zerolog.Logger
+	cache       *cache.Cache
+	uaRotator   *useragent.Rotator
+	proxy       *proxy.Rotator
 	httpScraper *HTTPScraper
 }
 
@@ -245,7 +245,7 @@ func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
 	}
 
 	// Extract command line examples
-	cliRegex := regexp.MustCompile(`(?i)(?:`+"```"+`\s*(?:bash|sh|shell|cmd)?|<code[^>]*class="language-(?:bash|sh)">)([^\n]+(?:\n[^\n]+)*?)(?:`+"```"+`|</code>)`)
+	cliRegex := regexp.MustCompile(`(?i)(?:` + "```" + `\s*(?:bash|sh|shell|cmd)?|<code[^>]*class="language-(?:bash|sh)">)([^\n]+(?:\n[^\n]+)*?)(?:` + "```" + `|</code>)`)
 	cliExamples := cliRegex.FindAllStringSubmatch(html, -1)
 
 	var commands []string
@@ -306,16 +306,16 @@ func (t *SmartExtractorTool) extractTech(html string) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"type":         "tech",
-		"sections":     sections,
-		"codes":        codes,
-		"endpoints":    endpoints,
-		"commands":     commands[:min(len(commands), 10)],
-		"configs":      configuration[:min(len(configuration), 10)],
-		"terms":        foundTerms,
-		"versions":     versions,
-		"code_blocks":  len(codes),
-		"api_count":    len(endpoints),
+		"type":        "tech",
+		"sections":    sections,
+		"codes":       codes,
+		"endpoints":   endpoints,
+		"commands":    commands[:min(len(commands), 10)],
+		"configs":     configuration[:min(len(configuration), 10)],
+		"terms":       foundTerms,
+		"versions":    versions,
+		"code_blocks": len(codes),
+		"api_count":   len(endpoints),
 	}
 }
 
@@ -329,10 +329,10 @@ func (t *SmartExtractorTool) extractFinance(html string) map[string]interface{} 
 	matches := currencyRegex.FindAllString(html, -1)
 
 	return map[string]interface{}{
-		"type":           "finance",
-		"tables_count":   len(tables),
+		"type":              "finance",
+		"tables_count":      len(tables),
 		"currency_mentions": len(matches),
-		"amounts":        matches[:min(len(matches), 20)],
+		"amounts":           matches[:min(len(matches), 20)],
 	}
 }
 
@@ -343,14 +343,14 @@ func (t *SmartExtractorTool) extractLegal(html string) map[string]interface{} {
 
 	// Extract document structure
 	structure := map[string]string{
-		"has_articles":     fmt.Sprintf("%v", len(articles) > 0),
-		"article_count":    fmt.Sprintf("%d", len(articles)),
-		"document_length":  fmt.Sprintf("%d", len(html)),
+		"has_articles":    fmt.Sprintf("%v", len(articles) > 0),
+		"article_count":   fmt.Sprintf("%d", len(articles)),
+		"document_length": fmt.Sprintf("%d", len(html)),
 	}
 
 	return map[string]interface{}{
-		"type":     "legal",
-		"articles": articles,
+		"type":      "legal",
+		"articles":  articles,
 		"structure": structure,
 	}
 }
@@ -381,15 +381,15 @@ func (t *SmartExtractorTool) extractMedical(html string) map[string]interface{} 
 	sections := sectionRegex.FindAllString(html, -1)
 
 	return map[string]interface{}{
-		"type":              "medical",
-		"symptoms_count":    len(symptoms),
-		"symptoms":          symptoms[:min(len(symptoms), 10)],
-		"diagnoses_count":   len(diagnoses),
-		"diagnoses":         diagnoses[:min(len(diagnoses), 10)],
-		"medications_count": len(medications),
-		"medications":       medications[:min(len(medications), 10)],
-		"dosages":           dosages[:min(len(dosages), 10)],
-		"vitals":            vitals[:min(len(vitals), 10)],
+		"type":                "medical",
+		"symptoms_count":      len(symptoms),
+		"symptoms":            symptoms[:min(len(symptoms), 10)],
+		"diagnoses_count":     len(diagnoses),
+		"diagnoses":           diagnoses[:min(len(diagnoses), 10)],
+		"medications_count":   len(medications),
+		"medications":         medications[:min(len(medications), 10)],
+		"dosages":             dosages[:min(len(dosages), 10)],
+		"vitals":              vitals[:min(len(vitals), 10)],
 		"structured_sections": len(sections),
 	}
 }
@@ -402,16 +402,16 @@ func (t *SmartExtractorTool) extractCleanText(html, pageURL string) map[string]i
 		paragraphs := htmlToParagraphs(article.Content)
 		text := strings.Join(paragraphs, "\n\n")
 		return map[string]interface{}{
-			"type":        "clean_text",
-			"engine":      "readability",
-			"title":       article.Title,
-			"text":        text,
-			"paragraphs":  paragraphs,
-			"word_count":  countWords(text),
-			"excerpt":     article.Excerpt,
-			"byline":      article.Byline,
-			"site_name":   article.SiteName,
-			"language":    article.Language,
+			"type":       "clean_text",
+			"engine":     "readability",
+			"title":      article.Title,
+			"text":       text,
+			"paragraphs": paragraphs,
+			"word_count": countWords(text),
+			"excerpt":    article.Excerpt,
+			"byline":     article.Byline,
+			"site_name":  article.SiteName,
+			"language":   article.Language,
 		}
 	}
 
@@ -430,10 +430,10 @@ func (t *SmartExtractorTool) extractCleanText(html, pageURL string) map[string]i
 	}
 
 	return map[string]interface{}{
-		"type":        "clean_text",
-		"engine":      "regex",
-		"paragraphs":  cleanParas,
-		"word_count":  countWords(text),
+		"type":       "clean_text",
+		"engine":     "regex",
+		"paragraphs": cleanParas,
+		"word_count": countWords(text),
 	}
 }
 
@@ -482,15 +482,15 @@ func (t *SmartExtractorTool) extractGeneral(html, pageURL string) map[string]int
 			metadata["published_time"] = article.PublishedTime.Format("2006-01-02T15:04:05Z")
 		}
 		return map[string]interface{}{
-			"type":        "general",
-			"engine":      "readability",
-			"title":       article.Title,
-			"metadata":    metadata,
-			"text":        text,
-			"paragraphs":  paragraphs,
-			"excerpt":     article.Excerpt,
-			"word_count":  countWords(text),
-			"html":        article.Content, // readability-cleaned HTML
+			"type":       "general",
+			"engine":     "readability",
+			"title":      article.Title,
+			"metadata":   metadata,
+			"text":       text,
+			"paragraphs": paragraphs,
+			"excerpt":    article.Excerpt,
+			"word_count": countWords(text),
+			"html":       article.Content, // readability-cleaned HTML
 		}
 	}
 
@@ -527,12 +527,12 @@ func (t *SmartExtractorTool) extractGeneral(html, pageURL string) map[string]int
 	}
 
 	return map[string]interface{}{
-		"type":        "general",
-		"engine":      "regex",
-		"title":       title,
-		"metadata":    metadata,
-		"paragraphs":  paragraphs,
-		"word_count":  countWords(t.cleanHTML(html)),
+		"type":       "general",
+		"engine":     "regex",
+		"title":      title,
+		"metadata":   metadata,
+		"paragraphs": paragraphs,
+		"word_count": countWords(t.cleanHTML(html)),
 	}
 }
 
@@ -784,8 +784,8 @@ func (t *SmartExtractorTool) extractCatalog(ctx context.Context, url string, arg
 	if err != nil {
 		t.logger.Error().Err(err).Str("url", url).Msg("Catalog discovery failed")
 		return map[string]interface{}{
-			"type":    "catalog",
-			"error":   err.Error(),
+			"type":     "catalog",
+			"error":    err.Error(),
 			"products": []Product{},
 		}
 	}
@@ -796,8 +796,8 @@ func (t *SmartExtractorTool) extractCatalog(ctx context.Context, url string, arg
 		html, err := t.scrapeURL(ctx, url)
 		if err != nil {
 			return map[string]interface{}{
-				"type":    "catalog",
-				"error":   err.Error(),
+				"type":     "catalog",
+				"error":    err.Error(),
 				"products": []Product{},
 			}
 		}
@@ -846,11 +846,11 @@ func (t *SmartExtractorTool) extractCatalog(ctx context.Context, url string, arg
 
 		// Track catalog info
 		catalogInfo = append(catalogInfo, map[string]interface{}{
-			"url":             catalogPage.URL,
-			"title":           catalogPage.Title,
-			"product_count":   len(products),
+			"url":              catalogPage.URL,
+			"title":            catalogPage.Title,
+			"product_count":    len(products),
 			"discovery_method": catalogPage.DiscoveryMethod,
-			"has_pagination":  catalogPage.HasPagination,
+			"has_pagination":   catalogPage.HasPagination,
 		})
 
 		t.logger.Debug().

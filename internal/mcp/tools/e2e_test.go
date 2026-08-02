@@ -20,18 +20,18 @@ func TestE2EScenarios(t *testing.T) {
 	retryScraper := NewRetryScraper(scraper, DefaultRetryConfig)
 
 	tests := []struct {
-		name           string
-		url            string
-		timeout        time.Duration
-		expectSuccess  bool
-		expectError    string // ожидаемый error code
-		minDuration    time.Duration
-		maxDuration    time.Duration
+		name          string
+		url           string
+		timeout       time.Duration
+		expectSuccess bool
+		expectError   string // ожидаемый error code
+		minDuration   time.Duration
+		maxDuration   time.Duration
 	}{
 		{
 			name:          "Normal working URL",
 			url:           "https://example.com",
-			timeout:        5 * time.Second,
+			timeout:       5 * time.Second,
 			expectSuccess: true,
 			minDuration:   100 * time.Millisecond,
 			maxDuration:   10 * time.Second,
@@ -39,7 +39,7 @@ func TestE2EScenarios(t *testing.T) {
 		{
 			name:          "GitHub repo page",
 			url:           "https://github.com/golang/go",
-			timeout:        10 * time.Second,
+			timeout:       10 * time.Second,
 			expectSuccess: true,
 			minDuration:   100 * time.Millisecond,
 			maxDuration:   15 * time.Second,
@@ -47,7 +47,7 @@ func TestE2EScenarios(t *testing.T) {
 		{
 			name:          "Wowhead quest page (was problematic)",
 			url:           "https://www.wowhead.com/tbc/quest=1947/journey-to-the-marsh",
-			timeout:        10 * time.Second,
+			timeout:       10 * time.Second,
 			expectSuccess: true,
 			minDuration:   100 * time.Millisecond,
 			maxDuration:   15 * time.Second,
@@ -66,18 +66,18 @@ func TestE2EScenarios(t *testing.T) {
 			// E2E test (NewChromeScraper with StealthEnabled=true) — see #75.
 		},
 		{
-			name:        "Invalid URL (should fail fast)",
-			url:         "not-a-url",
-			timeout:     1 * time.Second,
+			name:          "Invalid URL (should fail fast)",
+			url:           "not-a-url",
+			timeout:       1 * time.Second,
 			expectSuccess: false,
-			expectError: "invalid_url",
+			expectError:   "invalid_url",
 		},
 		{
-			name:        "Unsupported protocol",
-			url:         "ftp://example.com",
-			timeout:     1 * time.Second,
+			name:          "Unsupported protocol",
+			url:           "ftp://example.com",
+			timeout:       1 * time.Second,
 			expectSuccess: false,
-			expectError: "invalid_url",
+			expectError:   "invalid_url",
 		},
 	}
 

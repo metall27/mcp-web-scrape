@@ -346,12 +346,12 @@ func (a *AdvancedStealth) AdvancedAntiDetectionScript() string {
 
 // StealthMetrics содержит метрики эффективности stealth mode
 type StealthMetrics struct {
-	CanvasNoise       bool
-	AudioNoise        bool
-	FontProtection    bool
-	HardwareRandom    bool
-	ScreenRandom      bool
-	BehavioralSim     bool
+	CanvasNoise    bool
+	AudioNoise     bool
+	FontProtection bool
+	HardwareRandom bool
+	ScreenRandom   bool
+	BehavioralSim  bool
 }
 
 // GetStealthMetrics возвращает метрики текущей stealth конфигурации

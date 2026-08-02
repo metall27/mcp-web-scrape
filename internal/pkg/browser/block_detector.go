@@ -126,7 +126,10 @@ func analyzeBlocking(pageInfo struct {
 }
 
 // isCloudflareBlocked проверяет индикаторы Cloudflare
-func isCloudflareBlocked(pageInfo struct{ Title, BodyHTML, URL string; HeadScripts []string }) bool {
+func isCloudflareBlocked(pageInfo struct {
+	Title, BodyHTML, URL string
+	HeadScripts          []string
+}) bool {
 	indicators := []string{
 		"cloudflare",
 		"cf-challenge",
@@ -167,7 +170,10 @@ func isCloudflareBlocked(pageInfo struct{ Title, BodyHTML, URL string; HeadScrip
 }
 
 // isCaptchaBlocked проверяет индикаторы CAPTCHA
-func isCaptchaBlocked(pageInfo struct{ Title, BodyHTML, URL string; HeadScripts []string }) bool {
+func isCaptchaBlocked(pageInfo struct {
+	Title, BodyHTML, URL string
+	HeadScripts          []string
+}) bool {
 	indicators := []string{
 		"captcha",
 		"recaptcha",
@@ -205,7 +211,10 @@ func isCaptchaBlocked(pageInfo struct{ Title, BodyHTML, URL string; HeadScripts 
 }
 
 // isRateLimited проверяет индикаторы rate limiting
-func isRateLimited(pageInfo struct{ Title, BodyHTML, URL string; HeadScripts []string }) bool {
+func isRateLimited(pageInfo struct {
+	Title, BodyHTML, URL string
+	HeadScripts          []string
+}) bool {
 	indicators := []string{
 		"rate limit",
 		"too many requests",
@@ -226,7 +235,10 @@ func isRateLimited(pageInfo struct{ Title, BodyHTML, URL string; HeadScripts []s
 }
 
 // isAccessDenied проверяет индикаторы access denied
-func isAccessDenied(pageInfo struct{ Title, BodyHTML, URL string; HeadScripts []string }) bool {
+func isAccessDenied(pageInfo struct {
+	Title, BodyHTML, URL string
+	HeadScripts          []string
+}) bool {
 	indicators := []string{
 		"access denied",
 		"forbidden",

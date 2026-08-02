@@ -14,15 +14,15 @@ import (
 )
 
 type Cache struct {
-	client    *cache.Cache
-	config    config.CacheConfig
-	mu        sync.RWMutex
+	client *cache.Cache
+	config config.CacheConfig
+	mu     sync.RWMutex
 }
 
 type CachedResponse struct {
-	Data      []byte
-	Timestamp time.Time
-	Headers   map[string]string
+	Data       []byte
+	Timestamp  time.Time
+	Headers    map[string]string
 	Screenshot []byte // Separate field for binary screenshot data
 }
 

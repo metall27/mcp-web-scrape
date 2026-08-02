@@ -8,8 +8,8 @@ import (
 
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/domain"
-	"github.com/rs/zerolog"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
+	"github.com/rs/zerolog"
 )
 
 // UnifiedScraper автоматический выбор лучшего метода скрапинга
@@ -18,7 +18,7 @@ type UnifiedScraper struct {
 	logger        zerolog.Logger
 	methodLearner *domain.MethodLearner
 	config        config.ScrapingConfig // Конфигурация скрапинга
-	jsSites       []string             // Known JavaScript-heavy sites
+	jsSites       []string              // Known JavaScript-heavy sites
 }
 
 // NewUnifiedScraper создает новый UnifiedScraper
@@ -28,7 +28,7 @@ func NewUnifiedScraper(scrapers []Scraper, methodLearner *domain.MethodLearner, 
 		logger:        logger.Get(),
 		methodLearner: methodLearner,
 		config:        cfg,
-		jsSites:       cfg.JSSites,  // Известные JS сайты из конфигурации
+		jsSites:       cfg.JSSites, // Известные JS сайты из конфигурации
 	}
 }
 
