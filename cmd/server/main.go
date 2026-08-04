@@ -24,6 +24,39 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// reapZombies periodically reaps zombie (defunct) child processes.
+//
+// chromedp spawns Chrome as a child process, and Chrome in turn spawns
+// renderer and crashpad subprocesses. When those subprocesses exit, the
+// Go process must call wait() to collect their exit status — otherwise
+// they accumulate as zombies in the process table. chromedp only waits
+// for the main Chrome process; renderer/crashpad children are never
+// reaped, so we run a SIGCHLD-driven reaper for the lifetime of the
+// server (#93).
+func reapZombies(sigCh chan os.Signal, done <-chan struct{}) {
+	go func() {
+		<-done
+		signal.Stop(sigCh)
+	}()
+	for {
+		select {
+		case <-sigCh:
+			// Drain all pending SIGCHLD signals — each exited child
+			// generates one, and we want to reap them all.
+			var ws syscall.WaitStatus
+			var ru syscall.Rusage
+			for {
+				_, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, &ru)
+				if err != nil {
+					break
+				}
+			}
+		case <-done:
+			return
+		}
+	}
+}
+
 func main() {
 	// Parse flags. --version/-v prints the build metadata and exits before any
 	// config/browser initialization (#63). --help/-h is handled automatically by
@@ -232,6 +265,15 @@ func main() {
 		})
 	})
 
+	// Start zombie reaper (#93).
+	// chromedp spawns Chrome as a child process, and Chrome spawns renderer
+	// and crashpad subprocesses that the Go process never waits() for,
+	// causing zombie accumulation over time.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGCHLD)
+	reaperDone := make(chan struct{})
+	go reapZombies(sigCh, reaperDone)
+
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
@@ -255,6 +297,9 @@ func main() {
 	<-quit
 
 	log.Info().Msg("Shutting down server...")
+
+	// Stop zombie reaper before shutting down the HTTP server.
+	close(reaperDone)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
