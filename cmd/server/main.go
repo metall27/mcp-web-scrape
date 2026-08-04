@@ -24,7 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// reapZombies periodically reaps zombie (defunct) child processes.
+// reapZombies reaps zombie (defunct) child processes on SIGCHLD.
 //
 // chromedp spawns Chrome as a child process, and Chrome in turn spawns
 // renderer and crashpad subprocesses. When those subprocesses exit, the
@@ -33,6 +33,15 @@ import (
 // for the main Chrome process; renderer/crashpad children are never
 // reaped, so we run a SIGCHLD-driven reaper for the lifetime of the
 // server (#93).
+//
+// Double-wait with chromedp: chromedp's ExecAllocator calls
+// cmd.Process.Wait() on the main Chrome PID. Wait4(-1, ...) waits for
+// ANY child, so when Chrome itself eventually exits, either goroutine
+// may collect it first. This is intentional: the normal path reaps
+// stray grandchildren (renderers/crashpad) while the main Chrome PID is
+// still alive; on Chrome shutdown the two waits race, and both paths
+// tolerate the resulting ECHILD / "no child processes" — it's an error
+// path either way.
 func reapZombies(sigCh chan os.Signal, done <-chan struct{}) {
 	go func() {
 		<-done
@@ -41,13 +50,20 @@ func reapZombies(sigCh chan os.Signal, done <-chan struct{}) {
 	for {
 		select {
 		case <-sigCh:
-			// Drain all pending SIGCHLD signals — each exited child
-			// generates one, and we want to reap them all.
+			// Drain all reaped children. Wait4 with WNOHANG has three
+			// returns, all of which must be handled:
+			//   pid > 0, err == nil  → reaped a child, keep draining
+			//   pid == 0, err == nil → a child exists but hasn't exited;
+			//                          stop now and wait for the next
+			//                          SIGCHLD (otherwise we busy-spin
+			//                          while the long-lived Chrome from
+			//                          the browser pool is still alive)
+			//   pid < 0, err != nil  → ECHILD: no children left
 			var ws syscall.WaitStatus
 			var ru syscall.Rusage
 			for {
-				_, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, &ru)
-				if err != nil {
+				pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, &ru)
+				if err != nil || pid == 0 {
 					break
 				}
 			}
