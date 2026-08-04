@@ -24,6 +24,55 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// reapZombies reaps zombie (defunct) child processes on SIGCHLD.
+//
+// chromedp spawns Chrome as a child process, and Chrome in turn spawns
+// renderer and crashpad subprocesses. When those subprocesses exit, the
+// Go process must call wait() to collect their exit status — otherwise
+// they accumulate as zombies in the process table. chromedp only waits
+// for the main Chrome process; renderer/crashpad children are never
+// reaped, so we run a SIGCHLD-driven reaper for the lifetime of the
+// server (#93).
+//
+// Double-wait with chromedp: chromedp's ExecAllocator calls
+// cmd.Process.Wait() on the main Chrome PID. Wait4(-1, ...) waits for
+// ANY child, so when Chrome itself eventually exits, either goroutine
+// may collect it first. This is intentional: the normal path reaps
+// stray grandchildren (renderers/crashpad) while the main Chrome PID is
+// still alive; on Chrome shutdown the two waits race, and both paths
+// tolerate the resulting ECHILD / "no child processes" — it's an error
+// path either way.
+func reapZombies(sigCh chan os.Signal, done <-chan struct{}) {
+	go func() {
+		<-done
+		signal.Stop(sigCh)
+	}()
+	for {
+		select {
+		case <-sigCh:
+			// Drain all reaped children. Wait4 with WNOHANG has three
+			// returns, all of which must be handled:
+			//   pid > 0, err == nil  → reaped a child, keep draining
+			//   pid == 0, err == nil → a child exists but hasn't exited;
+			//                          stop now and wait for the next
+			//                          SIGCHLD (otherwise we busy-spin
+			//                          while the long-lived Chrome from
+			//                          the browser pool is still alive)
+			//   pid < 0, err != nil  → ECHILD: no children left
+			var ws syscall.WaitStatus
+			var ru syscall.Rusage
+			for {
+				pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, &ru)
+				if err != nil || pid == 0 {
+					break
+				}
+			}
+		case <-done:
+			return
+		}
+	}
+}
+
 func main() {
 	// Parse flags. --version/-v prints the build metadata and exits before any
 	// config/browser initialization (#63). --help/-h is handled automatically by
@@ -232,6 +281,15 @@ func main() {
 		})
 	})
 
+	// Start zombie reaper (#93).
+	// chromedp spawns Chrome as a child process, and Chrome spawns renderer
+	// and crashpad subprocesses that the Go process never waits() for,
+	// causing zombie accumulation over time.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGCHLD)
+	reaperDone := make(chan struct{})
+	go reapZombies(sigCh, reaperDone)
+
 	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
@@ -255,6 +313,9 @@ func main() {
 	<-quit
 
 	log.Info().Msg("Shutting down server...")
+
+	// Stop zombie reaper before shutting down the HTTP server.
+	close(reaperDone)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
