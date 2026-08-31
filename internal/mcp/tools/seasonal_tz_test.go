@@ -8,12 +8,13 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// TestSeasonalZoneNameMechanism (throwaway verification for the #95 review
-// fix): proves the Intl-based resolution the stealth script uses produces
-// DIFFERENT names for January vs July in DST zones — i.e. the dynamic
-// resolution is genuinely seasonal and a hardcoded "Daylight" name would
-// contradict the winter offset. Run-time anchored assertions can't show this
-// in August (both resolve to the summer name).
+// TestSeasonalZoneNameMechanism (#95 review fix guard): proves the
+// Intl-based resolution the stealth script uses produces DIFFERENT names
+// for January vs July in DST zones — i.e. the dynamic resolution is
+// genuinely seasonal and a hardcoded "Daylight" name would contradict the
+// winter offset. Fixed dates are used because a runtime-anchored assertion
+// can only observe the current season (in August both branches resolve to
+// the summer name).
 func TestSeasonalZoneNameMechanism(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test: requires Chrome binary")
