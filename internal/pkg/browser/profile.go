@@ -56,8 +56,11 @@ type BrowserProfile struct {
 
 	// Timezone / Language are a coherent IANA-timezone + locale pair
 	// (e.g. "de-DE" + "Europe/Berlin", never "ja-JP" + "America/New_York").
-	Timezone string
-	Language string
+	// TimezoneLongName is the human-readable zone name a real Chrome prints
+	// in Date.prototype.toString(), e.g. "(Eastern Daylight Time)".
+	Timezone         string
+	TimezoneLongName string
+	Language         string
 
 	// WebGLVendor / WebGLRenderer are a VALID GPU pair (Intel vendor with an
 	// Intel GPU, etc.) appropriate for the profile's OS.
@@ -87,19 +90,22 @@ func pickRandom(n int) int {
 	return profileRnd.Intn(n)
 }
 
-// localeTimezone pairs a locale with a matching IANA timezone. Locale and
+// localeTimezones pairs a locale with a matching IANA timezone. Locale and
 // timezone must agree or Intl.DateTimeFormat betrays the JS overrides.
+// longName is what a real Chrome prints in Date.prototype.toString(), e.g.
+// "Mon Jan 01 2026 10:00:00 GMT-0400 (Eastern Daylight Time)".
 var localeTimezones = []struct {
 	Language string
 	Timezone string
+	LongName string
 }{
-	{"en-US", "America/New_York"},
-	{"en-US", "America/Los_Angeles"},
-	{"en-GB", "Europe/London"},
-	{"de-DE", "Europe/Berlin"},
-	{"fr-FR", "Europe/Paris"},
-	{"es-ES", "Europe/Madrid"},
-	{"ja-JP", "Asia/Tokyo"},
+	{"en-US", "America/New_York", "Eastern Daylight Time"},
+	{"en-US", "America/Los_Angeles", "Pacific Daylight Time"},
+	{"en-GB", "Europe/London", "Greenwich Mean Time"},
+	{"de-DE", "Europe/Berlin", "Central European Summer Time"},
+	{"fr-FR", "Europe/Paris", "Central European Summer Time"},
+	{"es-ES", "Europe/Madrid", "Central European Summer Time"},
+	{"ja-JP", "Asia/Tokyo", "Japan Standard Time"},
 }
 
 // webglPairs maps navigator.platform to valid GPU vendor/renderer pairs.
@@ -138,6 +144,7 @@ func NewProfile(userAgent string) BrowserProfile {
 
 	lt := localeTimezones[pickRandom(len(localeTimezones))]
 	p.Timezone = lt.Timezone
+	p.TimezoneLongName = lt.LongName
 	p.Language = lt.Language
 
 	pair := webglPairFor(p.Platform)
@@ -161,8 +168,10 @@ func ProfileFromParts(userAgent string, fp BrowserFingerprint) BrowserProfile {
 
 	p.Timezone = fp.Timezone
 	p.Language = fp.Language
+	p.TimezoneLongName = timezoneLongName(fp.Timezone)
 	if p.Timezone == "" {
 		p.Timezone = "America/New_York"
+		p.TimezoneLongName = "Eastern Daylight Time"
 	}
 	if p.Language == "" {
 		p.Language = "en-US"
@@ -234,6 +243,12 @@ func (p BrowserProfile) AcceptLanguage() string {
 		return p.Language
 	}
 	return "en-US"
+}
+
+// localeICU converts the BCP-47 language tag ("en-US") to the ICU C-locale
+// form ("en_US") required by Emulation.setLocaleOverride.
+func (p BrowserProfile) LocaleICU() string {
+	return strings.ReplaceAll(p.AcceptLanguage(), "-", "_")
 }
 
 // parseUserAgent normalizes the UA (HeadlessChrome → Chrome) and derives the
@@ -343,4 +358,21 @@ func webglPairFor(platform string) *[2]string {
 	}
 	pair := pairs[pickRandom(len(pairs))]
 	return &pair
+}
+
+// timezoneLongName maps an IANA timezone to the human-readable zone name a
+// real Chrome prints in Date.prototype.toString(). Unknown zones fall back
+// to a generic name derived from the IANA identifier.
+func timezoneLongName(tz string) string {
+	for _, lt := range localeTimezones {
+		if lt.Timezone == tz {
+			return lt.LongName
+		}
+	}
+	// Generic fallback: "Europe/Berlin" -> "(Berlin Time)"-ish neutral name.
+	parts := strings.Split(tz, "/")
+	if len(parts) > 0 && parts[len(parts)-1] != "" {
+		return strings.ReplaceAll(parts[len(parts)-1], "_", " ") + " Time"
+	}
+	return "Coordinated Universal Time"
 }

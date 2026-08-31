@@ -1109,6 +1109,16 @@ func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserP
 				// platform/WebGL agree with the advertised UA.
 				fp := profile.Fingerprint()
 
+				// #95 Stage 2: engine-level TZ/locale overrides. Chrome then
+				// reports the profile's zone NATIVELY in Date, Intl and
+				// timezone-sensitive APIs — far more robust than any JS patch.
+				if err := emulation.SetTimezoneOverride(profile.Timezone).Do(ctx); err != nil {
+					s.logger.Warn().Err(err).Str("timezone", profile.Timezone).Msg("CDP timezone override failed (JS fallback only)")
+				}
+				if err := emulation.SetLocaleOverride().WithLocale(profile.LocaleICU()).Do(ctx); err != nil {
+					s.logger.Warn().Err(err).Str("locale", profile.Language).Msg("CDP locale override failed (non-critical)")
+				}
+
 				s.logger.Info().
 					Str("timezone", fp.Timezone).
 					Str("language", fp.Language).
@@ -1117,7 +1127,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserP
 					Msg("Phase 3: Injecting Extended Stealth anti-detection scripts")
 
 				// Inject comprehensive anti-detection scripts
-				if err := stealth.InjectAntiDetectionScripts(fp).Do(ctx); err != nil {
+				if err := stealth.InjectAntiDetectionScripts(profile).Do(ctx); err != nil {
 					s.logger.Warn().Err(err).Msg("Failed to inject anti-detection scripts (non-critical)")
 				} else {
 					s.logger.Info().Msg("Extended Stealth scripts injected successfully")
