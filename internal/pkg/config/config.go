@@ -74,14 +74,24 @@ type BrowserConfig struct {
 	GeoLocale      GeoLocaleConfig `mapstructure:"geo_locale"`      // Egress-IP geo locale for profiles (#99)
 }
 
-// GeoLocaleConfig управляет гео-согласованностью локали профиля (#99):
-// резолв страны/таймзоны по egress-IP (ipinfo.io). Уважайте бесплатную
-// квоту ipinfo (100 req/день/IP на один прямой эгресс): TTL 15m даёт
-// максимум 96 запросов/сутки — вписывается. При 429/ошибке фича тихо
-// деградирует до случайной локали (Warn в логах).
+// GeoLocaleConfig управляет гео-согласованностью локали профиля (#99).
+//
+// use_external_geo_ip_discovery: true (default) — определять гео egress-IP
+// цепочкой бесплатных провайдеров (ipinfo → ip-api → ipwhois, первый
+// ответивший побеждает; смерть одного сервиса ничего не меняет).
+//
+// use_external_geo_ip_discovery: false — СЕТЕВЫХ ЗАПРОСОВ НЕТ ВООБЩЕ:
+// используется static_geo (ISO-2 страна, напр. "RU") → ru-RU/Europe/Moscow.
+// Для сервера с известной локацией это полностью офлайн-режим.
+//
+// static_geo также служит fallback'ом, когда discovery включён, но все
+// провайдеры недоступны. Пустой static_geo + недоступные провайдеры →
+// случайная локаль (Warn в логах), скрейп не ломается.
 type GeoLocaleConfig struct {
-	Enabled bool          `mapstructure:"enabled"`
-	TTL     time.Duration `mapstructure:"ttl"`
+	Enabled                   bool          `mapstructure:"enabled"`
+	TTL                       time.Duration `mapstructure:"ttl"`
+	UseExternalGeoIPDiscovery bool          `mapstructure:"use_external_geo_ip_discovery"`
+	StaticGeo                 string        `mapstructure:"static_geo"`
 }
 
 // PollingConfig конфигурация для polling навигации
@@ -283,10 +293,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("browser.max_retries", 2) // Retry with different proxies on blocking
 
 	// Geo-coherent locale (#99): resolve the egress-IP geography and pin
-	// the profile's locale/timezone to it. TTL must respect the free
-	// ipinfo.io quota (100 req/day per direct IP): 15m → max 96 req/day.
+	// the profile's locale/timezone to it. Two modes:
+	//   use_external_geo_ip_discovery: true  → provider chain
+	//     (ipinfo → ip-api → ipwhois), first answer wins;
+	//   use_external_geo_ip_discovery: false → fully offline, static_geo
+	//     country pin (also the fallback when discovery fails).
 	v.SetDefault("browser.geo_locale.enabled", true)
 	v.SetDefault("browser.geo_locale.ttl", 15*time.Minute)
+	v.SetDefault("browser.geo_locale.use_external_geo_ip_discovery", true)
+	v.SetDefault("browser.geo_locale.static_geo", "")
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")

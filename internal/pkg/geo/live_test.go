@@ -7,15 +7,14 @@ import (
 	"time"
 )
 
-// Live integration check against the real ipinfo.io (guarded by
-// GEO_LIVE=1 so CI/offline runs skip it). Verifies the whole chain the
-// production code uses: ipinfoResolver -> mapping -> cache.
-func TestIPInfoLiveResolve(t *testing.T) {
+// Live integration check against real providers (guarded by GEO_LIVE=1 so
+// offline runs skip it). Verifies the production chain end-to-end.
+func TestGeoChainLiveResolve(t *testing.T) {
 	if os.Getenv("GEO_LIVE") == "" {
-		t.Skip("set GEO_LIVE=1 to run the live ipinfo check")
+		t.Skip("set GEO_LIVE=1 to run the live geo check")
 	}
-	r := NewCachedResolver(NewIPInfoResolver(), time.Minute)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	r := NewCachedResolver(NewGeoResolver(true, ""), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	l1, err := r.Resolve(ctx, "")
@@ -33,5 +32,18 @@ func TestIPInfoLiveResolve(t *testing.T) {
 	}
 	if l2.Source != "cache" {
 		t.Errorf("second resolve source = %q, want cache", l2.Source)
+	}
+}
+
+// Live check of the static (offline) mode — no network by construction.
+func TestStaticModeLiveSanity(t *testing.T) {
+	r := NewGeoResolver(false, "RU")
+	loc, err := r.Resolve(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("static mode: %+v", loc)
+	if loc.Source != "static" {
+		t.Errorf("source = %q, want static", loc.Source)
 	}
 }

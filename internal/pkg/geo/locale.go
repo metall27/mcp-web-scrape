@@ -8,6 +8,25 @@ import (
 	"time"
 )
 
+// Locale is the geo-derived locale identity for a profile.
+type Locale struct {
+	// Country is the ISO 3166-1 alpha-2 code from the resolver ("RU").
+	Country string
+	// Timezone is the IANA zone of the egress IP ("Europe/Moscow").
+	Timezone string
+	// Language is the BCP-47 tag matching the country ("ru-RU").
+	Language string
+	// Source records where the geo came from (provider name, "cache",
+	// "persisted", or "os").
+	Source string
+}
+
+// Resolver looks up the geography of the current egress IP.
+// The proxyURL parameter selects the egress: "" means direct.
+type Resolver interface {
+	Resolve(ctx context.Context, proxyURL string) (Locale, error)
+}
+
 // countryLocales maps ISO 3166-1 alpha-2 country codes to a coherent
 // BCP-47 language + IANA timezone pair. The table covers the countries the
 // scraper realistically egresses from (RU home/bare-metal, common proxy
@@ -35,6 +54,16 @@ var countryLocales = map[string]struct{ Language, Timezone string }{
 	"IN": {"en-IN", "Asia/Kolkata"},
 	"BR": {"pt-BR", "America/Sao_Paulo"},
 	"AU": {"en-AU", "Australia/Sydney"},
+}
+
+// localeForCountry maps an ISO-2 country to the full static Locale
+// (used by the config-pinned static mode, #99).
+func localeForCountry(country string) (Locale, bool) {
+	l, ok := countryLocales[normalizeCountry(country)]
+	if !ok {
+		return Locale{}, false
+	}
+	return Locale{Country: normalizeCountry(country), Timezone: l.Timezone, Language: l.Language}, true
 }
 
 // LanguageForCountry returns the BCP-47 language for an ISO country code,

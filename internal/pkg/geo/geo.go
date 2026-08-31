@@ -1,16 +1,3 @@
-// Package geo resolves the geography of the scraper's egress IP and maps it
-// to a coherent browser locale/timezone (#99).
-//
-// Anti-bot systems flag the mismatch "German locale from a Kazan IP" as a
-// VPN/bot signal instantly. The profile's language and timezone must agree
-// with the geography of the IP the traffic actually leaves from:
-//
-//	direct egress  -> resolve the machine's public IP
-//	proxy enabled  -> resolve THROUGH the proxy (its egress is what the site sees)
-//
-// Resolution is best-effort with a memory cache (TTL) and a static fallback
-// table; a failed lookup must never break a scrape — it just degrades to the
-// legacy random locale.
 package geo
 
 import (
@@ -21,87 +8,195 @@ import (
 	"time"
 )
 
-// Locale is the geo-derived locale identity for a profile.
-type Locale struct {
-	// Country is the ISO 3166-1 alpha-2 code from the resolver ("RU").
-	Country string
-	// Timezone is the IANA zone of the egress IP ("Europe/Moscow").
-	Timezone string
-	// Language is the BCP-47 tag matching the country ("ru-RU").
-	Language string
-	// Source records where the geo came from: "resolver" | "cache" | "fallback".
-	Source string
+// Provider is a single geo-IP lookup endpoint. All built-in providers are
+// interchangeable JSON services that locate the CALLING IP (no query
+// parameter), so a chain of them can be tried in order until one answers.
+type Provider interface {
+	Name() string
+	Resolve(ctx context.Context, client *http.Client, proxyURL string) (Locale, error)
 }
 
-// Resolver looks up the geography of the current egress IP.
-// The proxyURL parameter selects the egress: "" means direct.
-type Resolver interface {
-	Resolve(ctx context.Context, proxyURL string) (Locale, error)
-}
-
-// ipinfoResolver is the default Resolver: https://ipinfo.io/json (free,
-// no token, returns country + timezone for the calling IP).
-type ipinfoResolver struct {
-	client *http.Client
-	// endpoint allows tests to point the resolver at a stub server.
+// jsonProvider is a generic {"country": "...", "timezone": "..."} provider.
+type jsonProvider struct {
+	name     string
 	endpoint string
 }
 
-// NewIPInfoResolver returns a Resolver backed by ipinfo.io.
-func NewIPInfoResolver() Resolver {
-	return &ipinfoResolver{
-		client:   &http.Client{Timeout: 5 * time.Second},
-		endpoint: "https://ipinfo.io/json",
-	}
+// Built-in provider chain, tried in order. All are free, keyless, and
+// locate the calling IP. The chain means NO single external resource can
+// disable the feature (#99 review follow-up: no hard dependency on one
+// service). Order: ipinfo (most precise fields) → ip-api → ipwhois.
+var builtinProviders = []Provider{
+	&jsonProvider{name: "ipinfo", endpoint: "https://ipinfo.io/json"},
+	&jsonProvider{name: "ip-api", endpoint: "http://ip-api.com/json/?fields=status,countryCode,timezone"},
+	&jsonProvider{name: "ipwhois", endpoint: "https://ipwhois.app/json"},
 }
 
-type ipinfoResponse struct {
-	IP       string `json:"ip"`
-	Country  string `json:"country"`
-	Timezone string `json:"timezone"`
+// BuiltinProviders returns a copy of the default provider chain (used when
+// the config lists none).
+func BuiltinProviders() []Provider {
+	out := make([]Provider, len(builtinProviders))
+	copy(out, builtinProviders)
+	return out
 }
 
-func (r *ipinfoResolver) Resolve(ctx context.Context, proxyURL string) (Locale, error) {
-	client := r.client
+// providerResponse is the superset of fields across the built-in providers.
+type providerResponse struct {
+	IP          string `json:"ip"`
+	Country     string `json:"country"`     // ipinfo, ipwhois
+	CountryCode string `json:"countryCode"` // ip-api
+	Timezone    string `json:"timezone"`    // all
+	Status      string `json:"status"`      // ip-api ("success"), ipwhois ("success")
+	Message     string `json:"message"`     // ipwhois error text
+}
+
+func (p *jsonProvider) Name() string { return p.name }
+
+func (p *jsonProvider) Resolve(ctx context.Context, client *http.Client, proxyURL string) (Locale, error) {
+	httpClient := client
 	if proxyURL != "" {
 		pu, err := parseProxyURL(proxyURL)
 		if err != nil {
-			return Locale{}, fmt.Errorf("geo: invalid proxy URL: %w", err)
+			return Locale{}, fmt.Errorf("geo[%s]: invalid proxy URL: %w", p.name, err)
 		}
-		// Fresh transport only on the (rare) proxied path; the direct
-		// path reuses the resolver's client and its connection pool.
-		proxied := *r.client
+		// Fresh transport only on the (currently inactive) proxied path;
+		// the direct path reuses the shared client's connection pool.
+		proxied := *client
 		proxied.Transport = &http.Transport{Proxy: http.ProxyURL(pu)}
-		client = &proxied
+		httpClient = &proxied
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint, nil)
 	if err != nil {
 		return Locale{}, err
 	}
-	req.Header.Set("User-Agent", "curl/8.4.0") // honest UA — no browser pretense for a geo API
+	// Honest UA — a geo API is not something to pretend a browser at.
+	req.Header.Set("User-Agent", "curl/8.4.0")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return Locale{}, fmt.Errorf("geo: ipinfo request failed: %w", err)
+		return Locale{}, fmt.Errorf("geo[%s]: request failed: %w", p.name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Locale{}, fmt.Errorf("geo: ipinfo returned HTTP %d", resp.StatusCode)
+		return Locale{}, fmt.Errorf("geo[%s]: HTTP %d", p.name, resp.StatusCode)
 	}
 
-	var body ipinfoResponse
+	var body providerResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return Locale{}, fmt.Errorf("geo: ipinfo decode failed: %w", err)
-	}
-	if body.Country == "" || body.Timezone == "" {
-		return Locale{}, fmt.Errorf("geo: ipinfo response missing country/timezone (country=%q tz=%q)", body.Country, body.Timezone)
+		return Locale{}, fmt.Errorf("geo[%s]: decode failed: %w", p.name, err)
 	}
 
-	lang := LanguageForCountry(body.Country)
-	if lang == "" {
-		return Locale{}, fmt.Errorf("geo: no locale mapping for country %q", body.Country)
+	// ip-api / ipwhois signal failures inside a 200 via status != "success".
+	if body.Status != "" && body.Status != "success" {
+		return Locale{}, fmt.Errorf("geo[%s]: provider status %q %q", p.name, body.Status, body.Message)
 	}
-	return Locale{Country: body.Country, Timezone: body.Timezone, Language: lang, Source: "resolver"}, nil
+
+	// Providers disagree on the field name (country vs countryCode).
+	country := body.Country
+	if country == "" {
+		country = body.CountryCode
+	}
+	if country == "" || body.Timezone == "" {
+		return Locale{}, fmt.Errorf("geo[%s]: missing country/timezone (country=%q tz=%q)", p.name, country, body.Timezone)
+	}
+
+	lang := LanguageForCountry(country)
+	if lang == "" {
+		return Locale{}, fmt.Errorf("geo[%s]: no locale mapping for country %q", p.name, country)
+	}
+	return Locale{Country: country, Timezone: body.Timezone, Language: lang, Source: p.name}, nil
+}
+
+// chainResolver tries providers in order and returns the first success.
+// It replaces the old single-service resolver: one dead service no longer
+// disables the feature.
+type chainResolver struct {
+	providers []Provider
+	client    *http.Client
+}
+
+// NewChainResolver builds a Resolver over an ordered provider list. An
+// empty list falls back to BuiltinProviders().
+func NewChainResolver(providers []Provider) Resolver {
+	if len(providers) == 0 {
+		providers = BuiltinProviders()
+	}
+	return &chainResolver{
+		providers: providers,
+		client:    &http.Client{Timeout: 4 * time.Second},
+	}
+}
+
+// staticResolver serves a config-pinned country with zero network.
+type staticResolver struct {
+	locale Locale
+}
+
+// NewStaticResolver returns a Resolver that always answers with the
+// locale mapped from the given ISO-2 country ("RU" → ru-RU/Europe/Moscow).
+// An unmapped/empty country yields a resolver that always errors (the
+// caller treats it as "not configured").
+func NewStaticResolver(country string) Resolver {
+	l, ok := localeForCountry(country)
+	if !ok {
+		return &staticResolver{locale: Locale{}}
+	}
+	l.Source = "static"
+	return &staticResolver{locale: l}
+}
+
+func (s *staticResolver) Resolve(ctx context.Context, proxyURL string) (Locale, error) {
+	if s.locale.Country == "" {
+		return Locale{}, fmt.Errorf("geo[static]: country not configured or unmapped")
+	}
+	return s.locale, nil
+}
+
+// NewGeoResolver builds the production resolver per config (#99):
+//
+//	useExternalDiscovery=false → staticResolver(staticGeo), the network
+//	  is never touched;
+//	useExternalDiscovery=true  → provider chain (CachedResolver at the
+//	  caller); a non-empty staticGeo becomes a fallback for the
+//	  "all providers dead" case.
+func NewGeoResolver(useExternalDiscovery bool, staticGeo string) Resolver {
+	static := NewStaticResolver(staticGeo)
+	if !useExternalDiscovery {
+		return static
+	}
+	if _, err := static.Resolve(context.Background(), ""); err == nil {
+		return &fallbackResolver{primary: NewChainResolver(nil), fallback: static}
+	}
+	return NewChainResolver(nil)
+}
+
+// fallbackResolver tries primary, then fallback.
+type fallbackResolver struct {
+	primary  Resolver
+	fallback Resolver
+}
+
+func (f *fallbackResolver) Resolve(ctx context.Context, proxyURL string) (Locale, error) {
+	l, err := f.primary.Resolve(ctx, proxyURL)
+	if err == nil {
+		return l, nil
+	}
+	if fl, ferr := f.fallback.Resolve(ctx, proxyURL); ferr == nil {
+		return fl, nil
+	}
+	return Locale{}, err
+}
+
+func (c *chainResolver) Resolve(ctx context.Context, proxyURL string) (Locale, error) {
+	var lastErr error
+	for _, p := range c.providers {
+		loc, err := p.Resolve(ctx, c.client, proxyURL)
+		if err == nil {
+			return loc, nil
+		}
+		lastErr = err
+	}
+	return Locale{}, fmt.Errorf("geo: all %d providers failed: %w", len(c.providers), lastErr)
 }

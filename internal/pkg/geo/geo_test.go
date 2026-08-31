@@ -160,50 +160,150 @@ func TestCachedResolverTTLExpiry(t *testing.T) {
 	}
 }
 
-// --- ipinfoResolver against a stub server (no network) ---
+// --- provider against a stub server (no network) ---
 
-func TestIPInfoResolverParses(t *testing.T) {
-	const payload = `{"ip":"95.105.4.122","city":"Kazan","country":"RU","timezone":"Europe/Moscow"}`
+func stubProvider(t *testing.T, name, payload string, status int) (Provider, *httptest.Server, *int) {
+	t.Helper()
+	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
 		w.Header().Set("Content-Type", "application/json")
+		if status != 0 {
+			http.Error(w, payload, status)
+			return
+		}
 		fmt.Fprintln(w, payload)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return &jsonProvider{name: name, endpoint: srv.URL + "/json"}, srv, &hits
+}
 
-	res := &ipinfoResolver{client: srv.Client(), endpoint: srv.URL + "/json"}
-	loc, err := res.Resolve(context.Background(), "")
+func TestProviderParses(t *testing.T) {
+	p, _, _ := stubProvider(t, "stub", `{"ip":"95.105.4.122","country":"RU","timezone":"Europe/Moscow"}`, 0)
+	loc, err := p.Resolve(context.Background(), &http.Client{}, "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if loc.Country != "RU" || loc.Timezone != "Europe/Moscow" || loc.Language != "ru-RU" {
 		t.Errorf("locale = %+v, want RU/Europe/Moscow/ru-RU", loc)
 	}
-	if loc.Source != "resolver" {
-		t.Errorf("source = %q, want resolver", loc.Source)
+	if loc.Source != "stub" {
+		t.Errorf("source = %q, want stub", loc.Source)
 	}
 }
 
-func TestIPInfoResolverUnknownCountry(t *testing.T) {
-	const payload = `{"ip":"1.2.3.4","country":"XX","timezone":"Nowhere/Foo"}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, payload)
-	}))
-	defer srv.Close()
+func TestProviderCountryCodeField(t *testing.T) {
+	// ip-api style: countryCode instead of country
+	p, _, _ := stubProvider(t, "stub", `{"status":"success","countryCode":"DE","timezone":"Europe/Berlin"}`, 0)
+	loc, err := p.Resolve(context.Background(), &http.Client{}, "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if loc.Country != "DE" || loc.Language != "de-DE" {
+		t.Errorf("locale = %+v, want DE/de-DE", loc)
+	}
+}
 
-	res := &ipinfoResolver{client: srv.Client(), endpoint: srv.URL + "/json"}
-	if _, err := res.Resolve(context.Background(), ""); err == nil {
+func TestProviderUnknownCountry(t *testing.T) {
+	p, _, _ := stubProvider(t, "stub", `{"country":"XX","timezone":"Nowhere/Foo"}`, 0)
+	if _, err := p.Resolve(context.Background(), &http.Client{}, ""); err == nil {
 		t.Error("expected error for unmapped country")
 	}
 }
 
-func TestIPInfoResolverHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "rate limited", http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-
-	res := &ipinfoResolver{client: srv.Client(), endpoint: srv.URL + "/json"}
-	if _, err := res.Resolve(context.Background(), ""); err == nil {
+func TestProviderHTTPError(t *testing.T) {
+	p, _, _ := stubProvider(t, "stub", "rate limited", http.StatusTooManyRequests)
+	if _, err := p.Resolve(context.Background(), &http.Client{}, ""); err == nil {
 		t.Error("expected error on HTTP 429")
+	}
+}
+
+func TestProviderStatusFailureIn200(t *testing.T) {
+	// ip-api signals failure inside a 200 body
+	p, _, _ := stubProvider(t, "stub", `{"status":"fail","message":"private range"}`, 0)
+	if _, err := p.Resolve(context.Background(), &http.Client{}, ""); err == nil {
+		t.Error("expected error for provider status=fail")
+	}
+}
+
+// --- chainResolver: the dead-service concern ---
+
+func TestChainSkipsDeadProvider(t *testing.T) {
+	// First provider always 500s; the chain must answer from the second.
+	dead, _, deadHits := stubProvider(t, "dead", "boom", http.StatusInternalServerError)
+	alive, _, aliveHits := stubProvider(t, "alive", `{"country":"RU","timezone":"Europe/Moscow"}`, 0)
+	chain := NewChainResolver([]Provider{dead, alive})
+
+	loc, err := chain.Resolve(context.Background(), "")
+	if err != nil {
+		t.Fatalf("chain should survive a dead provider: %v", err)
+	}
+	if loc.Country != "RU" {
+		t.Errorf("locale country = %q, want RU", loc.Country)
+	}
+	if *deadHits == 0 || *aliveHits == 0 {
+		t.Error("expected both providers to be tried")
+	}
+}
+
+func TestChainAllDead(t *testing.T) {
+	dead, _, _ := stubProvider(t, "dead1", "x", 500)
+	dead2, _, _ := stubProvider(t, "dead2", "y", 500)
+	chain := NewChainResolver([]Provider{dead, dead2})
+	if _, err := chain.Resolve(context.Background(), ""); err == nil {
+		t.Error("expected error when all providers are dead")
+	}
+}
+
+// --- static mode (use_external_geo_ip_discovery: false) ---
+
+func TestStaticResolverRU(t *testing.T) {
+	r := NewStaticResolver("RU")
+	loc, err := r.Resolve(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.Country != "RU" || loc.Language != "ru-RU" || loc.Timezone != "Europe/Moscow" {
+		t.Errorf("static RU = %+v, want RU/ru-RU/Europe/Moscow", loc)
+	}
+	if loc.Source != "static" {
+		t.Errorf("source = %q, want static", loc.Source)
+	}
+}
+
+func TestStaticResolverUnmapped(t *testing.T) {
+	if _, err := NewStaticResolver("XX").Resolve(context.Background(), ""); err == nil {
+		t.Error("expected error for unmapped static country")
+	}
+}
+
+// --- NewGeoResolver wiring (the config semantics) ---
+
+func TestNewGeoResolverOfflineMode(t *testing.T) {
+	// use_external_geo_ip_discovery=false + static_geo=RU → never any
+	// network: the resolver is the static one.
+	r := NewGeoResolver(false, "RU")
+	loc, err := r.Resolve(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.Source != "static" || loc.Language != "ru-RU" {
+		t.Errorf("offline mode must use static resolver, got %+v", loc)
+	}
+}
+
+func TestNewGeoResolverDiscoveryWithStaticFallback(t *testing.T) {
+	// discovery=true + static_geo set → static wins only when the chain
+	// (here: real providers, unreachable in test env without network...
+	// but they may BE reachable). To keep this hermetic, assert the type
+	// composition instead of the outcome.
+	r := NewGeoResolver(true, "RU")
+	if _, ok := r.(*fallbackResolver); !ok {
+		t.Fatalf("expected fallbackResolver composition, got %T", r)
+	}
+	// And with no static_geo → bare chain.
+	r2 := NewGeoResolver(true, "")
+	if _, ok := r2.(*chainResolver); !ok {
+		t.Fatalf("expected chainResolver, got %T", r2)
 	}
 }

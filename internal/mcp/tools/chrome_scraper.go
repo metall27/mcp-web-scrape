@@ -82,11 +82,18 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 		githubCfg:   githubCfg,
 		logger:      logger.Get(),
 	}
-	// Geo-coherent locale (#99). Kill-switch + TTL from config; the TTL
-	// default (15m) is bounded by the free ipinfo.io quota (100 req/day
-	// per direct IP → max 96 req/day at 15m).
+	// Geo-coherent locale (#99). Kill-switch + mode from config:
+	// use_external_geo_ip_discovery=false → fully offline static_geo pin;
+	// true (default) → provider chain with static_geo as fallback.
+	// TTL cache bounds provider usage (15m default).
 	if browserCfg.GeoLocale.Enabled {
-		s.geoResolver = geo.NewCachedResolver(geo.NewIPInfoResolver(), browserCfg.GeoLocale.TTL)
+		s.geoResolver = geo.NewCachedResolver(
+			geo.NewGeoResolver(
+				browserCfg.GeoLocale.UseExternalGeoIPDiscovery,
+				browserCfg.GeoLocale.StaticGeo,
+			),
+			browserCfg.GeoLocale.TTL,
+		)
 	}
 	return s
 }
