@@ -1,0 +1,79 @@
+package useragent
+
+import (
+	"math/rand"
+	"strings"
+	"testing"
+)
+
+// TestGetRandomDesktopChromeOnly verifies the #95 P0 fix: the desktop pick
+// must only ever return a plain desktop Chrome UA — no Firefox, no Safari,
+// no Edge, no Headless, no mobile — because both consumers (Chrome scraper
+// on a Chromium engine, HTTP scraper with a Chrome uTLS ClientHello) would
+// contradict a non-Chrome UA.
+func TestGetRandomDesktopChromeOnly(t *testing.T) {
+	r := New(Config{})
+	for i := 0; i < 500; i++ {
+		ua := r.GetRandomDesktop()
+		l := strings.ToLower(ua)
+		switch {
+		case !strings.Contains(l, "chrome"):
+			t.Fatalf("non-Chrome UA returned: %s", ua)
+		case strings.Contains(l, "headless"):
+			t.Fatalf("headless UA returned: %s", ua)
+		case strings.Contains(l, "edg/"):
+			t.Fatalf("Edge UA returned: %s", ua)
+		case strings.Contains(l, "firefox"):
+			t.Fatalf("Firefox UA returned: %s", ua)
+		case strings.Contains(l, "gecko/20100101"): // Firefox marker without the word
+			t.Fatalf("Firefox UA returned: %s", ua)
+		case !strings.Contains(l, "chrome/") && strings.Contains(l, "safari") && !strings.Contains(l, "chrome"):
+			t.Fatalf("Safari UA returned: %s", ua)
+		case strings.Contains(l, "mobile") || strings.Contains(l, "android") || strings.Contains(l, "iphone"):
+			t.Fatalf("mobile UA returned: %s", ua)
+		}
+	}
+}
+
+// TestGetMatchesDesktopChromeOnly: Get() feeds the HTTP/uTLS scraper whose
+// ClientHello is Chrome 120 — same Chrome-only restriction applies.
+func TestGetMatchesDesktopChromeOnly(t *testing.T) {
+	r := New(Config{})
+	for i := 0; i < 500; i++ {
+		ua := r.Get()
+		l := strings.ToLower(ua)
+		if !strings.Contains(l, "chrome") || strings.Contains(l, "edg/") ||
+			strings.Contains(l, "headless") || strings.Contains(l, "gecko/20100101") {
+			t.Fatalf("Get() returned non-desktop-Chrome UA: %s", ua)
+		}
+	}
+}
+
+// TestChromeOnlyFallsBackWhenNoChromeUA: a rotator whose list contains no
+// usable desktop Chrome UA must fall back to the hardcoded Chrome UA —
+// never an empty string and never a non-Chrome UA.
+func TestChromeOnlyFallsBackWhenNoChromeUA(t *testing.T) {
+	r := &Rotator{userAgents: []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+	}}
+	rnd := rand.New(rand.NewSource(1))
+	r.rnd = rnd
+	for i := 0; i < 50; i++ {
+		ua := r.GetRandomDesktop()
+		l := strings.ToLower(ua)
+		if !strings.Contains(l, "chrome") || strings.Contains(l, "headless") || strings.Contains(l, "edg/") {
+			t.Fatalf("fallback returned non-desktop-Chrome UA: %s", ua)
+		}
+	}
+}
+
+// TestChromeOnlyFallsBackOnEmptyList: the zero-value rotator must still
+// return a valid Chrome UA, never an empty string.
+func TestChromeOnlyFallsBackOnEmptyList(t *testing.T) {
+	r2 := &Rotator{}
+	ua := r2.GetRandomDesktop()
+	if ua == "" || !strings.Contains(strings.ToLower(ua), "chrome") {
+		t.Fatalf("empty-rotator fallback returned %q", ua)
+	}
+}

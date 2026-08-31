@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -45,7 +46,7 @@ type scrapeContext struct {
 	browserCancel context.CancelFunc
 	proxy         *proxy.Proxy
 	userAgent     string
-	fingerprint   browser.BrowserFingerprint // pinned for named sessions; random for ephemeral
+	profile       browser.BrowserProfile // coherent identity: UA ↔ platform ↔ brands ↔ TZ/WebGL (#95); carries the fingerprint via Fingerprint()
 	stealth       *browser.StealthActions
 
 	// Named session state. When useSession is true, browserCtx is a tab
@@ -78,6 +79,15 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 	}
 }
 
+// fallbackUA returns a current desktop Chrome UA used when no rotator is
+// available and no explicit UA was requested.
+func (s *ChromeScraper) fallbackUA() string {
+	if s.uaRotator != nil {
+		return s.uaRotator.GetRandomDesktop()
+	}
+	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+}
+
 // createScrapeContext creates a new scrape context for a single attempt (Phase 5: Retry Loop)
 // This method extracts browser context creation, proxy selection, and UA generation
 func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
@@ -103,14 +113,13 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			if ua == "" {
 				ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 			}
-			fp := browser.BrowserFingerprint{}
-			if opts.StealthEnabled {
-				// Use a transient StealthActions just to generate a
-				// fingerprint — the real stealth actions for the scrape
-				// are created below with the full config.
-				gen := browser.NewStealthActions(browser.StealthConfig{})
-				fp = gen.GenerateRandomFingerprint()
-			}
+			// The session pins a fingerprint derived from the SAME coherent
+			// profile as the Emulation override, so the stealth JS
+			// (navigator.platform, TZ, WebGL) can never contradict the
+			// advertised UA (#95 review finding: GenerateRandomFingerprint
+			// picked platform independently → Win32 in headers, MacIntel in
+			// navigator on the same call).
+			fp := browser.NewProfile(ua).Fingerprint()
 
 			sessCtx, err := sm.GetOrCreate(s.browserPool.Allocator(), opts.SessionID, ua, fp)
 			if err != nil {
@@ -133,7 +142,9 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 				fp = pinnedFP
 			}
 			scrapeCtx.userAgent = ua
-			scrapeCtx.fingerprint = fp
+			// Coherent identity for the Emulation override: UA from the
+			// session, TZ/locale/WebGL from the pinned fingerprint (#95).
+			scrapeCtx.profile = browser.ProfileFromParts(ua, fp)
 
 			// #59: Pre-read the captured localStorage snapshot for this
 			// session so it can be re-injected via
@@ -188,6 +199,10 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 		}
 		scrapeCtx.userAgent = userAgent
+		// Ephemeral contexts get a fresh coherent profile per call; the
+		// fingerprint (used by stealth JS) is derived from it, so platform
+		// and WebGL can never contradict the UA (#95).
+		scrapeCtx.profile = browser.NewProfile(userAgent)
 	}
 
 	s.logger.Debug().
@@ -290,7 +305,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result := scrapeAttemptResult{}
 
 	// 1. Build Chrome tasks
-	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.userAgent, scrapeCtx.fingerprint, scrapeCtx.stealth, opts, scrapeCtx.useSession, scrapeCtx.localStorageData)
+	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.profile, scrapeCtx.stealth, opts, scrapeCtx.useSession, scrapeCtx.localStorageData)
 
 	// 2. Run tasks
 	var html string
@@ -1048,45 +1063,51 @@ func (s *ChromeScraper) SupportsActions() bool {
 // Возвращает tasks и actionExecutor (для извлечения результатов execute_js)
 // preserveSession: когда true (named session), очистка cookies/storage пропускается
 //
-// fingerprint carries the browser identity (timezone, language, platform,
-// WebGL). For named sessions it is pinned once at session creation and
-// reused on every call so the target site observes a consistent browser
-// across the whole session (#41); for ephemeral contexts the caller leaves
-// it zero-valued and a random one is generated per call.
-func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint browser.BrowserFingerprint, stealth *browser.StealthActions, opts Options, preserveSession bool, localStorageData map[string]string) ([]chromedp.Action, *browser.ActionExecutor) {
+// profile carries the full browser identity (UA, platform, Sec-CH-UA brands,
+// timezone/locale, WebGL). For named sessions it is re-derived
+// deterministically from the session's pinned (UA, fingerprint) pair on
+// every call so the target site observes a consistent browser across the
+// whole session (#41); for ephemeral contexts a fresh coherent profile is
+// generated per call.
+func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserProfile, stealth *browser.StealthActions, opts Options, preserveSession bool, localStorageData map[string]string) ([]chromedp.Action, *browser.ActionExecutor) {
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Phase 1: Set User-Agent in JS context (navigator.userAgent)
-			// NOTE: HTTP User-Agent is set at allocator level during browser pool creation
-			// This sync ensures JS navigator.userAgent matches HTTP headers.
+			// Phase 1: Override the browser identity at the ENGINE level via
+			// Emulation.setUserAgentOverride with full UserAgentMetadata (#95).
 			//
-			// Uses page.AddScriptToEvaluateOnNewDocument so the override
-			// PERSISTS across navigations. Previously chromedp.Evaluate ran
-			// on about:blank and the override was lost after Navigate().
-			uaScript := fmt.Sprintf(`
-				Object.defineProperty(navigator, 'userAgent', {
-					get: function() { return %q; },
-					configurable: true
-				});
-			`, userAgent)
-
-			if _, err := page.AddScriptToEvaluateOnNewDocument(uaScript).Do(ctx); err != nil {
-				s.logger.Debug().Err(err).Msg("Failed to set JS User-Agent")
+			// A single override covers, from one source of truth:
+			//   - the HTTP User-Agent header (no more "HeadlessChrome" leak),
+			//   - Sec-CH-UA / Sec-CH-UA-Platform / Sec-CH-UA-Mobile headers,
+			//   - navigator.userAgent, navigator.platform, navigator.appVersion,
+			//   - navigator.userAgentData.brands (no more "HeadlessChrome").
+			//
+			// This replaces the old JS defineProperty(navigator,'userAgent')
+			// patch, which left the HTTP header and userAgentData untouched —
+			// a direct header-vs-JS contradiction that anti-bot systems flag.
+			if profile.UserAgent == "" {
+				// Defensive: a zero profile must never advertise an empty UA —
+				// fall back to the pinned session identity or a Chrome default.
+				profile = browser.NewProfile(s.fallbackUA())
+			}
+			if err := emulation.SetUserAgentOverride(profile.UserAgent).
+				WithAcceptLanguage(profile.AcceptLanguage()).
+				WithPlatform(profile.Platform).
+				WithUserAgentMetadata(profile.UserAgentMetadata()).
+				Do(ctx); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to set user agent override (falling back to engine defaults)")
 			} else {
 				s.logger.Debug().
-					Str("user_agent", userAgent).
-					Msg("User-Agent synchronized in JS context")
+					Str("user_agent", profile.UserAgent).
+					Str("platform", profile.Platform).
+					Msg("Browser identity override applied (UA + Sec-CH-UA + navigator)")
 			}
 
 			// Phase 3: Extended Stealth - Inject anti-detection scripts
 			if stealth != nil {
-				// Named sessions provide a pinned fingerprint; ephemeral
-				// contexts pass a zero-value struct (Timezone=="") and get
-				// a fresh random identity for this call only.
-				fp := fingerprint
-				if fp.Timezone == "" {
-					fp = stealth.GenerateRandomFingerprint()
-				}
+				// The fingerprint for JS injection is derived from the same
+				// profile as the Emulation override, so timezone/locale/
+				// platform/WebGL agree with the advertised UA.
+				fp := profile.Fingerprint()
 
 				s.logger.Info().
 					Str("timezone", fp.Timezone).
@@ -1141,7 +1162,7 @@ func (s *ChromeScraper) buildChromeTasks(urlStr, userAgent string, fingerprint b
 
 	// Navigate with stealth if enabled
 	// Use FAST navigation - load URL directly without waiting for full page load
-	navigationTask := s.buildNavigationTask(urlStr, userAgent, stealth, preserveSession)
+	navigationTask := s.buildNavigationTask(urlStr, profile.UserAgent, stealth, preserveSession)
 	tasks = append(tasks, navigationTask)
 
 	// Wait for specific selector if provided — wrapped in timeout to prevent indefinite hangs
