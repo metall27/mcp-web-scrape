@@ -79,6 +79,7 @@ func TestStealthProfileConsistency(t *testing.T) {
 	// 2. JS layer: navigator must agree with the HTTP header.
 	var probe struct {
 		UA         string `json:"ua"`
+		AppVersion string `json:"appVersion"`
 		Platform   string `json:"platform"`
 		Brands     string `json:"brands"`
 		CHPlatform string `json:"chPlatform"`
@@ -88,6 +89,7 @@ func TestStealthProfileConsistency(t *testing.T) {
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 		chromedp.Evaluate(`(() => ({
 			ua: navigator.userAgent,
+			appVersion: navigator.appVersion,
 			platform: navigator.platform,
 			brands: ((navigator.userAgentData && navigator.userAgentData.brands) || []).map(b => b.brand).join(','),
 			chPlatform: navigator.userAgentData && navigator.userAgentData.platform
@@ -99,6 +101,15 @@ func TestStealthProfileConsistency(t *testing.T) {
 
 	if strings.Contains(probe.UA, "Headless") || probe.UA != profile.UserAgent {
 		t.Errorf("navigator.userAgent = %q, want %q", probe.UA, profile.UserAgent)
+	}
+	// #95 item 16: navigator.appVersion comes FREE with the Emulation
+	// override — it must be the UA minus the "Mozilla/" prefix and must
+	// not contain "Headless".
+	if strings.Contains(probe.AppVersion, "Headless") {
+		t.Errorf("navigator.appVersion contains Headless: %s", probe.AppVersion)
+	}
+	if want := strings.TrimPrefix(profile.UserAgent, "Mozilla/"); probe.AppVersion != want {
+		t.Errorf("navigator.appVersion = %q, want %q", probe.AppVersion, want)
 	}
 	if probe.Platform != profile.Platform {
 		t.Errorf("navigator.platform = %q, want %q", probe.Platform, profile.Platform)
