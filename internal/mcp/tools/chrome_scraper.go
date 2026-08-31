@@ -71,7 +71,7 @@ type scrapeContext struct {
 
 // NewChromeScraper создает новый ChromeScraper
 func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator, githubCfg config.GitHubConfig) *ChromeScraper {
-	return &ChromeScraper{
+	s := &ChromeScraper{
 		cache:       cache,
 		browserPool: browserPool,
 		ragConfig:   ragConfig,
@@ -81,23 +81,46 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 		converter:   converter.New(),
 		githubCfg:   githubCfg,
 		logger:      logger.Get(),
-		geoResolver: geo.NewCachedResolver(geo.NewIPInfoResolver(), 10*time.Minute),
 	}
+	// Geo-coherent locale (#99). Kill-switch + TTL from config; the TTL
+	// default (15m) is bounded by the free ipinfo.io quota (100 req/day
+	// per direct IP → max 96 req/day at 15m).
+	if browserCfg.GeoLocale.Enabled {
+		s.geoResolver = geo.NewCachedResolver(geo.NewIPInfoResolver(), browserCfg.GeoLocale.TTL)
+	}
+	return s
 }
 
-// resolveGeoLocale returns the egress-IP geo locale for the CURRENT scrape.
-// proxyURL selects the egress whose geography matters: the proxy URL when
-// rotation is on (the site never sees our direct IP), "" for direct.
+// chromeUsesProxy reports whether the Chrome scraper actually routes its
+// traffic through the proxy rotator. Today this is FALSE: the browser
+// allocator has no --proxy-server flag and the rotator is consumed by the
+// HTTP fallback path only. It exists so the geo logic below can follow the
+// real egress, not the intended one — flip to true when Chrome gains
+// proxy support (follow-up issue for #99).
+const chromeUsesProxy = false
+
+// resolveGeoLocale returns the geo locale for the egress the SITE actually
+// sees. Since Chrome (the scraper that advertises the profile) leaves from
+// our direct IP regardless of proxy rotation, the direct egress is the
+// only correct geography to mirror — resolving through a proxy would pin,
+// say, Berlin while the site sees Kazan, recreating the exact VPN/bot
+// mismatch #99 fixes (review finding on PR #100).
 // Best-effort: on any failure it returns a zero Locale and the profile
-// silently falls back to the random locale. Served from the TTL cache
-// after the first hit per egress.
-func (s *ChromeScraper) resolveGeoLocale(ctx context.Context, proxyURL string) geo.Locale {
+// silently falls back to the random locale.
+func (s *ChromeScraper) resolveGeoLocale(ctx context.Context, selectedProxy *proxy.Proxy) geo.Locale {
 	if s.geoResolver == nil {
 		return geo.Locale{}
 	}
+	proxyURL := ""
+	// chromeUsesProxy is false today: Chrome has no --proxy-server flag,
+	// so the proxy egress is NOT what the site sees. Flip the const when
+	// Chrome gains proxy support (follow-up to #99).
+	if chromeUsesProxy && selectedProxy != nil {
+		proxyURL = selectedProxy.URL
+	}
 	locale, err := s.geoResolver.Resolve(ctx, proxyURL)
 	if err != nil {
-		s.logger.Debug().Err(err).Msg("Geo locale resolution failed; using random locale")
+		s.logger.Warn().Err(err).Msg("Geo locale resolution failed; using random locale")
 		return geo.Locale{}
 	}
 	s.logger.Info().
@@ -123,10 +146,9 @@ func (s *ChromeScraper) fallbackUA() string {
 func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
 	scrapeCtx := &scrapeContext{}
 
-	// 0. Select the proxy FIRST (#99): the egress decides the geography the
-	// profile's locale/timezone must agree with. Selecting it here (rather
-	// than at the end of the method) also keeps this attempt's proxy stable
-	// for both the geo lookup and the scrape itself.
+	// 0. Select the proxy FIRST: one GetNext() per attempt, so the geo
+	// lookup below and the HTTP-fallback path see the same proxy instance
+	// (no hidden rotation between the two).
 	if s.proxy != nil && s.proxy.IsEnabled() {
 		selectedProxy, err := s.proxy.GetNext()
 		if err != nil {
@@ -138,11 +160,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 				Msg("Using proxy for scrape attempt")
 		}
 	}
-	proxyURL := ""
-	if scrapeCtx.proxy != nil {
-		proxyURL = scrapeCtx.proxy.URL
-	}
-	geoLocale := s.resolveGeoLocale(ctx, proxyURL)
+	geoLocale := s.resolveGeoLocale(ctx, scrapeCtx.proxy)
 
 	// 1a. Named persistent session path: reuse a browser context that
 	// survives across scrape calls (shared cookie jar / storage).

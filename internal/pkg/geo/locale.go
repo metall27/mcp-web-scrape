@@ -46,17 +46,6 @@ func LanguageForCountry(country string) string {
 	return ""
 }
 
-// LocaleForCountry returns the full static locale for an ISO country code
-// (used by the resolver fallback when the network lookup fails but the
-// country is known, e.g. from config).
-func LocaleForCountry(country string) (Locale, bool) {
-	l, ok := countryLocales[normalizeCountry(country)]
-	if !ok {
-		return Locale{}, false
-	}
-	return Locale{Country: normalizeCountry(country), Timezone: l.Timezone, Language: l.Language, Source: "fallback"}, true
-}
-
 func normalizeCountry(c string) string {
 	if len(c) != 2 {
 		return c

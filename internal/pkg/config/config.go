@@ -55,22 +55,33 @@ type TimeoutConfig struct {
 }
 
 type BrowserConfig struct {
-	Enabled        bool          `mapstructure:"enabled"`
-	Timeout        time.Duration `mapstructure:"timeout"`
-	WaitTime       time.Duration `mapstructure:"wait_time"`
-	ViewportWidth  int           `mapstructure:"viewport_width"`
-	ViewportHeight int           `mapstructure:"viewport_height"`
-	UserAgent      string        `mapstructure:"user_agent"`
-	Headless       bool          `mapstructure:"headless"`
-	BlockImages    bool          `mapstructure:"block_images"`
-	DisableGPU     bool          `mapstructure:"disable_gpu"`
-	NoSandbox      bool          `mapstructure:"no_sandbox"`
-	MaxTabs        int           `mapstructure:"max_tabs"`        // Maximum concurrent browser tabs
-	PollingConfig  PollingConfig `mapstructure:"polling"`         // Navigation polling configuration
-	SessionConfig  SessionConfig `mapstructure:"sessions"`        // Named session configuration
-	ToolTimeout    time.Duration `mapstructure:"tool_timeout"`    // Tool-level timeout for scraping operations
-	BlockDetection bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
-	MaxRetries     int           `mapstructure:"max_retries"`     // Maximum retries with different proxies on blocking
+	Enabled        bool            `mapstructure:"enabled"`
+	Timeout        time.Duration   `mapstructure:"timeout"`
+	WaitTime       time.Duration   `mapstructure:"wait_time"`
+	ViewportWidth  int             `mapstructure:"viewport_width"`
+	ViewportHeight int             `mapstructure:"viewport_height"`
+	UserAgent      string          `mapstructure:"user_agent"`
+	Headless       bool            `mapstructure:"headless"`
+	BlockImages    bool            `mapstructure:"block_images"`
+	DisableGPU     bool            `mapstructure:"disable_gpu"`
+	NoSandbox      bool            `mapstructure:"no_sandbox"`
+	MaxTabs        int             `mapstructure:"max_tabs"`        // Maximum concurrent browser tabs
+	PollingConfig  PollingConfig   `mapstructure:"polling"`         // Navigation polling configuration
+	SessionConfig  SessionConfig   `mapstructure:"sessions"`        // Named session configuration
+	ToolTimeout    time.Duration   `mapstructure:"tool_timeout"`    // Tool-level timeout for scraping operations
+	BlockDetection bool            `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
+	MaxRetries     int             `mapstructure:"max_retries"`     // Maximum retries with different proxies on blocking
+	GeoLocale      GeoLocaleConfig `mapstructure:"geo_locale"`      // Egress-IP geo locale for profiles (#99)
+}
+
+// GeoLocaleConfig управляет гео-согласованностью локали профиля (#99):
+// резолв страны/таймзоны по egress-IP (ipinfo.io). Уважайте бесплатную
+// квоту ipinfo (100 req/день/IP на один прямой эгресс): TTL 15m даёт
+// максимум 96 запросов/сутки — вписывается. При 429/ошибке фича тихо
+// деградирует до случайной локали (Warn в логах).
+type GeoLocaleConfig struct {
+	Enabled bool          `mapstructure:"enabled"`
+	TTL     time.Duration `mapstructure:"ttl"`
 }
 
 // PollingConfig конфигурация для polling навигации
@@ -270,6 +281,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("browser.tool_timeout", 120*time.Second)
 	v.SetDefault("browser.block_detection", true)
 	v.SetDefault("browser.max_retries", 2) // Retry with different proxies on blocking
+
+	// Geo-coherent locale (#99): resolve the egress-IP geography and pin
+	// the profile's locale/timezone to it. TTL must respect the free
+	// ipinfo.io quota (100 req/day per direct IP): 15m → max 96 req/day.
+	v.SetDefault("browser.geo_locale.enabled", true)
+	v.SetDefault("browser.geo_locale.ttl", 15*time.Minute)
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")

@@ -3,6 +3,12 @@ package geo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,16 +28,25 @@ func TestLanguageForCountry(t *testing.T) {
 	}
 }
 
-func TestLocaleForCountry(t *testing.T) {
-	l, ok := LocaleForCountry("ru")
-	if !ok {
-		t.Fatal("LocaleForCountry(ru) not found")
+func TestLocaleForCountryRemoved(t *testing.T) {
+	// LocaleForCountry was dead production code (review L1 on PR #100):
+	// nothing in production called it. Guard against reintroduction
+	// without a caller — grep the package source.
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if l.Language != "ru-RU" || l.Timezone != "Europe/Moscow" {
-		t.Errorf("RU locale = %+v, want ru-RU/Europe/Moscow", l)
-	}
-	if _, ok := LocaleForCountry("XX"); ok {
-		t.Error("LocaleForCountry(XX) should not be found")
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "LocaleForCountry") {
+			t.Errorf("%s references LocaleForCountry — dead code reintroduced without a production caller", f)
+		}
 	}
 }
 
@@ -148,7 +163,47 @@ func TestCachedResolverTTLExpiry(t *testing.T) {
 // --- ipinfoResolver against a stub server (no network) ---
 
 func TestIPInfoResolverParses(t *testing.T) {
-	// stub not easily injectable (URL is constant); covered indirectly by
-	// build + the mapping tests. Kept as a placeholder documenting intent.
-	t.Skip("ipinfo URL constant — integration-tested via TestMain guard in CI")
+	const payload = `{"ip":"95.105.4.122","city":"Kazan","country":"RU","timezone":"Europe/Moscow"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, payload)
+	}))
+	defer srv.Close()
+
+	res := &ipinfoResolver{client: srv.Client(), endpoint: srv.URL + "/json"}
+	loc, err := res.Resolve(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if loc.Country != "RU" || loc.Timezone != "Europe/Moscow" || loc.Language != "ru-RU" {
+		t.Errorf("locale = %+v, want RU/Europe/Moscow/ru-RU", loc)
+	}
+	if loc.Source != "resolver" {
+		t.Errorf("source = %q, want resolver", loc.Source)
+	}
+}
+
+func TestIPInfoResolverUnknownCountry(t *testing.T) {
+	const payload = `{"ip":"1.2.3.4","country":"XX","timezone":"Nowhere/Foo"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, payload)
+	}))
+	defer srv.Close()
+
+	res := &ipinfoResolver{client: srv.Client(), endpoint: srv.URL + "/json"}
+	if _, err := res.Resolve(context.Background(), ""); err == nil {
+		t.Error("expected error for unmapped country")
+	}
+}
+
+func TestIPInfoResolverHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	res := &ipinfoResolver{client: srv.Client(), endpoint: srv.URL + "/json"}
+	if _, err := res.Resolve(context.Background(), ""); err == nil {
+		t.Error("expected error on HTTP 429")
+	}
 }

@@ -43,12 +43,15 @@ type Resolver interface {
 // no token, returns country + timezone for the calling IP).
 type ipinfoResolver struct {
 	client *http.Client
+	// endpoint allows tests to point the resolver at a stub server.
+	endpoint string
 }
 
 // NewIPInfoResolver returns a Resolver backed by ipinfo.io.
 func NewIPInfoResolver() Resolver {
 	return &ipinfoResolver{
-		client: &http.Client{Timeout: 5 * time.Second},
+		client:   &http.Client{Timeout: 5 * time.Second},
+		endpoint: "https://ipinfo.io/json",
 	}
 }
 
@@ -59,18 +62,20 @@ type ipinfoResponse struct {
 }
 
 func (r *ipinfoResolver) Resolve(ctx context.Context, proxyURL string) (Locale, error) {
-	transport := &http.Transport{}
+	client := r.client
 	if proxyURL != "" {
 		pu, err := parseProxyURL(proxyURL)
 		if err != nil {
 			return Locale{}, fmt.Errorf("geo: invalid proxy URL: %w", err)
 		}
-		transport.Proxy = http.ProxyURL(pu)
+		// Fresh transport only on the (rare) proxied path; the direct
+		// path reuses the resolver's client and its connection pool.
+		proxied := *r.client
+		proxied.Transport = &http.Transport{Proxy: http.ProxyURL(pu)}
+		client = &proxied
 	}
-	client := *r.client
-	client.Transport = transport
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ipinfo.io/json", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpoint, nil)
 	if err != nil {
 		return Locale{}, err
 	}
