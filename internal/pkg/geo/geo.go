@@ -25,7 +25,9 @@ type jsonProvider struct {
 // Built-in provider chain, tried in order. All are free, keyless, and
 // locate the calling IP. The chain means NO single external resource can
 // disable the feature (#99 review follow-up: no hard dependency on one
-// service). Order: ipinfo (most precise fields) → ip-api → ipwhois.
+// service). Order: ipinfo (most precise fields) → ip-api (HTTPS is a paid
+// feature there, hence plain HTTP) → ipwhois (country is a FULL NAME +
+// ISO-2 in country_code + nested timezone object — all handled).
 var builtinProviders = []Provider{
 	&jsonProvider{name: "ipinfo", endpoint: "https://ipinfo.io/json"},
 	&jsonProvider{name: "ip-api", endpoint: "http://ip-api.com/json/?fields=status,countryCode,timezone"},
@@ -41,13 +43,34 @@ func BuiltinProviders() []Provider {
 }
 
 // providerResponse is the superset of fields across the built-in providers.
+// Timezone needs a custom shape: ipwhois returns it as a nested object
+// {"timezone": {"id": "Europe/Moscow", ...}} while the others use a string.
 type providerResponse struct {
-	IP          string `json:"ip"`
-	Country     string `json:"country"`     // ipinfo, ipwhois
-	CountryCode string `json:"countryCode"` // ip-api
-	Timezone    string `json:"timezone"`    // all
-	Status      string `json:"status"`      // ip-api ("success"), ipwhois ("success")
-	Message     string `json:"message"`     // ipwhois error text
+	IP           string          `json:"ip"`
+	Country      string          `json:"country"`      // ipinfo (ISO-2), ipwhois (FULL NAME — not usable directly)
+	CountryCode  string          `json:"countryCode"`  // ip-api (ISO-2)
+	CountryCode2 string          `json:"country_code"` // ipwhois (ISO-2)
+	Timezone     json.RawMessage `json:"timezone"`
+	Status       string          `json:"status"`  // ip-api ("success"), ipwhois ("success")
+	Message      string          `json:"message"` // ipwhois error text
+}
+
+// timezoneString decodes the timezone field from either shape.
+func timezoneString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var obj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		return obj.ID
+	}
+	return ""
 }
 
 func (p *jsonProvider) Name() string { return p.name }
@@ -93,20 +116,39 @@ func (p *jsonProvider) Resolve(ctx context.Context, client *http.Client, proxyUR
 		return Locale{}, fmt.Errorf("geo[%s]: provider status %q %q", p.name, body.Status, body.Message)
 	}
 
-	// Providers disagree on the field name (country vs countryCode).
-	country := body.Country
+	// Providers disagree on the country field: ipinfo → ISO-2 in
+	// "country"; ip-api → ISO-2 in "countryCode"; ipwhois → FULL NAME in
+	// "country" + ISO-2 in "country_code". Prefer the ISO-2 fields;
+	// "country" alone is only trusted when it already looks like ISO-2
+	// (a full name like "Russian Federation" would never map).
+	country := body.CountryCode
 	if country == "" {
-		country = body.CountryCode
+		country = body.CountryCode2
 	}
-	if country == "" || body.Timezone == "" {
-		return Locale{}, fmt.Errorf("geo[%s]: missing country/timezone (country=%q tz=%q)", p.name, country, body.Timezone)
+	if country == "" && isISO2(body.Country) {
+		country = body.Country
+	}
+	tz := timezoneString(body.Timezone)
+	if country == "" || tz == "" {
+		return Locale{}, fmt.Errorf("geo[%s]: missing country/timezone (country=%q tz=%q)", p.name, country, tz)
 	}
 
 	lang := LanguageForCountry(country)
 	if lang == "" {
 		return Locale{}, fmt.Errorf("geo[%s]: no locale mapping for country %q", p.name, country)
 	}
-	return Locale{Country: country, Timezone: body.Timezone, Language: lang, Source: p.name}, nil
+	return Locale{Country: country, Timezone: tz, Language: lang, Source: p.name}, nil
+}
+
+// isISO2 reports whether s looks like an ISO 3166-1 alpha-2 code
+// (two ASCII letters) — guards against full country names ("Russian
+// Federation") reaching the mapping table.
+func isISO2(s string) bool {
+	if len(s) != 2 {
+		return false
+	}
+	return (s[0] >= 'A' && s[0] <= 'Z' || s[0] >= 'a' && s[0] <= 'z') &&
+		(s[1] >= 'A' && s[1] <= 'Z' || s[1] >= 'a' && s[1] <= 'z')
 }
 
 // chainResolver tries providers in order and returns the first success.

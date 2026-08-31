@@ -17,7 +17,7 @@ type Locale struct {
 	// Language is the BCP-47 tag matching the country ("ru-RU").
 	Language string
 	// Source records where the geo came from (provider name, "cache",
-	// "persisted", or "os").
+	// or "static").
 	Source string
 }
 

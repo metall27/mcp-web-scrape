@@ -153,9 +153,13 @@ func (s *ChromeScraper) fallbackUA() string {
 func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
 	scrapeCtx := &scrapeContext{}
 
-	// 0. Select the proxy FIRST: one GetNext() per attempt, so the geo
-	// lookup below and the HTTP-fallback path see the same proxy instance
-	// (no hidden rotation between the two).
+	// 0. Select the proxy for this attempt (bookkeeping + the geo path).
+	// NOTE: the HTTP-fallback path (httpFallback) performs its OWN
+	// GetNext() — a round-robin advance — so it may use a DIFFERENT
+	// proxy than the one selected here. scrapeCtx.proxy feeds
+	// MarkSuccess/MarkFailure and the geo resolver only. Unifying the
+	// two (and fixing the resulting stats skew) is tracked as a
+	// follow-up (#99 thread).
 	if s.proxy != nil && s.proxy.IsEnabled() {
 		selectedProxy, err := s.proxy.GetNext()
 		if err != nil {
@@ -256,7 +260,8 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		}
 	}
 
-	// 1b. Ephemeral path (default): fresh browser context per call
+	// 1b. Browser context: ephemeral path (default) — fresh context per
+	// call. (The named-session path got its context in step 1a.)
 	if !scrapeCtx.useSession {
 		browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
 		if err != nil {
@@ -266,7 +271,8 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		scrapeCtx.browserCancel = browserCancel
 	}
 
-	// 1. Get User-Agent (ephemeral path only — session path already set it)
+	// 2. Get User-Agent + build the coherent profile (ephemeral path only —
+	// the session path already set both).
 	if !scrapeCtx.useSession {
 		userAgent := opts.UserAgent
 		if userAgent == "" && s.uaRotator != nil {
@@ -289,7 +295,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		Str("url", urlStr).
 		Msg("Using User-Agent for Chrome scraping")
 
-	// 3. Setup stealth actions if enabled
+	// 3. Setup stealth actions if enabled (see step 0 for proxy selection).
 	if opts.StealthEnabled {
 		scrapeCtx.stealth = browser.NewStealthActions(browser.StealthConfig{
 			RandomDelay:    true,
@@ -306,8 +312,6 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			Bool("stealth_mouse", opts.StealthMouse).
 			Msg("Stealth mode enabled")
 	}
-
-	// 4. (proxy already selected in step 0; kept slot number for history)
 
 	return scrapeCtx, nil
 }

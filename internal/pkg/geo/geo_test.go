@@ -292,6 +292,32 @@ func TestNewGeoResolverOfflineMode(t *testing.T) {
 	}
 }
 
+func TestProviderIPWhoisRealFormat(t *testing.T) {
+	// Regression (review M1 on PR #100): the REAL ipwhois.app response
+	// captured live 2026-08-31 — "country" holds a FULL NAME, the ISO-2
+	// code lives in "country_code", and timezone is a nested object.
+	// The old parser failed on this 100% of the time.
+	const payload = `{"ip":"95.105.4.122","success":true,"country":"Russian Federation","country_code":"RU","timezone":{"id":"Europe/Moscow","abbr":"MSK","is_dst":false,"offset":10800}}`
+	p, _, _ := stubProvider(t, "ipwhois", payload, 0)
+	loc, err := p.Resolve(context.Background(), &http.Client{}, "")
+	if err != nil {
+		t.Fatalf("ipwhois real format must parse: %v", err)
+	}
+	if loc.Country != "RU" || loc.Language != "ru-RU" || loc.Timezone != "Europe/Moscow" {
+		t.Errorf("locale = %+v, want RU/ru-RU/Europe/Moscow", loc)
+	}
+}
+
+func TestProviderFullCountryNameRejected(t *testing.T) {
+	// A full name in "country" with NO ISO-2 field anywhere must error
+	// (never feed "Russian Federation" to the mapping table).
+	const payload = `{"country":"Russian Federation","timezone":"Europe/Moscow"}`
+	p, _, _ := stubProvider(t, "stub", payload, 0)
+	if _, err := p.Resolve(context.Background(), &http.Client{}, ""); err == nil {
+		t.Error("expected error when only a full country name is present")
+	}
+}
+
 func TestNewGeoResolverDiscoveryWithStaticFallback(t *testing.T) {
 	// discovery=true + static_geo set → static wins only when the chain
 	// (here: real providers, unreachable in test env without network...
