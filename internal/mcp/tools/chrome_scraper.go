@@ -20,6 +20,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
+	"github.com/metall/mcp-web-scrape/internal/pkg/geo"
 	tlshttp "github.com/metall/mcp-web-scrape/internal/pkg/http"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
@@ -38,6 +39,10 @@ type ChromeScraper struct {
 	converter   *converter.Converter
 	githubCfg   config.GitHubConfig
 	logger      zerolog.Logger
+	// geoResolver resolves the egress-IP geography for geo-coherent
+	// locale/timezone (#99). Lazily initialized; nil disables the feature
+	// (profile falls back to the legacy random locale).
+	geoResolver *geo.CachedResolver
 }
 
 // scrapeContext holds the context for a single scrape attempt (Phase 5: Retry Loop)
@@ -76,7 +81,32 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 		converter:   converter.New(),
 		githubCfg:   githubCfg,
 		logger:      logger.Get(),
+		geoResolver: geo.NewCachedResolver(geo.NewIPInfoResolver(), 10*time.Minute),
 	}
+}
+
+// resolveGeoLocale returns the egress-IP geo locale for the CURRENT scrape.
+// proxyURL selects the egress whose geography matters: the proxy URL when
+// rotation is on (the site never sees our direct IP), "" for direct.
+// Best-effort: on any failure it returns a zero Locale and the profile
+// silently falls back to the random locale. Served from the TTL cache
+// after the first hit per egress.
+func (s *ChromeScraper) resolveGeoLocale(ctx context.Context, proxyURL string) geo.Locale {
+	if s.geoResolver == nil {
+		return geo.Locale{}
+	}
+	locale, err := s.geoResolver.Resolve(ctx, proxyURL)
+	if err != nil {
+		s.logger.Debug().Err(err).Msg("Geo locale resolution failed; using random locale")
+		return geo.Locale{}
+	}
+	s.logger.Info().
+		Str("country", locale.Country).
+		Str("timezone", locale.Timezone).
+		Str("language", locale.Language).
+		Str("source", locale.Source).
+		Msg("Profile geo locale resolved")
+	return locale
 }
 
 // fallbackUA returns a current desktop Chrome UA used when no rotator is
@@ -92,6 +122,27 @@ func (s *ChromeScraper) fallbackUA() string {
 // This method extracts browser context creation, proxy selection, and UA generation
 func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
 	scrapeCtx := &scrapeContext{}
+
+	// 0. Select the proxy FIRST (#99): the egress decides the geography the
+	// profile's locale/timezone must agree with. Selecting it here (rather
+	// than at the end of the method) also keeps this attempt's proxy stable
+	// for both the geo lookup and the scrape itself.
+	if s.proxy != nil && s.proxy.IsEnabled() {
+		selectedProxy, err := s.proxy.GetNext()
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
+		} else if selectedProxy != nil {
+			scrapeCtx.proxy = selectedProxy
+			s.logger.Info().
+				Str("proxy", selectedProxy.URL).
+				Msg("Using proxy for scrape attempt")
+		}
+	}
+	proxyURL := ""
+	if scrapeCtx.proxy != nil {
+		proxyURL = scrapeCtx.proxy.URL
+	}
+	geoLocale := s.resolveGeoLocale(ctx, proxyURL)
 
 	// 1a. Named persistent session path: reuse a browser context that
 	// survives across scrape calls (shared cookie jar / storage).
@@ -118,8 +169,10 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			// (navigator.platform, TZ, WebGL) can never contradict the
 			// advertised UA (#95 review finding: GenerateRandomFingerprint
 			// picked platform independently → Win32 in headers, MacIntel in
-			// navigator on the same call).
-			fp := browser.NewProfile(ua).Fingerprint()
+			// navigator on the same call). The geo locale flows into the
+			// pinned fingerprint for NEW sessions (#99); an existing session
+			// keeps its original pinned locale (first-write-wins, like UA).
+			fp := browser.NewProfile(ua, geoLocale).Fingerprint()
 
 			sessCtx, err := sm.GetOrCreate(s.browserPool.Allocator(), opts.SessionID, ua, fp)
 			if err != nil {
@@ -188,7 +241,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		scrapeCtx.browserCancel = browserCancel
 	}
 
-	// 2. Get User-Agent (ephemeral path only — session path already set it)
+	// 1. Get User-Agent (ephemeral path only — session path already set it)
 	if !scrapeCtx.useSession {
 		userAgent := opts.UserAgent
 		if userAgent == "" && s.uaRotator != nil {
@@ -201,8 +254,9 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		scrapeCtx.userAgent = userAgent
 		// Ephemeral contexts get a fresh coherent profile per call; the
 		// fingerprint (used by stealth JS) is derived from it, so platform
-		// and WebGL can never contradict the UA (#95).
-		scrapeCtx.profile = browser.NewProfile(userAgent)
+		// and WebGL can never contradict the UA (#95). Locale/timezone come
+		// from the egress-IP geography when resolvable (#99).
+		scrapeCtx.profile = browser.NewProfile(userAgent, geoLocale)
 	}
 
 	s.logger.Debug().
@@ -228,18 +282,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			Msg("Stealth mode enabled")
 	}
 
-	// 4. Get proxy if enabled
-	if s.proxy != nil && s.proxy.IsEnabled() {
-		selectedProxy, err := s.proxy.GetNext()
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
-		} else if selectedProxy != nil {
-			scrapeCtx.proxy = selectedProxy
-			s.logger.Info().
-				Str("proxy", selectedProxy.URL).
-				Msg("Using proxy for scrape attempt")
-		}
-	}
+	// 4. (proxy already selected in step 0; kept slot number for history)
 
 	return scrapeCtx, nil
 }
