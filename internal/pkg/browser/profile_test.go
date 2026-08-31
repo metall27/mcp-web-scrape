@@ -119,6 +119,33 @@ func TestProfileFromPartsStableForSession(t *testing.T) {
 	}
 }
 
+// TestProfilePlatformVersionMatchesMacOSUA verifies Sec-CH-UA-Platform-Version
+// is parsed from the UA's "Mac OS X 10_15_7" token rather than hardcoded to a
+// mismatched macOS release (review finding: Sonoma 13.5.0 with a Catalina UA).
+func TestProfilePlatformVersionMatchesMacOSUA(t *testing.T) {
+	p := NewProfile("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	if p.PlatformVersion != "10.15.7" {
+		t.Fatalf("PlatformVersion = %q, want 10.15.7", p.PlatformVersion)
+	}
+}
+
+// TestSessionFingerprintPlatformConsistentWithUA guards the review finding
+// on the session path: the fingerprint pinned for a named session must
+// advertise the same navigator.platform as the UA implies, so the stealth
+// JS injection and the Emulation override never disagree.
+func TestSessionFingerprintPlatformConsistentWithUA(t *testing.T) {
+	winUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	macUA := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+	for _, ua := range []string{winUA, macUA} {
+		fp := NewProfile(ua).Fingerprint()
+		profile := ProfileFromParts(ua, fp)
+		if fp.Platform != profile.Platform {
+			t.Fatalf("UA %q: fingerprint platform %q != profile platform %q", ua, fp.Platform, profile.Platform)
+		}
+	}
+}
+
 // TestProfileBrandVersions verifies the Sec-CH-UA brand list shape:
 // Chromium + Google Chrome with the UA's major version, plus Not:A-Brand.
 func TestProfileBrandVersions(t *testing.T) {

@@ -282,7 +282,17 @@ func parseUserAgent(userAgent string) BrowserProfile {
 	case strings.Contains(ua, "Macintosh"), strings.Contains(ua, "Mac OS X"):
 		p.Platform = "MacIntel"
 		p.CHPlatform = "macOS"
-		p.PlatformVersion = "13.5.0"
+		// Match the UA's OS version: the default rotator UAs are all
+		// "Mac OS X 10_15_7" (Catalina), and real Chrome on 10.15.7 sends
+		// Sec-CH-UA-Platform-Version "10.15.7" — not a Sonoma "13.5.0".
+		if m := regexp.MustCompile(`Mac OS X (\d+)_(\d+)(?:_(\d+))?`).FindStringSubmatch(ua); m != nil {
+			p.PlatformVersion = m[1] + "." + m[2]
+			if m[3] != "" {
+				p.PlatformVersion += "." + m[3]
+			}
+		} else {
+			p.PlatformVersion = "10.15.7"
+		}
 		p.Architecture = "x86"
 		p.Bitness = "64"
 	default: // "Linux x86_64" and anything unrecognized
