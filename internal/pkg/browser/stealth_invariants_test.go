@@ -29,13 +29,17 @@ func TestStealthScriptInvariants(t *testing.T) {
 		t.Error("getTimezoneOffset still uses a getter override")
 	}
 
-	// 2. Date.toString must use the human-readable zone name (#95 item 6),
-	// never the raw IANA identifier.
-	if !strings.Contains(main, "zoneLongName") {
-		t.Error("Date.toString override does not use the long zone name")
+	// 2. Date.toString must resolve the zone name DYNAMICALLY via Intl
+	// (#95 review: a hardcoded "Daylight" name contradicted the winter
+	// offset); the profile value is only a fallback.
+	if !strings.Contains(main, "timezoneLongNameFor(") {
+		t.Error("Date.toString override does not resolve the zone name dynamically")
 	}
 	if !strings.Contains(main, fmt.Sprintf("%q", profile.TimezoneLongName)) {
-		t.Errorf("long zone name %q not embedded in script", profile.TimezoneLongName)
+		t.Errorf("fallback zone name %q not embedded in script", profile.TimezoneLongName)
+	}
+	if strings.Contains(main, "tzOffsetCache") {
+		t.Error("offset cache survives — goes stale across DST transitions in long-lived sessions")
 	}
 
 	// 3. window.screen must NOT be replaced with a fresh object per access

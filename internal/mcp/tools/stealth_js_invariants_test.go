@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,7 @@ func TestStealthJSInvariantsOnChrome(t *testing.T) {
 		ScreenIdentity bool   `json:"screenIdentity"`
 		DateNowInt     bool   `json:"dateNowInt"`
 		DateToString   string `json:"dateToString"`
+		LiveZoneName   string `json:"liveZoneName"`
 		Cores          int    `json:"cores"`
 		ScreenWidth    int    `json:"screenWidth"`
 	}
@@ -76,9 +78,16 @@ func TestStealthJSInvariantsOnChrome(t *testing.T) {
 		// Inject the real stealth scripts (persisted on new documents).
 		stealth.InjectAntiDetectionScripts(profile),
 		chromedp.Navigate(`data:text/html,<html><body><h1>probe</h1></body></html>`),
-		chromedp.Evaluate(`(() => {
+		chromedp.Evaluate(fmt.Sprintf(`(() => {
 			let tzValue = null, tzThrew = false;
 			try { tzValue = new Date().getTimezoneOffset(); } catch (e) { tzThrew = true; }
+			// Live seasonal name from Intl — what a real Chrome in the
+			// profile's zone would print RIGHT NOW (review finding 3:
+			// asserting against the hardcoded profile name cannot catch
+			// winter "Daylight" contradictions).
+			const liveName = new Intl.DateTimeFormat('en-US', {
+				timeZone: %q, timeZoneName: 'long'
+			}).formatToParts(new Date()).find(p => p.type === 'timeZoneName').value;
 			return {
 				tzTypeof: typeof Date.prototype.getTimezoneOffset,
 				tzValue: tzValue,
@@ -86,10 +95,11 @@ func TestStealthJSInvariantsOnChrome(t *testing.T) {
 				screenIdentity: window.screen === window.screen,
 				dateNowInt: Number.isInteger(Date.now()),
 				dateToString: new Date().toString(),
+				liveZoneName: liveName,
 				cores: navigator.hardwareConcurrency,
 				screenWidth: screen.width
 			};
-		})()`, &probe),
+		})()`, profile.Timezone), &probe),
 	)
 	if err != nil {
 		t.Fatalf("chromedp run failed: %v", err)
@@ -118,8 +128,9 @@ func TestStealthJSInvariantsOnChrome(t *testing.T) {
 			t.Errorf("Date.toString() leaks IANA id: %s", probe.DateToString)
 		}
 	}
-	if !strings.Contains(probe.DateToString, "("+profile.TimezoneLongName+")") {
-		t.Errorf("Date.toString() = %q, want zone name (%s)", probe.DateToString, profile.TimezoneLongName)
+	if !strings.Contains(probe.DateToString, "("+probe.LiveZoneName+")") {
+		t.Errorf("Date.toString() = %q, want seasonal zone name (%s) from live Intl",
+			probe.DateToString, probe.LiveZoneName)
 	}
 	if probe.Cores <= 0 || probe.Cores > 64 {
 		t.Errorf("hardwareConcurrency = %d, implausible", probe.Cores)

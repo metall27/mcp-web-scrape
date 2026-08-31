@@ -363,28 +363,40 @@ func (s *StealthActions) InjectAntiDetectionScripts(profile BrowserProfile) chro
 func (s *StealthActions) buildAntiDetectionScript(profile BrowserProfile) string {
 	return fmt.Sprintf(`
 		(() => {
-			// Shared timezone helper (#95): DST-correct offset for an IANA
-			// zone computed with Intl, cached per (zone, year).
-			const tzOffsetCache = {};
-			function getTimezoneOffsetForZone(timeZone) {
-				const now = new Date();
-				const year = now.getFullYear();
-				const key = timeZone + '|' + year;
-				if (key in tzOffsetCache) return tzOffsetCache[key];
+			// Shared timezone helpers (#95): DST-correct values computed with
+			// Intl AT CALL TIME — never cached across DST transitions of a
+			// long-lived session (review: a (zone, year) cache went stale
+			// after the DST switch inside a named session).
+			function tzPartsFor(timeZone, date) {
 				const dtf = new Intl.DateTimeFormat('en-US', {
 					timeZone: timeZone, hour12: false,
 					year: 'numeric', month: '2-digit', day: '2-digit',
 					hour: '2-digit', minute: '2-digit', second: '2-digit'
 				});
-				const parts = dtf.formatToParts(now).reduce((acc, p) => {
+				return dtf.formatToParts(date).reduce((acc, p) => {
 					if (p.type !== 'literal') acc[p.type] = p.value;
 					return acc;
 				}, {});
-				const asUTC = Date.UTC(year, parts.month - 1, parts.day,
+			}
+			function getTimezoneOffsetForZone(timeZone, date) {
+				const d = date || new Date();
+				const parts = tzPartsFor(timeZone, d);
+				const asUTC = Date.UTC(parts.year, parts.month - 1, parts.day,
 					parts.hour === '24' ? 0 : parts.hour, parts.minute, parts.second);
-				const offsetMin = Math.round((asUTC - now.getTime()) / 60000);
-				tzOffsetCache[key] = offsetMin;
-				return offsetMin;
+				return Math.round((asUTC - d.getTime()) / 60000);
+			}
+			// Seasonal long zone name ("Eastern Daylight Time" vs
+			// "...Standard Time") resolved via Intl for the CURRENT moment —
+			// the profile value is only a fallback (review: a hardcoded
+			// "Daylight" name contradicted the winter offset).
+			function timezoneLongNameFor(timeZone, fallback) {
+				try {
+					const name = new Intl.DateTimeFormat('en-US', {
+						timeZone: timeZone, timeZoneName: 'long'
+					}).formatToParts(new Date()).find(p => p.type === 'timeZoneName');
+					if (name && name.value) return name.value;
+				} catch (e) {}
+				return fallback;
 			}
 
 			// Phase 3.1: Remove navigator.webdriver
@@ -427,18 +439,21 @@ func (s *StealthActions) buildAntiDetectionScript(profile BrowserProfile) string
 			// scraper alongside this script) makes Date/Intl report the
 			// profile's zone natively; this override only guarantees the value
 			// when that CDP call was unavailable.
-			const targetTimezoneOffset = getTimezoneOffsetForZone(%q);
+			const targetTimezone = %q;
+			const fallbackZoneName = %q;
 			Date.prototype.getTimezoneOffset = function() {
-				return targetTimezoneOffset;
+				return getTimezoneOffsetForZone(targetTimezone);
 			};
 
 			// Override toString to use the human-readable zone name a real
 			// Chrome prints — "GMT-0400 (Eastern Daylight Time)", never
-			// "(America/New_York)" (#95 item 6).
+			// "(America/New_York)" (#95 item 6). The name is resolved for
+			// the current season via Intl so it can never contradict the
+			// offset (review: hardcoded "Daylight" vs winter GMT-0500).
 			const originalToString = Date.prototype.toString;
-			const zoneLongName = %q;
 			Date.prototype.toString = function() {
-				return originalToString.call(this).replace(/\((.*?)\)/, '(' + zoneLongName + ')');
+				const zoneName = timezoneLongNameFor(targetTimezone, fallbackZoneName);
+				return originalToString.call(this).replace(/(GMT[+-]\d{4}) \((.*?)\)$/, '$1 (' + zoneName + ')');
 			};
 
 			// Set locale
