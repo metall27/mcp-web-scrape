@@ -79,18 +79,14 @@ func New(cfg Config) *Rotator {
 	return r
 }
 
-// Get возвращает случайный User-Agent
+// Get возвращает случайный User-Agent.
+//
+// The HTTP scraper's TLS client always sends a Chrome ClientHello (uTLS
+// Chrome 120 fingerprint), so the default pick is restricted to desktop
+// Chrome UAs — a Firefox/Safari UA with Chromium TLS/JA3 is an instant
+// mismatch (#95).
 func (r *Rotator) Get() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if len(r.userAgents) == 0 {
-		// Fallback если список пуст (не должно произойти)
-		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-	}
-
-	idx := r.rnd.Intn(len(r.userAgents))
-	return r.userAgents[idx]
+	return r.GetRandomDesktop()
 }
 
 // GetForPlatform возвращает случайный UA для конкретной платформы
@@ -181,9 +177,47 @@ func toLower(s string) string {
 	return string(result)
 }
 
-// GetRandomDesktop возвращает случайный desktop UA
+// GetRandomDesktop возвращает случайный desktop-User-Agent — ТОЛЬКО Chrome.
+//
+// Firefox/Safari/Edge не выдаются: Chrome-скрейпер управляет Chromium-движком
+// (userAgentData отдаёт Chromium-бренды, window.chrome существует), а HTTP-скрейпер
+// шлёт Chrome ClientHello через uTLS. Firefox-UA в любом из этих контекстов —
+// мгновенный детект (#95). GetForPlatform("desktop") остаётся для полного перебора.
 func (r *Rotator) GetRandomDesktop() string {
-	return r.GetForPlatform("desktop")
+	return r.chromeOnly()
+}
+
+// chromeOnly выбирает случайный UA из списка, ограниченного desktop-Chrome.
+func (r *Rotator) chromeOnly() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.userAgents) == 0 {
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	}
+
+	filtered := make([]string, 0, len(r.userAgents))
+	for _, ua := range r.userAgents {
+		uaLower := toLower(ua)
+		if contains(uaLower, "chrome") &&
+			!contains(uaLower, "headless") &&
+			!contains(uaLower, "edg") &&
+			!contains(uaLower, "mobile") &&
+			!contains(uaLower, "android") &&
+			!contains(uaLower, "iphone") &&
+			!contains(uaLower, "ipad") {
+			filtered = append(filtered, ua)
+		}
+	}
+
+	if len(filtered) == 0 {
+		// Custom UA lists may contain no plain desktop Chrome entry — fall
+		// back to the hardcoded one rather than an empty UA.
+		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	}
+
+	idx := r.rnd.Intn(len(filtered))
+	return filtered[idx]
 }
 
 // GetRandomMobile возвращает случайный mobile UA
