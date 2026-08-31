@@ -309,7 +309,11 @@ func (s *StealthActions) ApplyStealthWithScroll(task chromedp.Action) chromedp.A
 	})
 }
 
-// GenerateRandomFingerprint генерирует случайный fingerprint браузера
+// BrowserFingerprint is the subset of the browser identity consumed by the
+// stealth JS injection and pinned on named sessions. Since #95 Stage 1 it is
+// always DERIVED from a coherent BrowserProfile (see profile.go) — never
+// generated with independent random values, which produced contradictions a
+// bot detector flags instantly (e.g. Windows UA + MacIntel platform).
 type BrowserFingerprint struct {
 	ViewportWidth  int
 	ViewportHeight int
@@ -320,60 +324,6 @@ type BrowserFingerprint struct {
 	WebGLRenderer  string
 }
 
-func (s *StealthActions) GenerateRandomFingerprint() BrowserFingerprint {
-	// Timezones (популярные)
-	timezones := []string{
-		"America/New_York",
-		"America/Los_Angeles",
-		"Europe/London",
-		"Europe/Berlin",
-		"Europe/Paris",
-		"Asia/Tokyo",
-		"Australia/Sydney",
-	}
-
-	// Languages
-	languages := []string{
-		"en-US",
-		"en-GB",
-		"de-DE",
-		"fr-FR",
-		"ja-JP",
-		"es-ES",
-	}
-
-	// Platforms
-	platforms := []string{
-		"Win32",
-		"MacIntel",
-		"Linux x86_64",
-	}
-
-	// WebGL vendors
-	vendors := []string{
-		"Google Inc. (NVIDIA)",
-		"Google Inc. (Intel)",
-		"Google Inc. (AMD)",
-	}
-
-	// Renderers
-	renderers := []string{
-		"ANGLE (NVIDIA GeForce GTX 1060)",
-		"ANGLE (Intel(R) UHD Graphics 630)",
-		"ANGLE (AMD Radeon RX 580)",
-	}
-
-	return BrowserFingerprint{
-		ViewportWidth:  1920,
-		ViewportHeight: 1080,
-		Timezone:       timezones[s.rnd.Intn(len(timezones))],
-		Language:       languages[s.rnd.Intn(len(languages))],
-		Platform:       platforms[s.rnd.Intn(len(platforms))],
-		WebGLVendor:    vendors[s.rnd.Intn(len(vendors))],
-		WebGLRenderer:  renderers[s.rnd.Intn(len(renderers))],
-	}
-}
-
 // InjectAntiDetectionScripts injects JavaScript to hide browser automation traces.
 // This is the main entry point for Phase 3: Extended Stealth.
 //
@@ -381,14 +331,19 @@ func (s *StealthActions) GenerateRandomFingerprint() BrowserFingerprint {
 // so the scripts PERSIST across navigations — chromedp.Evaluate runs on the
 // current document (about:blank) and is discarded as soon as Navigate() creates
 // a new document, making stealth ineffective on the target page.
-func (s *StealthActions) InjectAntiDetectionScripts(fingerprint BrowserFingerprint) chromedp.Action {
+//
+// #95 Stage 2: the injected values come from the coherent BrowserProfile, so
+// hardwareConcurrency/deviceMemory/screen are STABLE across page reloads (real
+// hardware does not change per document), and the script values can never
+// contradict the identity the Emulation override advertises.
+func (s *StealthActions) InjectAntiDetectionScripts(profile BrowserProfile) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
 		// Build comprehensive anti-detection script
-		mainScript := s.buildAntiDetectionScript(fingerprint)
+		mainScript := s.buildAntiDetectionScript(profile)
 
 		// Advanced anti-fingerprinting methods
 		advancedStealth := NewAdvancedStealth()
-		advancedScript := advancedStealth.AdvancedAntiDetectionScript()
+		advancedScript := advancedStealth.AdvancedAntiDetectionScript(profile)
 
 		// Combine both scripts so a single registration covers everything.
 		// Each script is self-contained (IIFE), so concatenation is safe.
@@ -405,9 +360,33 @@ func (s *StealthActions) InjectAntiDetectionScripts(fingerprint BrowserFingerpri
 }
 
 // buildAntiDetectionScript builds the comprehensive JavaScript for anti-detection
-func (s *StealthActions) buildAntiDetectionScript(fingerprint BrowserFingerprint) string {
+func (s *StealthActions) buildAntiDetectionScript(profile BrowserProfile) string {
 	return fmt.Sprintf(`
 		(() => {
+			// Shared timezone helper (#95): DST-correct offset for an IANA
+			// zone computed with Intl, cached per (zone, year).
+			const tzOffsetCache = {};
+			function getTimezoneOffsetForZone(timeZone) {
+				const now = new Date();
+				const year = now.getFullYear();
+				const key = timeZone + '|' + year;
+				if (key in tzOffsetCache) return tzOffsetCache[key];
+				const dtf = new Intl.DateTimeFormat('en-US', {
+					timeZone: timeZone, hour12: false,
+					year: 'numeric', month: '2-digit', day: '2-digit',
+					hour: '2-digit', minute: '2-digit', second: '2-digit'
+				});
+				const parts = dtf.formatToParts(now).reduce((acc, p) => {
+					if (p.type !== 'literal') acc[p.type] = p.value;
+					return acc;
+				}, {});
+				const asUTC = Date.UTC(year, parts.month - 1, parts.day,
+					parts.hour === '24' ? 0 : parts.hour, parts.minute, parts.second);
+				const offsetMin = Math.round((asUTC - now.getTime()) / 60000);
+				tzOffsetCache[key] = offsetMin;
+				return offsetMin;
+			}
+
 			// Phase 3.1: Remove navigator.webdriver
 			Object.defineProperty(navigator, 'webdriver', {
 				get: () => undefined,
@@ -441,32 +420,25 @@ func (s *StealthActions) buildAntiDetectionScript(fingerprint BrowserFingerprint
 				configurable: true
 			});
 
-			// Phase 3.3: Set random timezone and locale
-			// Override Date.prototype.getTimezoneOffset
-			const timezoneOffsets = {
-				'America/New_York': 300,
-				'America/Los_Angeles': 480,
-				'Europe/London': 0,
-				'Europe/Berlin': -60,
-				'Europe/Paris': -60,
-				'Asia/Tokyo': -540,
-				'Australia/Sydney': -600
+			// Phase 3.3: Timezone consistency (#95: was a GETTER returning a
+			// number — `+"`new Date().getTimezoneOffset()`"+` threw TypeError
+			// because getTimezoneOffset became (300)(). Now a real FUNCTION.
+			// The engine-level Emulation.setTimezoneOverride (applied by the
+			// scraper alongside this script) makes Date/Intl report the
+			// profile's zone natively; this override only guarantees the value
+			// when that CDP call was unavailable.
+			const targetTimezoneOffset = getTimezoneOffsetForZone(%q);
+			Date.prototype.getTimezoneOffset = function() {
+				return targetTimezoneOffset;
 			};
 
-			const targetTimezone = %q;
-			const timezoneOffset = timezoneOffsets[targetTimezone] || 0;
-
-			// Store original getTimezoneOffset
-			const originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
-			Object.defineProperty(Date.prototype, 'getTimezoneOffset', {
-				get: () => timezoneOffset,
-				configurable: true
-			});
-
-			// Override toString to return timezone name
+			// Override toString to use the human-readable zone name a real
+			// Chrome prints — "GMT-0400 (Eastern Daylight Time)", never
+			// "(America/New_York)" (#95 item 6).
 			const originalToString = Date.prototype.toString;
+			const zoneLongName = %q;
 			Date.prototype.toString = function() {
-				return originalToString.call(this).replace(/\\(.*?\\)/, '(' + targetTimezone + ')');
+				return originalToString.call(this).replace(/\((.*?)\)/, '(' + zoneLongName + ')');
 			};
 
 			// Set locale
@@ -508,21 +480,36 @@ func (s *StealthActions) buildAntiDetectionScript(fingerprint BrowserFingerprint
 			});
 
 			// Additional: Hide automation indicators
+			// #95 Stage 3 preview: enrich the window.chrome mock with the
+			// app/csi/loadTimes members real Chrome exposes.
 			window.chrome = {
-				runtime: {}
+				runtime: {},
+				app: {
+					isInstalled: false,
+					InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+					getDetails: function() { return null; },
+					getIsInstalled: function() { return false; }
+				},
+				csi: function() { return { onloadT: Date.now(), startE: Date.now(), pageT: Date.now() %% 100000 }; },
+				loadTimes: function() {
+					return {
+						requestTime: Date.now() / 1000,
+						startLoadTime: Date.now() / 1000,
+						finishDocumentLoadTime: Date.now() / 1000,
+						finishLoadTime: Date.now() / 1000,
+						firstPaintTime: Date.now() / 1000,
+						firstPaintAfterLoadTime: 0,
+						navigationType: 'Other',
+						wasFetchedViaSpdy: false,
+						wasNpnNegotiated: true,
+						wasAlternateProtocolAvailable: false,
+						connectionReused: true,
+						connectionViewId: 1
+					};
+				}
 			};
-
-			// Additional: Override permissions
-			const originalPermissions = navigator.permissions;
-			if (originalPermissions) {
-				Object.defineProperty(navigator, 'permissions', {
-					get: () => ({
-						query: (desc) => Promise.resolve({ state: 'granted' })
-					})
-				});
-			}
 
 			return true;
 		})()
-	`, fingerprint.Timezone, fingerprint.Language, fingerprint.WebGLVendor, fingerprint.WebGLRenderer, fingerprint.Platform)
+	`, profile.Timezone, profile.TimezoneLongName, profile.Language, profile.WebGLVendor, profile.WebGLRenderer, profile.Platform)
 }

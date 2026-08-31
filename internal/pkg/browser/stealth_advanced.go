@@ -181,66 +181,63 @@ func (a *AdvancedStealth) FontAntiFingerprinting() string {
 	`
 }
 
-// HardwareAntiFingerprinting нормализует hardware information
-func (a *AdvancedStealth) HardwareAntiFingerprinting() string {
-	return `
+// HardwareAntiFingerprinting нормализует hardware information.
+// #95: значения берутся из BrowserProfile (детерминированы для UA) —
+// рандом на каждый документ выдавал «перезагрузка страницы меняет ядра 8→4→16»,
+// что само по себе детект.
+func (a *AdvancedStealth) HardwareAntiFingerprinting(profile BrowserProfile) string {
+	return fmt.Sprintf(`
 		(() => {
-			// Hardware Fingerprinting Protection
+			// Hardware Fingerprinting Protection — STABLE per-profile values.
 
-			// Normalize hardwareConcurrency
-			const coreCounts = [2, 4, 6, 8, 12, 16];
-			const randomCores = coreCounts[Math.floor(Math.random() * coreCounts.length)];
 			Object.defineProperty(navigator, 'hardwareConcurrency', {
-				get: () => randomCores,
+				get: () => %d,
 				configurable: true
 			});
 
-			// Normalize deviceMemory
-			const memorySizes = [2, 4, 8, 16, 32];
-			const randomMemory = memorySizes[Math.floor(Math.random() * memorySizes.length)];
 			if (navigator.deviceMemory) {
 				Object.defineProperty(navigator, 'deviceMemory', {
-					get: () => randomMemory,
+					get: () => %d,
 					configurable: true
 				});
 			}
 
 			// Protect against Connection Type fingerprinting
 			if (navigator.connection) {
-				const connectionTypes = ['wifi', 'ethernet', '4g'];
-				const randomType = connectionTypes[Math.floor(Math.random() * connectionTypes.length)];
 				Object.defineProperty(navigator.connection, 'effectiveType', {
-					get: () => randomType,
+					get: () => '4g',
 					configurable: true
 				});
 			}
 		})();
-	`
+	`, profile.HardwareConcurrency, profile.DeviceMemory)
 }
 
-// ScreenAntiFingerprinting нормализует screen properties
-func (a *AdvancedStealth) ScreenAntiFingerprinting() string {
-	return `
+// ScreenAntiFingerprinting нормализует screen properties.
+// #95: раньше геттер window.screen возвращал НОВЫЙ объект на каждое
+// обращение (window.screen === window.screen → false, мгновенный детект).
+// Теперь свойства переопределяются на СУЩЕСТВУЮЩЕМ объекте, а размеры
+// берутся из профиля (стабильны между перезагрузками).
+func (a *AdvancedStealth) ScreenAntiFingerprinting(profile BrowserProfile) string {
+	return fmt.Sprintf(`
 		(() => {
-			// Screen Fingerprinting Protection
+			// Screen Fingerprinting Protection — override properties on the
+			// EXISTING screen object so identity checks still pass.
 
-			// Add slight randomness to screen dimensions (1-2 pixels)
-			const randomOffset = () => Math.floor(Math.random() * 3) - 1;
-
-			const originalScreen = window.screen;
-			Object.defineProperty(window, 'screen', {
-				get: () => ({
-					width: originalScreen.width + randomOffset(),
-					height: originalScreen.height + randomOffset(),
-					availWidth: originalScreen.availWidth + randomOffset(),
-					availHeight: originalScreen.availHeight + randomOffset(),
-					colorDepth: originalScreen.colorDepth,
-					pixelDepth: originalScreen.pixelDepth,
-					top: originalScreen.top,
-					left: originalScreen.left
-				}),
-				configurable: true
-			});
+			const dims = {
+				width: %d,
+				height: %d,
+				availWidth: %d,
+				availHeight: %d
+			};
+			for (const [prop, value] of Object.entries(dims)) {
+				try {
+					Object.defineProperty(window.screen, prop, {
+						get: () => value,
+						configurable: true
+					});
+				} catch (e) { /* some props may be non-configurable */ }
+			}
 
 			// Protect against screen orientation fingerprinting
 			if (screen.orientation) {
@@ -250,10 +247,16 @@ func (a *AdvancedStealth) ScreenAntiFingerprinting() string {
 				};
 			}
 		})();
-	`
+	`, profile.ScreenWidth, profile.ScreenHeight, profile.AvailWidth, profile.AvailHeight)
 }
 
-// BehavioralAntiFingerprinting добавляет человеческое поведение
+// BehavioralAntiFingerprinting добавляет человеческое поведение.
+// #95: Date.now() больше НЕ получает дробный джиттер
+// (Number.isInteger(Date.now()) → false был мгновенным детектом); джиттер
+// остаётся только в performance.now, где дробные значения легитимны.
+// clientX/clientY: рекурсивный геттер (чтение e.clientX внутри геттера
+// e.clientX → stack overflow) заменён на вычисление offset'а ДО
+// defineProperty.
 func (a *AdvancedStealth) BehavioralAntiFingerprinting() string {
 	return `
 		(() => {
@@ -266,37 +269,33 @@ func (a *AdvancedStealth) BehavioralAntiFingerprinting() string {
 				if (now - lastMouseMove < 16) return; // Limit to ~60fps
 				lastMouseMove = now;
 
-				// Add micro-jitter to mouse coordinates (humans have slight tremor)
+				// Add micro-jitter to mouse coordinates (humans have slight tremor).
+				// Original values captured BEFORE defineProperty — reading
+				// e.clientX inside its own getter recursed (#95 item 5).
 				if (Math.random() < 0.1) {
-					Object.defineProperty(e, 'clientX', {
-						get: () => e.clientX + Math.random() * 0.5 - 0.25
-					});
-					Object.defineProperty(e, 'clientY', {
-						get: () => e.clientY + Math.random() * 0.5 - 0.25
-					});
+					const jitterX = e.clientX + Math.random() * 0.5 - 0.25;
+					const jitterY = e.clientY + Math.random() * 0.5 - 0.25;
+					try {
+						Object.defineProperty(e, 'clientX', {
+							get: () => jitterX,
+							configurable: true
+						});
+						Object.defineProperty(e, 'clientY', {
+							get: () => jitterY,
+							configurable: true
+						});
+					} catch (err) {}
 				}
 			}, true);
 
-			// Protect against timing attacks
-			const originalNow = Date.now;
-			let lastNow = 0;
-			Date.now = function() {
-				const result = originalNow();
-				// Add micro-jitter to timing
-				if (result - lastNow < 10) {
-					return result + Math.random();
-				}
-				lastNow = result;
-				return result;
-			};
-
-			// Protect against performance timing attacks
+			// Protect against timing attacks: performance.now keeps a tiny
+			// jitter (fractional values are legitimate there); Date.now()
+			// stays EXACTLY integer-valued (#95 item 4).
 			if (window.performance) {
-				const originalNow = performance.now;
+				const originalPerfNow = performance.now;
 				let lastPerformanceNow = 0;
 				performance.now = function() {
-					const result = originalNow.apply(this, arguments);
-					// Add micro-jitter
+					const result = originalPerfNow.apply(this, arguments);
 					if (result - lastPerformanceNow < 1) {
 						return result + Math.random() * 0.001;
 					}
@@ -309,7 +308,7 @@ func (a *AdvancedStealth) BehavioralAntiFingerprinting() string {
 }
 
 // AdvancedAntiDetectionScript объединяет все advanced anti-detection методы
-func (a *AdvancedStealth) AdvancedAntiDetectionScript() string {
+func (a *AdvancedStealth) AdvancedAntiDetectionScript(profile BrowserProfile) string {
 	return fmt.Sprintf(`
 		(() => {
 			'use strict';
@@ -323,10 +322,10 @@ func (a *AdvancedStealth) AdvancedAntiDetectionScript() string {
 			// 3. Font Fingerprinting Protection
 			%s
 
-			// 4. Hardware Fingerprinting Protection
+			// 4. Hardware Fingerprinting Protection (stable profile values)
 			%s
 
-			// 5. Screen Fingerprinting Protection
+			// 5. Screen Fingerprinting Protection (stable profile values)
 			%s
 
 			// 6. Behavioral Fingerprinting Protection
@@ -338,8 +337,8 @@ func (a *AdvancedStealth) AdvancedAntiDetectionScript() string {
 		a.CanvasAntiFingerprinting(),
 		a.AudioAntiFingerprinting(),
 		a.FontAntiFingerprinting(),
-		a.HardwareAntiFingerprinting(),
-		a.ScreenAntiFingerprinting(),
+		a.HardwareAntiFingerprinting(profile),
+		a.ScreenAntiFingerprinting(profile),
 		a.BehavioralAntiFingerprinting(),
 	)
 }

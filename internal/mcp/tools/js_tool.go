@@ -369,8 +369,8 @@ func NewScrapeJSTool(cache *cache.Cache, browserPool *browser.Pool, ragConfig co
 			},
 			"stealth_enabled": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Enable stealth mode: injects anti-detection scripts (hides navigator.webdriver, spoofs canvas/WebGL/audio fingerprint, randomizes hardwareConcurrency/timezone/platform) that persist across page navigations. Use for sites with anti-bot measures that conditionally hide elements (e.g. login buttons) from automated browsers.",
-				"default":     false,
+				"description": "Enable stealth mode: injects anti-detection scripts (hides navigator.webdriver, spoofs canvas/WebGL/audio fingerprint, pins stable hardwareConcurrency/timezone/platform consistent with the User-Agent) that persist across page navigations. ON by default; set false only for debugging or when a site misbehaves with stealth.",
+				"default":     true,
 			},
 			"stealth_scroll": map[string]interface{}{
 				"type":        "boolean",
@@ -930,7 +930,9 @@ func (t *ScrapeJSTool) buildOptions(args map[string]interface{}, actions []brows
 	}
 
 	// Extract stealth settings
-	stealthEnabled := false
+	// #95: stealth ON by default — without it there is no JS masking at all
+	// out of the box (navigator.webdriver leaks, plugins empty, etc.).
+	stealthEnabled := true
 	if se, ok := args["stealth_enabled"].(bool); ok {
 		stealthEnabled = se
 	}
