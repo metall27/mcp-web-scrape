@@ -62,6 +62,11 @@ func New(cfg Config) (*Pool, error) {
 		// Prevent navigator.webdriver=true which triggers anti-bot measures
 		// (e.g. conditional hiding of form submit buttons on React SPAs)
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		// #95: do not leak local network interfaces via WebRTC ICE
+		// candidates — a headless Chrome on a server otherwise exposes
+		// internal IPs (172.x/10.x/192.168.x) that a residential browser
+		// would never advertise.
+		chromedp.Flag("force-webrtc-ip-handling-policy", "default_public_interface_only"),
 		chromedp.WindowSize(cfg.ViewportWidth, cfg.ViewportHeight),
 	}
 
