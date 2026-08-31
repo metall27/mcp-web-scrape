@@ -58,6 +58,11 @@ browser:
   tool_timeout: 120s               # Tool-level timeout for scraping operations
   block_detection: true            # Enable Cloudflare/captcha detection (triggers HTTP fallback)
   max_retries: 2                   # Maximum retries with different proxies on blocking (0 = no retry)
+  geo_locale:
+    enabled: true                  # Geo-coherent locale: pin the profile locale/timezone to the egress geography (#99)
+    ttl: 15m                       # Cache TTL per egress (discovery mode only)
+    use_external_geo_ip_discovery: true   # true: resolve egress geo via a provider chain (ipinfo → ip-api → ipwhois; if one is down the next answers). false: fully OFFLINE mode — no network requests at all
+    static_geo: ""                 # ISO-2 country used when use_external_geo_ip_discovery is false (e.g. "RU" → ru-RU/Europe/Moscow). Also the fallback when discovery is on but all providers are unreachable. Empty → random locale on total failure
   sessions:
     enabled: true                  # Named persistent browser sessions (login-gated scraping)
     ttl: 30m                       # Inactivity TTL — sessions unused for this long are closed

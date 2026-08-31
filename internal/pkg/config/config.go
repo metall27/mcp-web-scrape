@@ -55,22 +55,43 @@ type TimeoutConfig struct {
 }
 
 type BrowserConfig struct {
-	Enabled        bool          `mapstructure:"enabled"`
-	Timeout        time.Duration `mapstructure:"timeout"`
-	WaitTime       time.Duration `mapstructure:"wait_time"`
-	ViewportWidth  int           `mapstructure:"viewport_width"`
-	ViewportHeight int           `mapstructure:"viewport_height"`
-	UserAgent      string        `mapstructure:"user_agent"`
-	Headless       bool          `mapstructure:"headless"`
-	BlockImages    bool          `mapstructure:"block_images"`
-	DisableGPU     bool          `mapstructure:"disable_gpu"`
-	NoSandbox      bool          `mapstructure:"no_sandbox"`
-	MaxTabs        int           `mapstructure:"max_tabs"`        // Maximum concurrent browser tabs
-	PollingConfig  PollingConfig `mapstructure:"polling"`         // Navigation polling configuration
-	SessionConfig  SessionConfig `mapstructure:"sessions"`        // Named session configuration
-	ToolTimeout    time.Duration `mapstructure:"tool_timeout"`    // Tool-level timeout for scraping operations
-	BlockDetection bool          `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
-	MaxRetries     int           `mapstructure:"max_retries"`     // Maximum retries with different proxies on blocking
+	Enabled        bool            `mapstructure:"enabled"`
+	Timeout        time.Duration   `mapstructure:"timeout"`
+	WaitTime       time.Duration   `mapstructure:"wait_time"`
+	ViewportWidth  int             `mapstructure:"viewport_width"`
+	ViewportHeight int             `mapstructure:"viewport_height"`
+	UserAgent      string          `mapstructure:"user_agent"`
+	Headless       bool            `mapstructure:"headless"`
+	BlockImages    bool            `mapstructure:"block_images"`
+	DisableGPU     bool            `mapstructure:"disable_gpu"`
+	NoSandbox      bool            `mapstructure:"no_sandbox"`
+	MaxTabs        int             `mapstructure:"max_tabs"`        // Maximum concurrent browser tabs
+	PollingConfig  PollingConfig   `mapstructure:"polling"`         // Navigation polling configuration
+	SessionConfig  SessionConfig   `mapstructure:"sessions"`        // Named session configuration
+	ToolTimeout    time.Duration   `mapstructure:"tool_timeout"`    // Tool-level timeout for scraping operations
+	BlockDetection bool            `mapstructure:"block_detection"` // Enable Cloudflare/captcha detection
+	MaxRetries     int             `mapstructure:"max_retries"`     // Maximum retries with different proxies on blocking
+	GeoLocale      GeoLocaleConfig `mapstructure:"geo_locale"`      // Egress-IP geo locale for profiles (#99)
+}
+
+// GeoLocaleConfig управляет гео-согласованностью локали профиля (#99).
+//
+// use_external_geo_ip_discovery: true (default) — определять гео egress-IP
+// цепочкой бесплатных провайдеров (ipinfo → ip-api → ipwhois, первый
+// ответивший побеждает; смерть одного сервиса ничего не меняет).
+//
+// use_external_geo_ip_discovery: false — СЕТЕВЫХ ЗАПРОСОВ НЕТ ВООБЩЕ:
+// используется static_geo (ISO-2 страна, напр. "RU") → ru-RU/Europe/Moscow.
+// Для сервера с известной локацией это полностью офлайн-режим.
+//
+// static_geo также служит fallback'ом, когда discovery включён, но все
+// провайдеры недоступны. Пустой static_geo + недоступные провайдеры →
+// случайная локаль (Warn в логах), скрейп не ломается.
+type GeoLocaleConfig struct {
+	Enabled                   bool          `mapstructure:"enabled"`
+	TTL                       time.Duration `mapstructure:"ttl"`
+	UseExternalGeoIPDiscovery bool          `mapstructure:"use_external_geo_ip_discovery"`
+	StaticGeo                 string        `mapstructure:"static_geo"`
 }
 
 // PollingConfig конфигурация для polling навигации
@@ -270,6 +291,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("browser.tool_timeout", 120*time.Second)
 	v.SetDefault("browser.block_detection", true)
 	v.SetDefault("browser.max_retries", 2) // Retry with different proxies on blocking
+
+	// Geo-coherent locale (#99): resolve the egress-IP geography and pin
+	// the profile's locale/timezone to it. Two modes:
+	//   use_external_geo_ip_discovery: true  → provider chain
+	//     (ipinfo → ip-api → ipwhois), first answer wins;
+	//   use_external_geo_ip_discovery: false → fully offline, static_geo
+	//     country pin (also the fallback when discovery fails).
+	v.SetDefault("browser.geo_locale.enabled", true)
+	v.SetDefault("browser.geo_locale.ttl", 15*time.Minute)
+	v.SetDefault("browser.geo_locale.use_external_geo_ip_discovery", true)
+	v.SetDefault("browser.geo_locale.static_geo", "")
 
 	// Search defaults
 	v.SetDefault("search.provider", "duckduckgo")

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/emulation"
+
+	"github.com/metall/mcp-web-scrape/internal/pkg/geo"
 )
 
 // BrowserProfile is the single source of truth for the browser identity the
@@ -139,13 +141,24 @@ var chromeVersionRe = regexp.MustCompile(`Chrome/(\d+)(?:\.(\d+)\.(\d+)\.(\d+))?
 // (platform, brands, timezone/locale, WebGL pair, hardware) is derived from
 // or matched to it. Hardware values are deterministic per UA so they stay
 // stable across page reloads.
-func NewProfile(userAgent string) BrowserProfile {
+//
+// When a geo.Locale is passed, its language/timezone OVERRIDE the random
+// locale pick: the profile then agrees with the geography of the egress IP,
+// which is what anti-bot systems check ("de-DE from a Kazan IP" is an
+// instant VPN/bot flag, #99). A nil/zero Locale keeps the legacy behavior.
+func NewProfile(userAgent string, geoLocale ...geo.Locale) BrowserProfile {
 	p := parseUserAgent(userAgent)
 
-	lt := localeTimezones[pickRandom(len(localeTimezones))]
-	p.Timezone = lt.Timezone
-	p.TimezoneLongName = lt.LongName
-	p.Language = lt.Language
+	if len(geoLocale) > 0 && geoLocale[0].Language != "" && geoLocale[0].Timezone != "" {
+		p.Timezone = geoLocale[0].Timezone
+		p.Language = geoLocale[0].Language
+		p.TimezoneLongName = timezoneLongName(geoLocale[0].Timezone)
+	} else {
+		lt := localeTimezones[pickRandom(len(localeTimezones))]
+		p.Timezone = lt.Timezone
+		p.TimezoneLongName = lt.LongName
+		p.Language = lt.Language
+	}
 
 	pair := webglPairFor(p.Platform)
 	if pair == nil {

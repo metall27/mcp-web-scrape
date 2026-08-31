@@ -20,6 +20,7 @@ import (
 	"github.com/metall/mcp-web-scrape/internal/pkg/cache"
 	"github.com/metall/mcp-web-scrape/internal/pkg/config"
 	"github.com/metall/mcp-web-scrape/internal/pkg/converter"
+	"github.com/metall/mcp-web-scrape/internal/pkg/geo"
 	tlshttp "github.com/metall/mcp-web-scrape/internal/pkg/http"
 	"github.com/metall/mcp-web-scrape/internal/pkg/logger"
 	"github.com/metall/mcp-web-scrape/internal/pkg/proxy"
@@ -38,6 +39,10 @@ type ChromeScraper struct {
 	converter   *converter.Converter
 	githubCfg   config.GitHubConfig
 	logger      zerolog.Logger
+	// geoResolver resolves the egress-IP geography for geo-coherent
+	// locale/timezone (#99). Lazily initialized; nil disables the feature
+	// (profile falls back to the legacy random locale).
+	geoResolver *geo.CachedResolver
 }
 
 // scrapeContext holds the context for a single scrape attempt (Phase 5: Retry Loop)
@@ -66,7 +71,7 @@ type scrapeContext struct {
 
 // NewChromeScraper создает новый ChromeScraper
 func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig config.RAGConfig, browserCfg config.BrowserConfig, uaRotator *useragent.Rotator, proxy *proxy.Rotator, githubCfg config.GitHubConfig) *ChromeScraper {
-	return &ChromeScraper{
+	s := &ChromeScraper{
 		cache:       cache,
 		browserPool: browserPool,
 		ragConfig:   ragConfig,
@@ -77,6 +82,61 @@ func NewChromeScraper(cache *cache.Cache, browserPool *browser.Pool, ragConfig c
 		githubCfg:   githubCfg,
 		logger:      logger.Get(),
 	}
+	// Geo-coherent locale (#99). Kill-switch + mode from config:
+	// use_external_geo_ip_discovery=false → fully offline static_geo pin;
+	// true (default) → provider chain with static_geo as fallback.
+	// TTL cache bounds provider usage (15m default).
+	if browserCfg.GeoLocale.Enabled {
+		s.geoResolver = geo.NewCachedResolver(
+			geo.NewGeoResolver(
+				browserCfg.GeoLocale.UseExternalGeoIPDiscovery,
+				browserCfg.GeoLocale.StaticGeo,
+			),
+			browserCfg.GeoLocale.TTL,
+		)
+	}
+	return s
+}
+
+// chromeUsesProxy reports whether the Chrome scraper actually routes its
+// traffic through the proxy rotator. Today this is FALSE: the browser
+// allocator has no --proxy-server flag and the rotator is consumed by the
+// HTTP fallback path only. It exists so the geo logic below can follow the
+// real egress, not the intended one — flip to true when Chrome gains
+// proxy support (follow-up issue for #99).
+const chromeUsesProxy = false
+
+// resolveGeoLocale returns the geo locale for the egress the SITE actually
+// sees. Since Chrome (the scraper that advertises the profile) leaves from
+// our direct IP regardless of proxy rotation, the direct egress is the
+// only correct geography to mirror — resolving through a proxy would pin,
+// say, Berlin while the site sees Kazan, recreating the exact VPN/bot
+// mismatch #99 fixes (review finding on PR #100).
+// Best-effort: on any failure it returns a zero Locale and the profile
+// silently falls back to the random locale.
+func (s *ChromeScraper) resolveGeoLocale(ctx context.Context, selectedProxy *proxy.Proxy) geo.Locale {
+	if s.geoResolver == nil {
+		return geo.Locale{}
+	}
+	proxyURL := ""
+	// chromeUsesProxy is false today: Chrome has no --proxy-server flag,
+	// so the proxy egress is NOT what the site sees. Flip the const when
+	// Chrome gains proxy support (follow-up to #99).
+	if chromeUsesProxy && selectedProxy != nil {
+		proxyURL = selectedProxy.URL
+	}
+	locale, err := s.geoResolver.Resolve(ctx, proxyURL)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Geo locale resolution failed; using random locale")
+		return geo.Locale{}
+	}
+	s.logger.Info().
+		Str("country", locale.Country).
+		Str("timezone", locale.Timezone).
+		Str("language", locale.Language).
+		Str("source", locale.Source).
+		Msg("Profile geo locale resolved")
+	return locale
 }
 
 // fallbackUA returns a current desktop Chrome UA used when no rotator is
@@ -92,6 +152,26 @@ func (s *ChromeScraper) fallbackUA() string {
 // This method extracts browser context creation, proxy selection, and UA generation
 func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, opts Options) (*scrapeContext, error) {
 	scrapeCtx := &scrapeContext{}
+
+	// 0. Select the proxy for this attempt (bookkeeping + the geo path).
+	// NOTE: the HTTP-fallback path (httpFallback) performs its OWN
+	// GetNext() — a round-robin advance — so it may use a DIFFERENT
+	// proxy than the one selected here. scrapeCtx.proxy feeds
+	// MarkSuccess/MarkFailure and the geo resolver only. Unifying the
+	// two (and fixing the resulting stats skew) is tracked as a
+	// follow-up (#99 thread).
+	if s.proxy != nil && s.proxy.IsEnabled() {
+		selectedProxy, err := s.proxy.GetNext()
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
+		} else if selectedProxy != nil {
+			scrapeCtx.proxy = selectedProxy
+			s.logger.Info().
+				Str("proxy", selectedProxy.URL).
+				Msg("Using proxy for scrape attempt")
+		}
+	}
+	geoLocale := s.resolveGeoLocale(ctx, scrapeCtx.proxy)
 
 	// 1a. Named persistent session path: reuse a browser context that
 	// survives across scrape calls (shared cookie jar / storage).
@@ -118,8 +198,10 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			// (navigator.platform, TZ, WebGL) can never contradict the
 			// advertised UA (#95 review finding: GenerateRandomFingerprint
 			// picked platform independently → Win32 in headers, MacIntel in
-			// navigator on the same call).
-			fp := browser.NewProfile(ua).Fingerprint()
+			// navigator on the same call). The geo locale flows into the
+			// pinned fingerprint for NEW sessions (#99); an existing session
+			// keeps its original pinned locale (first-write-wins, like UA).
+			fp := browser.NewProfile(ua, geoLocale).Fingerprint()
 
 			sessCtx, err := sm.GetOrCreate(s.browserPool.Allocator(), opts.SessionID, ua, fp)
 			if err != nil {
@@ -178,7 +260,8 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		}
 	}
 
-	// 1b. Ephemeral path (default): fresh browser context per call
+	// 1b. Browser context: ephemeral path (default) — fresh context per
+	// call. (The named-session path got its context in step 1a.)
 	if !scrapeCtx.useSession {
 		browserCtx, browserCancel, err := s.browserPool.GetContext(ctx)
 		if err != nil {
@@ -188,7 +271,8 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		scrapeCtx.browserCancel = browserCancel
 	}
 
-	// 2. Get User-Agent (ephemeral path only — session path already set it)
+	// 2. Get User-Agent + build the coherent profile (ephemeral path only —
+	// the session path already set both).
 	if !scrapeCtx.useSession {
 		userAgent := opts.UserAgent
 		if userAgent == "" && s.uaRotator != nil {
@@ -201,8 +285,9 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		scrapeCtx.userAgent = userAgent
 		// Ephemeral contexts get a fresh coherent profile per call; the
 		// fingerprint (used by stealth JS) is derived from it, so platform
-		// and WebGL can never contradict the UA (#95).
-		scrapeCtx.profile = browser.NewProfile(userAgent)
+		// and WebGL can never contradict the UA (#95). Locale/timezone come
+		// from the egress-IP geography when resolvable (#99).
+		scrapeCtx.profile = browser.NewProfile(userAgent, geoLocale)
 	}
 
 	s.logger.Debug().
@@ -210,7 +295,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		Str("url", urlStr).
 		Msg("Using User-Agent for Chrome scraping")
 
-	// 3. Setup stealth actions if enabled
+	// 3. Setup stealth actions if enabled (see step 0 for proxy selection).
 	if opts.StealthEnabled {
 		scrapeCtx.stealth = browser.NewStealthActions(browser.StealthConfig{
 			RandomDelay:    true,
@@ -226,19 +311,6 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			Bool("stealth_scroll", opts.StealthScroll).
 			Bool("stealth_mouse", opts.StealthMouse).
 			Msg("Stealth mode enabled")
-	}
-
-	// 4. Get proxy if enabled
-	if s.proxy != nil && s.proxy.IsEnabled() {
-		selectedProxy, err := s.proxy.GetNext()
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to get proxy, continuing without proxy")
-		} else if selectedProxy != nil {
-			scrapeCtx.proxy = selectedProxy
-			s.logger.Info().
-				Str("proxy", selectedProxy.URL).
-				Msg("Using proxy for scrape attempt")
-		}
 	}
 
 	return scrapeCtx, nil
