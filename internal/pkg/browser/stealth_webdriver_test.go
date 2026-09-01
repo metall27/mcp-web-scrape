@@ -49,15 +49,24 @@ func TestStealthWebdriverHiddenOnTargetPage(t *testing.T) {
 		chromedp.Sleep(500*time.Millisecond),
 		chromedp.Evaluate(`(() => {
 			const own = Object.getOwnPropertyDescriptor(navigator, 'webdriver');
-			const proto = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+			const d = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
 			return JSON.stringify({
 				wd: String(navigator.webdriver),
 				// sannysoft: navigator.webdriver || _.has(navigator, "webdriver")
 				has_own: Object.prototype.hasOwnProperty.call(navigator, 'webdriver'),
 				in_op: 'webdriver' in navigator,
 				own_present: !!own,
-				proto_present: !!proto,
-				proto_returns_false: proto ? proto.get() === false : null
+				proto_present: !!d,
+				proto_returns_false: d ? d.get() === false : null,
+				// Full native-descriptor shape (measured on the Docker
+				// test-stage Chromium by the PR #102 review): a real Chrome
+				// exposes {enumerable:true, configurable:true, hasGet:true,
+				// hasSet:false}. Any future drift (e.g. enumerable:false)
+				// must fail here, not in production detection.
+				desc_enumerable: d ? d.enumerable : null,
+				desc_configurable: d ? d.configurable : null,
+				desc_has_get: d ? typeof d.get === 'function' : null,
+				desc_has_set: d ? d.set !== undefined : null
 			});
 		})()`, &probe),
 	)
@@ -78,5 +87,12 @@ func TestStealthWebdriverHiddenOnTargetPage(t *testing.T) {
 	}
 	if !strings.Contains(probe, `"proto_returns_false":true`) {
 		t.Errorf("prototype getter must return false (real Chrome semantics):\n%s", probe)
+	}
+	// Native descriptor shape (review-verified reference).
+	if !strings.Contains(probe, `"desc_enumerable":true`) ||
+		!strings.Contains(probe, `"desc_configurable":true`) ||
+		!strings.Contains(probe, `"desc_has_get":true`) ||
+		!strings.Contains(probe, `"desc_has_set":false`) {
+		t.Errorf("prototype descriptor shape is not native {e:true,c:true,get:true,set:false}:\n%s", probe)
 	}
 }

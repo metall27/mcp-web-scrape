@@ -19,7 +19,7 @@ MCP-сервер для веб-скрапинга с унифицированн�
 ### 🚀 Anti-Bot Evasion (Phase 1-5 Complete!)
 
 **JavaScript-level Anti-Detection (Phase 3):**
-- ✅ Removes `navigator.webdriver` (set to undefined)
+- ✅ `navigator.webdriver`: prototype getter returning `false` (native shape, no own property)
 - ✅ Fake plugins (PDF, Chrome PDF Viewer, Native Client)
 - ✅ Random timezone/locale (7 timezones, 6 languages)
 - ✅ WebGL fingerprint normalization (vendor/renderer override)
@@ -723,7 +723,7 @@ MCP server for web scraping with unified architecture and professional anti-bot 
 ### 🚀 Anti-Bot Evasion (Phase 1-5 Complete!)
 
 **JavaScript-level Anti-Detection (Phase 3):**
-- ✅ Removes `navigator.webdriver` (set to undefined)
+- ✅ `navigator.webdriver`: prototype getter returning `false` (native shape, no own property)
 - ✅ Fake plugins (PDF, Chrome PDF Viewer, Native Client)
 - ✅ Random timezone/locale (7 timezones, 6 languages)
 - ✅ WebGL fingerprint normalization (vendor/renderer override)
