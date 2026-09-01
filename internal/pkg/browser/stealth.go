@@ -399,10 +399,20 @@ func (s *StealthActions) buildAntiDetectionScript(profile BrowserProfile) string
 				return fallback;
 			}
 
-			// Phase 3.1: Remove navigator.webdriver
-			Object.defineProperty(navigator, 'webdriver', {
-				get: () => undefined,
-				configurable: true
+			// Phase 3.1: Remove navigator.webdriver.
+			// CRITICAL: override the PROTOTYPE getter, never define an own
+			// property on navigator. An own property (even one returning
+			// undefined) fails hasOwnProperty / in-operator checks —
+			// bot.sannysoft.com flags exactly that ("WebDriver (New):
+			// present (failed)") while the value itself reads undefined.
+			// A real Chrome has NO own webdriver: the native getter lives
+			// on Navigator.prototype and returns false.
+			try { delete navigator.webdriver; } catch (e) {}
+			Object.defineProperty(Navigator.prototype, 'webdriver', {
+				get: () => false,
+				set: undefined,
+				configurable: true,
+				enumerable: true
 			});
 
 			// Phase 3.2: Add fake plugins
