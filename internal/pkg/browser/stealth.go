@@ -347,7 +347,11 @@ func (s *StealthActions) InjectAntiDetectionScripts(profile BrowserProfile) chro
 
 		// Combine both scripts so a single registration covers everything.
 		// Each script is self-contained (IIFE), so concatenation is safe.
-		combinedScript := mainScript + "\n;\n" + advancedScript
+		combinedScript := mainScript + ";\n" + advancedScript
+
+		// #101 stages 3-4 + getter-toString disguise: WebGL stand-in,
+		// honest PluginArray, native-looking toString on overrides.
+		combinedScript += ";\n" + buildIdentityHardeningScript(profile)
 
 		// Register via CDP so the script is re-injected on every new document,
 		// surviving navigation to the target page.
@@ -409,38 +413,33 @@ func (s *StealthActions) buildAntiDetectionScript(profile BrowserProfile) string
 			// on Navigator.prototype and returns false.
 			try { delete navigator.webdriver; } catch (e) {}
 			Object.defineProperty(Navigator.prototype, 'webdriver', {
-				get: () => false,
+				get: function webdriver() { return false; },
 				set: undefined,
 				configurable: true,
 				enumerable: true
 			});
+			// #101 nuance: fp-collect enumerates Navigator.prototype and
+			// prints each getter's source via Function.prototype.toString.
+			// A naked arrow reads "() => false" — a tell no real Chrome
+			// produces. The identity script (appended after this one in the
+			// combined registration) installs a GLOBAL Function.prototype
+			// toString interceptor and registers this getter in its map.
+			try {
+				const wdGet = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver').get;
+				Object.defineProperty(wdGet, 'toString', {
+					value: function toString() { return 'function get webdriver() { [native code] }'; },
+					writable: true, configurable: true, enumerable: false
+				});
+			} catch (e) {}
 
-			// Phase 3.2: Add fake plugins
-			const fakePlugins = [
-				{
-					name: 'Chrome PDF Plugin',
-					description: 'Portable Document Format',
-					filename: 'internal-pdf-viewer',
-					length: 1
-				},
-				{
-					name: 'Chrome PDF Viewer',
-					description: '',
-					filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
-					length: 1
-				},
-				{
-					name: 'Native Client',
-					description: '',
-					filename: 'internal-nacl-plugin',
-					length: 1
-				}
-			];
-
-			Object.defineProperty(navigator, 'plugins', {
-				get: () => fakePlugins,
-				configurable: true
-			});
+			// Phase 3.2: plugins — the honest PluginArray (prototype getter,
+			// real Plugin/MimeType instances) now lives in
+			// buildIdentityHardeningScript (#101 stage 4). The old
+			// instance-level array override here fought it; keeping both
+			// made the LAST registration win unpredictably across frames.
+			// The identity script runs AFTER this one, so its
+			// Navigator.prototype getter + delete navigator.plugins
+			// resolves the conflict deterministically.
 
 			// Phase 3.3: Timezone consistency (#95: was a GETTER returning a
 			// number — `+"`new Date().getTimezoneOffset()`"+` threw TypeError
