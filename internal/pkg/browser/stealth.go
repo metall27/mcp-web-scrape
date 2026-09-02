@@ -504,34 +504,13 @@ func (s *StealthActions) buildAntiDetectionScript(profile BrowserProfile) string
 			});
 
 			// Additional: Hide automation indicators
-			// #95 Stage 3 preview: enrich the window.chrome mock with the
-			// app/csi/loadTimes members real Chrome exposes.
-			window.chrome = {
-				runtime: {},
-				app: {
-					isInstalled: false,
-					InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-					getDetails: function() { return null; },
-					getIsInstalled: function() { return false; }
-				},
-				csi: function() { return { onloadT: Date.now(), startE: Date.now(), pageT: Date.now() %% 100000 }; },
-				loadTimes: function() {
-					return {
-						requestTime: Date.now() / 1000,
-						startLoadTime: Date.now() / 1000,
-						finishDocumentLoadTime: Date.now() / 1000,
-						finishLoadTime: Date.now() / 1000,
-						firstPaintTime: Date.now() / 1000,
-						firstPaintAfterLoadTime: 0,
-						navigationType: 'Other',
-						wasFetchedViaSpdy: false,
-						wasNpnNegotiated: true,
-						wasAlternateProtocolAvailable: false,
-						connectionReused: true,
-						connectionViewId: 1
-					};
-				}
-			};
+			// #101 stage 5: the window.chrome mock moved to
+			// buildIdentityHardeningScript — this old version exposed
+			// runtime: {} (fp-collect: "runtime.connect not a function")
+			// and missing webstore was never the issue (native headless
+			// chrome has webstore === undefined too). The identity script
+			// (registered after this one) mirrors the NATIVE shape
+			// {loadTimes, csi, app} with disguised toString on members.
 
 			return true;
 		})()

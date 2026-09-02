@@ -338,6 +338,56 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 				});
 			}
 
+			// ---- Stage 5: window.chrome mock ----
+			// Ground truth (raw headless Chromium 149 probe): native
+			// window.chrome = { loadTimes, csi, app } with NO runtime and
+			// webstore === undefined. fp-collect's detailChrome calls
+			// chrome.runtime.connect — on headless (real shape) that member
+			// simply does not exist, which is NOT a tell; the tell was our
+			// old mock exposing runtime: {} (connect === undefined reads
+			// "runtime present but broken" = extension-less automation).
+			// We mirror the NATIVE shape exactly, but with plausible values,
+			// and every member's toString is disguised.
+			(function patchWindowChrome() {
+				const csi = function() {
+					return { startE: Date.now(), onloadT: Date.now(),
+						pageT: Date.now() %% 100000, tran: 15 };
+				};
+				const loadTimes = function() {
+					const now = Date.now() / 1000;
+					return {
+						requestTime: now, startLoadTime: now,
+						commitLoadTime: now, finishDocumentLoadTime: now,
+						finishLoadTime: now, firstPaintTime: 0,
+						firstPaintAfterLoadTime: 0, navigationType: 'Other',
+						wasFetchedViaSpdy: false, wasNpnNegotiated: false,
+						npnNegotiatedProtocol: '',
+						wasAlternateProtocolAvailable: false,
+						connectionInfo: 'unknown'
+					};
+				};
+				const chromeMock = {
+					app: {
+						isInstalled: false,
+						InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+						getDetails: function() { return null; },
+						getIsInstalled: function() { return false; }
+					},
+					csi: csi,
+					loadTimes: loadTimes
+				};
+				// Disguise every function member (deep walk).
+				const fns = [csi, loadTimes, chromeMock.app.getDetails, chromeMock.app.getIsInstalled];
+				fns.forEach(function(fn) {
+					disguise(fn, 'function ' + (fn === csi ? 'csi' : fn === loadTimes ? 'loadTimes' : fn === chromeMock.app.getDetails ? 'getDetails' : 'getIsInstalled') + '() { [native code] }');
+				});
+				// Native descriptor shape: own data prop, writable,
+				// enumerable, NON-configurable.
+				Object.defineProperty(window, 'chrome', {
+					value: chromeMock, writable: true, enumerable: true, configurable: false
+				});
+			})();
+
 			// (disguise is defined at the top of this IIFE; the plugins
 			// getter is registered there.)
 			const protoPluginsDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'plugins');

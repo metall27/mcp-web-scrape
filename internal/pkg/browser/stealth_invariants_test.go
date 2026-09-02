@@ -15,6 +15,7 @@ func TestStealthScriptInvariants(t *testing.T) {
 	profile := NewProfile("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 	main := sa.buildAntiDetectionScript(profile)
+	identity := buildIdentityHardeningScript(profile)
 	hw := adv.HardwareAntiFingerprinting(profile)
 	screen := adv.ScreenAntiFingerprinting(profile)
 	behavioral := adv.BehavioralAntiFingerprinting()
@@ -76,10 +77,14 @@ func TestStealthScriptInvariants(t *testing.T) {
 		t.Error("hardware values still randomized per document")
 	}
 
-	// 7. window.chrome mock enriched (Stage 3 preview): app/csi/loadTimes.
-	for _, member := range []string{"app:", "csi:", "loadTimes:"} {
-		if !strings.Contains(main, member) {
-			t.Errorf("window.chrome mock missing %s", member)
+	// 7. window.chrome mock: members live in the identity script now
+	// (#101 stage 5); the main script must NOT assign window.chrome anymore.
+	if strings.Contains(main, "window.chrome =") {
+		t.Error("main script still assigns window.chrome (moved to identity script in #101 stage 5)")
+	}
+	for _, member := range []string{"csi:", "loadTimes:"} {
+		if !strings.Contains(identity, member) {
+			t.Errorf("identity script window.chrome mock missing %s", member)
 		}
 	}
 }
