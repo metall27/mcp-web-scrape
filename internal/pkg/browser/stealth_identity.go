@@ -346,8 +346,21 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 			// simply does not exist, which is NOT a tell; the tell was our
 			// old mock exposing runtime: {} (connect === undefined reads
 			// "runtime present but broken" = extension-less automation).
-			// We mirror the NATIVE shape exactly, but with plausible values,
-			// and every member's toString is disguised.
+			//
+			// Review M1 (PR #104): the ENGINE overwrites any 'app' member
+			// we set on the mock with its own native 7-prop app
+			// (installState/runningState included) — the mock's app was
+			// dead code and a latent tell. So we deliberately do NOT mock
+			// 'app': the engine's native one is strictly better. Only
+			// csi/loadTimes are mocked (the engine leaves those alone).
+			//
+			// Review M2: csi/loadTimes must NOT carry a per-function own
+			// toString (native functions have exactly [length, name,
+			// prototype]) — register them in the WeakMap only; the GLOBAL
+			// Function.prototype.toString interceptor serves the mask.
+			function registerDisguise(fn, nativeText) {
+				try { disguised.set(fn, nativeText); } catch (e) {}
+			}
 			(function patchWindowChrome() {
 				const csi = function() {
 					return { startE: Date.now(), onloadT: Date.now(),
@@ -367,20 +380,15 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 					};
 				};
 				const chromeMock = {
-					app: {
-						isInstalled: false,
-						InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-						getDetails: function() { return null; },
-						getIsInstalled: function() { return false; }
-					},
 					csi: csi,
 					loadTimes: loadTimes
 				};
-				// Disguise every function member (deep walk).
-				const fns = [csi, loadTimes, chromeMock.app.getDetails, chromeMock.app.getIsInstalled];
-				fns.forEach(function(fn) {
-					disguise(fn, 'function ' + (fn === csi ? 'csi' : fn === loadTimes ? 'loadTimes' : fn === chromeMock.app.getDetails ? 'getDetails' : 'getIsInstalled') + '() { [native code] }');
-				});
+				// WeakMap-only registration: String(fn) still reads native
+				// via the global FTS interceptor, and getOwnPropertyNames(fn)
+				// stays [length, name, prototype] like a native function.
+				registerDisguise(csi, 'function csi() { [native code] }');
+				registerDisguise(loadTimes, 'function loadTimes() { [native code] }');
+				// 'app' is intentionally absent — see the M1 note above.
 				// Native descriptor shape: own data prop, writable,
 				// enumerable, NON-configurable.
 				Object.defineProperty(window, 'chrome', {
