@@ -53,8 +53,19 @@ func TestStealthIdentityHardening(t *testing.T) {
 				const ext = gl.getExtension('WEBGL_debug_renderer_info');
 				webgl.vendor = ext ? String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)) : null;
 				webgl.renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : null;
+				// Plain (non-UNMASKED) fingerprint branch — must not read "0".
 				webgl.version = String(gl.getParameter(gl.VERSION));
+				webgl.shading = String(gl.getParameter(gl.SHADING_LANGUAGE_VERSION));
+				webgl.vendor_plain = String(gl.getParameter(gl.VENDOR));
 				webgl.no_throw = (function(){ try { gl.clearColor(0,0,0,1); return true; } catch(e){ return false; } })();
+				// Native shape (#101 review warning 1).
+				webgl.is_instance = gl instanceof WebGLRenderingContext;
+				webgl.tag = Object.prototype.toString.call(gl);
+				webgl.const_version = gl.VERSION;      // inherited named constant
+				webgl.const_max_tex = gl.MAX_TEXTURE_SIZE;
+				// getParameter must be proto-level (own list empty-ish).
+				webgl.getparam_own = Object.prototype.hasOwnProperty.call(gl, 'getParameter');
+				webgl.getparam_src = String(gl.getParameter).slice(0, 60);
 			}
 			// --- PluginArray (stage 4) ---
 			const p = navigator.plugins;
@@ -65,7 +76,18 @@ func TestStealthIdentityHardening(t *testing.T) {
 				first_is_plugin: p.length > 0 && (p[0] instanceof Plugin),
 				named: p['Chrome PDF Plugin'] instanceof Plugin,
 				own_on_instance: Object.prototype.hasOwnProperty.call(navigator, 'plugins'),
-				proto_getter: !!(Object.getOwnPropertyDescriptor(Navigator.prototype, 'plugins') || {}).get
+				proto_getter: !!(Object.getOwnPropertyDescriptor(Navigator.prototype, 'plugins') || {}).get,
+				// Native descriptor shape (#101 review warning 2): length/item
+				// must come from the PROTOTYPE, and member fields (name) must
+				// be proto getters, not own data props.
+				length_own: Object.prototype.hasOwnProperty.call(p, 'length'),
+				length_on_proto: !!(Object.getOwnPropertyDescriptor(PluginArray.prototype, 'length') || {}).get,
+				item_own: Object.prototype.hasOwnProperty.call(p, 'item'),
+				item_on_proto: !!(Object.getOwnPropertyDescriptor(PluginArray.prototype, 'item') || {}).value,
+				name_own: p.length > 0 && Object.prototype.hasOwnProperty.call(p[0], 'name'),
+				name_on_proto: !!(Object.getOwnPropertyDescriptor(Plugin.prototype, 'name') || {}).get,
+				name_value: p.length > 0 ? p[0].name : null,
+				item0: p.item(0) instanceof Plugin
 			};
 			// --- toString disguise (nuance) ---
 			const wdGet = (Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver') || {}).get;
@@ -91,6 +113,35 @@ func TestStealthIdentityHardening(t *testing.T) {
 		if !strings.Contains(probe, `"no_throw":true`) {
 			t.Errorf("fake WebGL methods throw:\n%s", probe)
 		}
+		// Plain fingerprint branch (#101 review warning 1): version/shading
+		// must be real strings, not "0" (the old plain-object fake had no
+		// named constants and returned 0 here).
+		if !strings.Contains(probe, `"version":"WebGL 1.0`) {
+			t.Errorf("gl.getParameter(gl.VERSION) does not return a real version string:\n%s", probe)
+		}
+		if !strings.Contains(probe, `"shading":"WebGL GLSL ES 1.0`) {
+			t.Errorf("gl.getParameter(gl.SHADING_LANGUAGE_VERSION) is not a real string:\n%s", probe)
+		}
+		if !strings.Contains(probe, `"vendor_plain":"`+profile.WebGLVendor+`"`) {
+			t.Errorf("gl.getParameter(gl.VENDOR) does not mirror profile vendor:\n%s", probe)
+		}
+		// Native shape: instanceof, tag, inherited constants, proto-level
+		// getParameter with native-looking source.
+		if !strings.Contains(probe, `"is_instance":true`) {
+			t.Errorf("fake gl not instanceof WebGLRenderingContext:\n%s", probe)
+		}
+		if !strings.Contains(probe, `"tag":"[object WebGLRenderingContext]"`) {
+			t.Errorf("Object.prototype.toString.call(gl) is not [object WebGLRenderingContext]:\n%s", probe)
+		}
+		if !strings.Contains(probe, `"const_version":7938`) || !strings.Contains(probe, `"const_max_tex":3379`) {
+			t.Errorf("named constants gl.VERSION/gl.MAX_TEXTURE_SIZE not inherited:\n%s", probe)
+		}
+		if !strings.Contains(probe, `"getparam_own":false`) {
+			t.Errorf("getParameter is an own prop on the fake context (must be proto-level):\n%s", probe)
+		}
+		if !strings.Contains(probe, `"getparam_src":"function getParameter() { [native code] }"`) {
+			t.Errorf("getParameter source not disguised as native:\n%s", probe)
+		}
 	}
 
 	// Stage 4: honest PluginArray.
@@ -107,6 +158,23 @@ func TestStealthIdentityHardening(t *testing.T) {
 	}
 	if !strings.Contains(probe, `"proto_getter":true`) {
 		t.Errorf("plugins getter not on Navigator.prototype:\n%s", probe)
+	}
+	// Native descriptor shape (#101 review warning 2): length/item/name must
+	// live on the prototypes as getter/method, not as own data props.
+	if !strings.Contains(probe, `"length_own":false`) || !strings.Contains(probe, `"length_on_proto":true`) {
+		t.Errorf("plugins.length must be a PROTOTYPE getter (real Chrome shape):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"item_own":false`) || !strings.Contains(probe, `"item_on_proto":true`) {
+		t.Errorf("plugins.item must be a PROTOTYPE method:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"name_own":false`) || !strings.Contains(probe, `"name_on_proto":true`) {
+		t.Errorf("plugin.name must be a PROTOTYPE getter:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"name_value":"Chrome PDF Plugin"`) {
+		t.Errorf("plugin[0].name value lost in the proto-getter rewrite:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"item0":true`) {
+		t.Errorf("plugins.item(0) does not return a Plugin:\n%s", probe)
 	}
 
 	// Nuance: override getters must look native — both own toString AND

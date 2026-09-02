@@ -62,6 +62,10 @@ func probeWebGL(t *testing.T, extraFlags []chromedp.ExecAllocatorOption, profile
 // TestWebGLFlagMatrix (#101 stage 3 diagnostics): which flag combination
 // gives headless Chromium in a container a working WebGL context whose
 // vendor/renderer the stealth layer can then override coherently.
+//
+// NOTE: purely diagnostic harness — it prints results via t.Logf and has NO
+// assertions. Gated behind WEBGL_DIAG=1, so it never runs in CI; kept as the
+// evidence base for the "flags cannot fix WebGL on Alpine/aarch64" conclusion.
 func TestWebGLFlagMatrix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")

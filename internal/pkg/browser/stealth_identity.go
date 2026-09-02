@@ -40,15 +40,6 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 				return realToString.call(this);
 			};
 			disguise(Function.prototype.toString, 'function toString() { [native code] }');
-			// Export the registrar so earlier-registered script parts (e.g.
-			// the webdriver getter in the main stealth script) can join the
-			// map even though they run before this IIFE. Non-enumerable to
-			// stay out of window property scans.
-			try {
-				Object.defineProperty(window, '__stealthDisguise', {
-					value: disguise, writable: false, configurable: true, enumerable: false
-				});
-			} catch (e) {}
 
 			// Register the webdriver getter (defined by the main stealth
 			// script that runs BEFORE this IIFE) into the disguise map —
@@ -96,14 +87,40 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 
 			// Build the stand-in only once per realm and reuse it for every
 			// canvas — a real browser reuses contexts per canvas type too.
-			let cachedFakeGL = null;
-			function buildFakeWebGL(canvas) {
-				// Minimal but functional: drawing ops execute against a 2D
-				// context (nothing renders, but no method throws — a broken
-				// method is as loud as a missing context).
+			let cachedFakeGL = {};   // keyed by context type, like real per-canvas contexts
+			// Native-shape helpers (#101 review warnings): members must be
+			// PROTOTYPE getters with native toString, not own data props —
+			// a descriptor walk (fp-collect) flags own props instantly.
+			function defineNativeGetter(obj, prop, fn) {
+				Object.defineProperty(obj, prop, {
+					get: fn, set: undefined, enumerable: false, configurable: true
+				});
+				disguise(fn, 'function get ' + prop + '() { [native code] }');
+			}
+			function buildFakeWebGL(canvas, ctxType) {
+				// Object.create over the NATIVE prototype gives the stand-in
+				// the native tag, instanceof=true, and INHERITED named
+				// constants (gl.VERSION etc.) — the review caught that a
+				// plain object literal has no constants, so the plain
+				// fingerprint branch getParameter(gl.VERSION) returned 0.
+				// webgl2 contexts must report instanceof WebGL2RenderingContext.
+				const nativeProto = (ctxType === 'webgl2' && typeof WebGL2RenderingContext !== 'undefined')
+					? WebGL2RenderingContext.prototype : WebGLRenderingContext.prototype;
+				const fake = Object.create(nativeProto);
+				// 'drawingBufferWidth'/'drawingBufferHeight' are prototype
+				// getters on a real context — mirror that shape.
+				try {
+					defineNativeGetter(fake, 'drawingBufferWidth', function() { return canvas ? canvas.width : 300; });
+					defineNativeGetter(fake, 'drawingBufferHeight', function() { return canvas ? canvas.height : 150; });
+				} catch (e) {}
+				// Real contexts serve methods from the prototype — put the
+				// full method set on a private intermediate proto so the
+				// own-property list of the fake stays as empty as a real
+				// context's, and instanceof/tag still hit the native
+				// WebGLRenderingContext.prototype.
+				const glProto = Object.create(WebGLRenderingContext.prototype);
 				const noop = () => {};
-				const fake = {
-					canvas: canvas,
+				const methods = {
 					getParameter: function(p) { return fakeGetParameter(p); },
 					getExtension: function(name) {
 						if (name === 'WEBGL_debug_renderer_info') {
@@ -157,10 +174,30 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 					createVertexArray: () => ({}), bindVertexArray: noop, deleteVertexArray: noop,
 					fenceSync: () => ({}), clientWaitSync: () => 37147, deleteSync: noop
 				};
+				Object.keys(methods).forEach(function(name) {
+					Object.defineProperty(glProto, name, {
+						value: methods[name], writable: true, configurable: true, enumerable: false
+					});
+					disguise(methods[name], 'function ' + name + '() { [native code] }');
+				});
+				Object.setPrototypeOf(fake, glProto);
+				// 'canvas' is an own getter on real contexts.
+				try {
+					defineNativeGetter(fake, 'canvas', function() { return canvas; });
+				} catch (e) {}
 				return fake;
 			}
 
 			function patchCanvasGetContext() {
+				// NOTE on the two getParameter layers: the Phase 3.4 override
+				// on WebGLRenderingContext.prototype.getParameter (main stealth
+				// script) pins REAL contexts. The fake's proto chain also
+				// ends at the native prototype, but its own glProto-level
+				// getParameter SHADOWS that override — so the fake is pinned
+				// by its own method, not by Phase 3.4. The layers are
+				// complementary: real context → proto override, fake →
+				// glProto method. Never assume the fake is "covered" by the
+				// proto override.
 				const orig = HTMLCanvasElement.prototype.getContext;
 				HTMLCanvasElement.prototype.getContext = function(type, attrs) {
 					if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
@@ -171,10 +208,10 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 							// installed below — do not replace it.
 							return real;
 						}
-						if (!cachedFakeGL || cachedFakeGL.canvas !== this) {
-							cachedFakeGL = buildFakeWebGL(this);
+						if (!cachedFakeGL[type] || cachedFakeGL[type].canvas !== this) {
+							cachedFakeGL[type] = buildFakeWebGL(this, type);
 						}
-						return cachedFakeGL;
+						return cachedFakeGL[type];
 					}
 					return orig.call(this, type, attrs);
 				};
@@ -199,41 +236,84 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 						{ name: 'Native Client', description: '', filename: 'internal-nacl-plugin',
 							mimes: [{ type: 'application/x-nacl', suffixes: '', description: 'Native Client Executable' }] }
 					];
+					// Native-shape storage (#101 review warning 2): real Chrome
+					// serves length/item/namedItem and the member fields as
+					// PROTOTYPE getters/methods — own data props are what
+					// fp-collect's descriptor walk flags. Values live in
+					// WeakMaps so the getters can stay on the SHARED native
+					// prototypes and the instance proto chain remains
+					// exactly plugin.__proto__ === Plugin.prototype.
+					const pluginVals = new WeakMap();   // Plugin -> data
+					const pluginArrVals = new WeakMap(); // PluginArray -> [Plugin]
+					const mimeVals = new WeakMap();     // MimeType -> data
+					const mimeArrVals = new WeakMap();  // MimeTypeArray -> [MimeType]
+
+					function protoGetter(proto, prop, read) {
+						const fn = function() { return read(this); };
+						Object.defineProperty(proto, prop, {
+							get: fn, set: undefined, enumerable: false, configurable: true
+						});
+						disguise(fn, 'function get ' + prop + '() { [native code] }');
+					}
+					function protoMethod(proto, prop, fn) {
+						Object.defineProperty(proto, prop, {
+							value: fn, writable: true, enumerable: false, configurable: true
+						});
+						disguise(fn, 'function ' + prop + '() { [native code] }');
+					}
+
+					// Plugin.prototype: name/description/filename/length.
+					['name', 'description', 'filename'].forEach(function(prop) {
+						protoGetter(Plugin.prototype, prop, function(self) {
+							const v = pluginVals.get(self); return v ? v[prop] : undefined;
+						});
+					});
+					protoGetter(Plugin.prototype, 'length', function(self) {
+						const v = pluginVals.get(self); return v ? v.mimes.length : 0;
+					});
+					// PluginArray.prototype: length/item/namedItem.
+					protoGetter(PluginArray.prototype, 'length', function(self) {
+						const v = pluginArrVals.get(self); return v ? v.length : 0;
+					});
+					protoMethod(PluginArray.prototype, 'item', function(i) { return this[i] || null; });
+					protoMethod(PluginArray.prototype, 'namedItem', function(n) { return this[n] || null; });
+					// MimeType.prototype: type/suffixes/description/enabledPlugin.
+					['type', 'suffixes', 'description', 'enabledPlugin'].forEach(function(prop) {
+						protoGetter(MimeType.prototype, prop, function(self) {
+							const v = mimeVals.get(self); return v ? v[prop] : undefined;
+						});
+					});
+					// MimeTypeArray.prototype: length/item/namedItem.
+					protoGetter(MimeTypeArray.prototype, 'length', function(self) {
+						const v = mimeArrVals.get(self); return v ? v.length : 0;
+					});
+					protoMethod(MimeTypeArray.prototype, 'item', function(i) { return this[i] || null; });
+					protoMethod(MimeTypeArray.prototype, 'namedItem', function(n) { return this[n] || null; });
+
 					const plugins = Object.create(PluginArray.prototype);
 					const mimeTypes = Object.create(MimeTypeArray.prototype);
 					const mimeList = [];
 					pluginData.forEach(function(p, i) {
 						const plugin = Object.create(Plugin.prototype);
-						Object.defineProperties(plugin, {
-							name: { value: p.name, enumerable: true },
-							description: { value: p.description, enumerable: true },
-							filename: { value: p.filename, enumerable: true },
-							length: { value: p.mimes.length, enumerable: true }
-						});
-						const mimes = Object.create(MimeTypeArray.prototype);
+						pluginVals.set(plugin, p);
+						const pluginMimes = [];
 						p.mimes.forEach(function(m, j) {
 							const mt = Object.create(MimeType.prototype);
-							Object.defineProperties(mt, {
-								type: { value: m.type, enumerable: true },
-								suffixes: { value: m.suffixes, enumerable: true },
-								description: { value: m.description, enumerable: true },
-								enabledPlugin: { value: plugin, enumerable: true }
-							});
-							mimes[j] = mt;
+							mimeVals.set(mt, { type: m.type, suffixes: m.suffixes,
+								description: m.description, enabledPlugin: plugin });
+							pluginMimes.push(mt);
 							mimeList.push(mt);
+							// Indexed own props ARE own on a real Plugin.
+							Object.defineProperty(plugin, String(j), { value: mt, enumerable: true, configurable: true });
 						});
-						Object.defineProperty(plugin, '0', { value: mimes[0], enumerable: true });
 						plugins[i] = plugin;
-						// named access: plugins['Chrome PDF Plugin']
-						Object.defineProperty(plugins, p.name, { value: plugin, enumerable: false });
+						// named access: plugins['Chrome PDF Plugin'] — also an
+						// own prop in real Chrome (non-enumerable).
+						Object.defineProperty(plugins, p.name, { value: plugin, enumerable: false, configurable: true });
 					});
 					mimeList.forEach(function(mt, i) { mimeTypes[i] = mt; });
-					Object.defineProperty(plugins, 'length', { value: pluginData.length, enumerable: true });
-					Object.defineProperty(mimeTypes, 'length', { value: mimeList.length, enumerable: true });
-					plugins.item = function(i) { return this[i] || null; };
-					plugins.namedItem = function(n) { return this[n] || null; };
-					mimeTypes.item = function(i) { return this[i] || null; };
-					mimeTypes.namedItem = function(n) { return this[n] || null; };
+					pluginArrVals.set(plugins, pluginData.map(function(_, i) { return plugins[i]; }));
+					mimeArrVals.set(mimeTypes, mimeList);
 					return { plugins: plugins, mimeTypes: mimeTypes };
 				} catch (e) {
 					return null;
