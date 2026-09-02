@@ -29,6 +29,10 @@ type Pool struct {
 
 	// Named persistent sessions (login-gated workflows)
 	sessions *SessionManager
+
+	// Engine-version UA sync (#105): lazily detected Chromium major.
+	engineOnce sync.Once
+	engine     engineVersion
 }
 
 type Config struct {
@@ -67,6 +71,12 @@ func New(cfg Config) (*Pool, error) {
 		// internal IPs (172.x/10.x/192.168.x) that a residential browser
 		// would never advertise.
 		chromedp.Flag("force-webrtc-ip-handling-policy", "default_public_interface_only"),
+		// #105: keep the media stack enabled so navigator.mediaDevices (and
+		// the MediaDevices interface) exists like on every desktop Chrome.
+		// With the default headless config it is undefined — a one-line
+		// typeof check for detectors. The stealth layer still pins a minimal
+		// device pool via enumerateDevices.
+		chromedp.Flag("autoplay-policy", "no-user-gesture-required"),
 		chromedp.WindowSize(cfg.ViewportWidth, cfg.ViewportHeight),
 	}
 
