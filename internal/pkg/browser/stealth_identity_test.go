@@ -95,7 +95,32 @@ func TestStealthIdentityHardening(t *testing.T) {
 				wd_toString: wdGet ? String(wdGet) : null,
 				wd_fts: wdGet ? Function.prototype.toString.call(wdGet) : null
 			};
-			return JSON.stringify({webgl: webgl, plugins: plugins, nuance: nuance});
+			// --- window.chrome mock (stage 5) ---
+			// Ground truth: window.chrome top-level = {loadTimes, csi, app};
+			// 'app' is NOT mocked (engine overwrites it with its native
+			// 7-prop one — review M1), so the live app must be the NATIVE
+			// shape. csi/loadTimes are mocked with WeakMap-only disguise
+			// (review M2): no own toString, own names exactly
+			// [length, name, prototype].
+			const cObj = window.chrome;
+			const wd = Object.getOwnPropertyDescriptor(window, 'chrome');
+			const cm = cObj ? {
+				keys: Object.keys(cObj).sort().join(','),
+				runtime_type: typeof cObj.runtime,
+				webstore_type: typeof cObj.webstore,
+				app_props: cObj.app ? Object.getOwnPropertyNames(cObj.app).sort().join(',') : null,
+				app_getdetails_src: cObj.app ? String(cObj.app.getDetails).slice(0, 45) : null,
+				csi_type: typeof cObj.csi,
+				loadtimes_type: typeof cObj.loadTimes,
+				csi_calls: (function(){ try { const r = cObj.csi(); return typeof r.startE === 'number' && typeof r.tran === 'number'; } catch(e){ return 'throw'; } })(),
+				csi_src: String(cObj.csi).slice(0, 50),
+				lt_src: String(cObj.loadTimes).slice(0, 50),
+				csi_own: Object.getOwnPropertyNames(cObj.csi).sort().join(','),
+				lt_own: Object.getOwnPropertyNames(cObj.loadTimes).sort().join(','),
+				lt_fields: (function(){ try { const r = cObj.loadTimes(); return typeof r.commitLoadTime === 'number' && 'connectionInfo' in r && 'npnNegotiatedProtocol' in r; } catch(e){ return 'throw'; } })(),
+				desc: wd ? {writable: wd.writable, enumerable: wd.enumerable, configurable: wd.configurable, has_get: !!wd.get} : null
+			} : null;
+			return JSON.stringify({webgl: webgl, plugins: plugins, nuance: nuance, chrome_mock: cm});
 		})()`, &probe),
 	)
 	if err != nil {
@@ -184,5 +209,40 @@ func TestStealthIdentityHardening(t *testing.T) {
 	}
 	if !strings.Contains(probe, `"wd_fts":"function get webdriver() { [native code] }"`) {
 		t.Errorf("Function.prototype.toString.call(webdriverGetter) not masked — fp-collect would see the override source:\n%s", probe)
+	}
+
+	// Stage 5: window.chrome mock must mirror the NATIVE headless shape.
+	if !strings.Contains(probe, `"keys":"app,csi,loadTimes"`) {
+		t.Errorf("window.chrome keys must be exactly {app,csi,loadTimes} (native headless shape):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"runtime_type":"undefined"`) {
+		t.Errorf("window.chrome.runtime must be absent (native headless has none; runtime:{} was the fp-collect tell):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"webstore_type":"undefined"`) {
+		t.Errorf("window.chrome.webstore must be undefined (native headless ground truth):\n%s", probe)
+	}
+	// M1: 'app' is NOT mocked — the live app must be the ENGINE's native
+	// 7-prop one (installState/runningState present, native getDetails).
+	if !strings.Contains(probe, `"app_props":"InstallState,RunningState,getDetails,getIsInstalled,installState,isInstalled,runningState"`) {
+		t.Errorf("window.chrome.app is not the engine's native 7-prop app (was the mock's app overwritten?):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"app_getdetails_src":"function getDetails() { [native code] }"`) {
+		t.Errorf("window.chrome.app.getDetails is not the native function (engine app expected, not mock app):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"csi_calls":true`) || !strings.Contains(probe, `"lt_fields":true`) {
+		t.Errorf("chrome.csi()/loadTimes() must return native-shaped values:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"csi_src":"function csi() { [native code] }"`) ||
+		!strings.Contains(probe, `"lt_src":"function loadTimes() { [native code] }"`) {
+		t.Errorf("csi/loadTimes toString not masked (via global FTS interceptor):\n%s", probe)
+	}
+	// M2: no per-function own toString — own names must be exactly the
+	// native triple [length, name, prototype].
+	if !strings.Contains(probe, `"csi_own":"length,name,prototype"`) ||
+		!strings.Contains(probe, `"lt_own":"length,name,prototype"`) {
+		t.Errorf("csi/loadTimes carry extra own props (own toString tell — must be WeakMap-only disguise):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"desc":{"writable":true,"enumerable":true,"configurable":false,"has_get":false}`) {
+		t.Errorf("window.chrome descriptor must match native (writable+enumerable, non-configurable, data prop):\n%s", probe)
 	}
 }

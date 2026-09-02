@@ -338,6 +338,64 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 				});
 			}
 
+			// ---- Stage 5: window.chrome mock ----
+			// Ground truth (raw headless Chromium 149 probe): native
+			// window.chrome = { loadTimes, csi, app } with NO runtime and
+			// webstore === undefined. fp-collect's detailChrome calls
+			// chrome.runtime.connect — on headless (real shape) that member
+			// simply does not exist, which is NOT a tell; the tell was our
+			// old mock exposing runtime: {} (connect === undefined reads
+			// "runtime present but broken" = extension-less automation).
+			//
+			// Review M1 (PR #104): the ENGINE overwrites any 'app' member
+			// we set on the mock with its own native 7-prop app
+			// (installState/runningState included) — the mock's app was
+			// dead code and a latent tell. So we deliberately do NOT mock
+			// 'app': the engine's native one is strictly better. Only
+			// csi/loadTimes are mocked (the engine leaves those alone).
+			//
+			// Review M2: csi/loadTimes must NOT carry a per-function own
+			// toString (native functions have exactly [length, name,
+			// prototype]) — register them in the WeakMap only; the GLOBAL
+			// Function.prototype.toString interceptor serves the mask.
+			function registerDisguise(fn, nativeText) {
+				try { disguised.set(fn, nativeText); } catch (e) {}
+			}
+			(function patchWindowChrome() {
+				const csi = function() {
+					return { startE: Date.now(), onloadT: Date.now(),
+						pageT: Date.now() %% 100000, tran: 15 };
+				};
+				const loadTimes = function() {
+					const now = Date.now() / 1000;
+					return {
+						requestTime: now, startLoadTime: now,
+						commitLoadTime: now, finishDocumentLoadTime: now,
+						finishLoadTime: now, firstPaintTime: 0,
+						firstPaintAfterLoadTime: 0, navigationType: 'Other',
+						wasFetchedViaSpdy: false, wasNpnNegotiated: false,
+						npnNegotiatedProtocol: '',
+						wasAlternateProtocolAvailable: false,
+						connectionInfo: 'unknown'
+					};
+				};
+				const chromeMock = {
+					csi: csi,
+					loadTimes: loadTimes
+				};
+				// WeakMap-only registration: String(fn) still reads native
+				// via the global FTS interceptor, and getOwnPropertyNames(fn)
+				// stays [length, name, prototype] like a native function.
+				registerDisguise(csi, 'function csi() { [native code] }');
+				registerDisguise(loadTimes, 'function loadTimes() { [native code] }');
+				// 'app' is intentionally absent — see the M1 note above.
+				// Native descriptor shape: own data prop, writable,
+				// enumerable, NON-configurable.
+				Object.defineProperty(window, 'chrome', {
+					value: chromeMock, writable: true, enumerable: true, configurable: false
+				});
+			})();
+
 			// (disguise is defined at the top of this IIFE; the plugins
 			// getter is registered there.)
 			const protoPluginsDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'plugins');
