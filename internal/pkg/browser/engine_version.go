@@ -4,7 +4,6 @@ import (
 	"context"
 	"regexp"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -25,12 +24,11 @@ import (
 
 var engineUARe = regexp.MustCompile(`Chrome/(\d+)`)
 
-// engineVersion is cached per Pool.
+// engineVersion caches the detected engine major for a Pool lifetime.
+// (Review #106 #4: only the major is kept — the once/err/rawUA fields
+// were write-only dead data.)
 type engineVersion struct {
-	once  sync.Once
-	major int    // 0 = detection failed, sync disabled
-	rawUA string // e.g. "HeadlessChrome/149.0.7702.0"
-	err   error
+	major int // 0 = detection failed, sync disabled
 }
 
 // EngineChromeMajor returns the major Chromium version backing this pool
@@ -38,20 +36,23 @@ type engineVersion struct {
 // binary does not change under us.
 func (p *Pool) EngineChromeMajor() int {
 	p.engineOnce.Do(func() {
-		tabCtx, tabCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		// Review #106 M1: the timeout MUST wrap the allocator as the PARENT
+		// so the chromedp context inherits the deadline. The original code
+		// reassigned tabCtx from chromedp.NewContext(p.allocator) via `:=`,
+		// silently dropping the 15s context — a wedged detection under
+		// sync.Once would then block every subsequent scrape forever.
+		timeoutCtx, timeoutCancel := context.WithTimeout(p.allocator, 15*time.Second)
+		defer timeoutCancel()
+		tabCtx, tabCancel := chromedp.NewContext(timeoutCtx)
 		defer tabCancel()
-		tabCtx, tabCancel2 := chromedp.NewContext(p.allocator)
-		defer tabCancel2()
 		var rawUA string
 		if err := chromedp.Run(tabCtx,
 			chromedp.Navigate("about:blank"),
 			chromedp.Evaluate(`navigator.userAgent`, &rawUA),
 		); err != nil {
-			p.engine.err = err
 			p.logger.Debug().Err(err).Msg("engine version detection failed; UA sync disabled")
 			return
 		}
-		p.engine.rawUA = rawUA
 		if m := engineUARe.FindStringSubmatch(rawUA); m != nil {
 			p.engine.major, _ = strconv.Atoi(m[1])
 		}
