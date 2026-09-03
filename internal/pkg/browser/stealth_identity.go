@@ -396,6 +396,69 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 				});
 			})();
 
+			// ---- Stage 6 (#105): environment API completeness ----
+			// The claimed identity is a desktop Windows/macOS Chrome, but the
+			// container environment lacks APIs every such browser ships:
+			//   - navigator.mediaDevices is undefined in this headless build
+			//     (a real desktop Chrome always exposes the object, even with
+			//     zero permission);
+			//   - navigator.getBattery is undefined on Linux without
+			//     dbus/UPower (a real Win32 Chrome always ships the function;
+			//     on AC power it honestly reports charging:true, level:1).
+			// Both are one-line typeof checks for a detector (#105 probe).
+			(function patchEnvironmentAPIs() {
+				// mediaDevices: minimal plausible set — one mic, one speaker,
+				// one webcam (#105: "пул устройств минимальный"). Labels are
+				// empty pre-permission, exactly like a real browser.
+				// Guards: the interface globals may be undefined in stripped
+				// builds — a ReferenceError here would abort the whole
+				// identity script.
+				try {
+					if (!navigator.mediaDevices) {
+						const mdProto = (typeof MediaDevices !== 'undefined') ? MediaDevices.prototype : Object.prototype;
+						const mkDev = function(kind, devId, grpId) {
+							return { kind: kind, deviceId: devId, groupId: grpId, label: '', toJSON: function() { return { kind: kind, deviceId: devId, groupId: grpId, label: '' }; } };
+						};
+						const devices = [
+							mkDev('audioinput', 'default', 'a1'),
+							mkDev('audioinput', 'communications', 'a1'),
+							mkDev('audiooutput', 'default', 'a2'),
+							mkDev('videoinput', 'default', 'v1')
+						];
+						const md = Object.create(mdProto);
+						Object.defineProperty(md, 'enumerateDevices', {
+							value: function() { return Promise.resolve(devices.slice()); },
+							writable: true, enumerable: false, configurable: true
+						});
+						registerDisguise(md.enumerateDevices, 'function enumerateDevices() { [native code] }');
+						Object.defineProperty(Navigator.prototype, 'mediaDevices', {
+							get: function() { return md; },
+							set: undefined, enumerable: true, configurable: true
+						});
+					}
+				} catch (e) {}
+				// getBattery: desktop-on-AC shape. The function lives on
+				// Navigator.prototype in a real Chrome.
+				try {
+					if (typeof navigator.getBattery !== 'function') {
+						const bmProto = (typeof BatteryManager !== 'undefined') ? BatteryManager.prototype : Object.prototype;
+						const batteryManager = Object.create(bmProto);
+						const bmState = { charging: true, level: 1, chargingTime: 0, dischargingTime: Infinity };
+						Object.keys(bmState).forEach(function(prop) {
+							Object.defineProperty(batteryManager, prop, {
+								get: function() { return bmState[prop]; },
+								set: undefined, enumerable: true, configurable: true
+							});
+						});
+						const getBattery = function() { return Promise.resolve(batteryManager); };
+						Object.defineProperty(Navigator.prototype, 'getBattery', {
+							value: getBattery, writable: true, enumerable: false, configurable: true
+						});
+						registerDisguise(getBattery, 'function getBattery() { [native code] }');
+					}
+				} catch (e) {}
+			})();
+
 			// (disguise is defined at the top of this IIFE; the plugins
 			// getter is registered there.)
 			const protoPluginsDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'plugins');

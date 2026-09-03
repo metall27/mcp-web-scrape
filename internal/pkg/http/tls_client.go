@@ -35,8 +35,13 @@ type TLSClientConfig struct {
 
 // DefaultTLSClientConfig дефолтные настройки
 var DefaultTLSClientConfig = TLSClientConfig{
-	ChromeVersion:       "HelloChrome_120", // Chrome 120 - стабильная версия
-	RandomizeExtensions: true,              // Важно для JA4 protection
+	// #105 ua-sync: HelloChrome_Auto is the NEWEST parrot shipped by uTLS
+	// (Chrome 133 as of utls v1.8.2). The Chrome scraper advertises the
+	// engine's real major (149), so the TLS ClientHello must be the closest
+	// available parrot, not Chrome 120 — a 120 ClientHello under a 149 UA is
+	// the same drift class the JS probes catch.
+	ChromeVersion:       "HelloChrome_Auto",
+	RandomizeExtensions: true, // Важно для JA4 protection
 	HandshakeTimeout:    10 * time.Second,
 }
 

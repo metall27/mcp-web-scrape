@@ -9,6 +9,21 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// extractJSONField pulls a string field value from a JSON object string,
+// searching nested objects too (the probe groups fields under webgl/env/...).
+func extractJSONField(probe, field string) string {
+	needle := `"` + field + `":"`
+	i := strings.Index(probe, needle)
+	if i < 0 {
+		return ""
+	}
+	rest := probe[i+len(needle):]
+	if j := strings.Index(rest, `"`); j >= 0 {
+		return rest[:j]
+	}
+	return ""
+}
+
 // TestStealthIdentityHardening (#101 stages 3-4 + the toString nuance):
 // after the full stealth chain, the page must expose
 //   - a WORKING WebGL context (stand-in when no GPU) whose
@@ -39,6 +54,7 @@ func TestStealthIdentityHardening(t *testing.T) {
 	stealth := NewStealthActions(StealthConfig{})
 
 	var probe string
+	var bmProbe string
 	err = chromedp.Run(bctx,
 		chromedp.Navigate("about:blank"),
 		stealth.InjectAntiDetectionScripts(profile),
@@ -120,8 +136,32 @@ func TestStealthIdentityHardening(t *testing.T) {
 				lt_fields: (function(){ try { const r = cObj.loadTimes(); return typeof r.commitLoadTime === 'number' && 'connectionInfo' in r && 'npnNegotiatedProtocol' in r; } catch(e){ return 'throw'; } })(),
 				desc: wd ? {writable: wd.writable, enumerable: wd.enumerable, configurable: wd.configurable, has_get: !!wd.get} : null
 			} : null;
-			return JSON.stringify({webgl: webgl, plugins: plugins, nuance: nuance, chrome_mock: cm});
+			// --- environment API completeness (#105 stage 6) ---
+			const env = {};
+			env.md_type = typeof navigator.mediaDevices;
+			env.md_is_proto = (function(){ try { return navigator.mediaDevices instanceof MediaDevices; } catch(e){ return 'no-interface'; } })();
+			env.md_own_on_nav = Object.prototype.hasOwnProperty.call(navigator, 'mediaDevices');
+			env.md_getter_on_proto = !!(Object.getOwnPropertyDescriptor(Navigator.prototype, 'mediaDevices') || {}).get;
+			env.enum_promise = navigator.mediaDevices && navigator.mediaDevices.enumerateDevices instanceof Function;
+			env.enum_src = navigator.mediaDevices ? String(navigator.mediaDevices.enumerateDevices).slice(0, 50) : null;
+			env.gb_type = typeof navigator.getBattery;
+			env.gb_own_on_nav = Object.prototype.hasOwnProperty.call(navigator, 'getBattery');
+			env.gb_src = navigator.getBattery ? String(navigator.getBattery).slice(0, 50) : null;
+			// Kick off the async battery check; the SECOND evaluate below
+			// reads the completed values (a Promise return value is not
+			// unwrapped by a plain chromedp.Evaluate).
+			try {
+				navigator.getBattery().then(function(b){
+					window.__bmProbe = {
+						instance: (function(){ try { return b instanceof BatteryManager; } catch(e){ return 'no-interface'; } })(),
+						charging: b.charging, level: b.level
+					};
+				}).catch(function(){ window.__bmProbe = {instance: 'reject'}; });
+			} catch (e) { window.__bmProbe = {instance: 'throw'}; }
+			return JSON.stringify({webgl: webgl, plugins: plugins, nuance: nuance, chrome_mock: cm, env: env});
 		})()`, &probe),
+		chromedp.Sleep(200*time.Millisecond),
+		chromedp.Evaluate(`JSON.stringify(window.__bmProbe || {})`, &bmProbe),
 	)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
@@ -244,5 +284,38 @@ func TestStealthIdentityHardening(t *testing.T) {
 	}
 	if !strings.Contains(probe, `"desc":{"writable":true,"enumerable":true,"configurable":false,"has_get":false}`) {
 		t.Errorf("window.chrome descriptor must match native (writable+enumerable, non-configurable, data prop):\n%s", probe)
+	}
+
+	// #105 stage 6: environment API completeness.
+	if !strings.Contains(probe, `"md_type":"object"`) {
+		t.Errorf("navigator.mediaDevices must be an object (was undefined — headless tell):\n%s", probe)
+	}
+	// md_is_proto is true when the MediaDevices interface exists in the
+	// build; 'no-interface' is acceptable for stripped builds where the mock
+	// falls back to a plain prototype (still typeof object, still served
+	// from Navigator.prototype).
+	if s := extractJSONField(probe, "md_is_proto"); s != "true" && s != "no-interface" {
+		t.Errorf("navigator.mediaDevices must be instanceof MediaDevices (or the build lacks the interface):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"md_own_on_nav":false`) || !strings.Contains(probe, `"md_getter_on_proto":true`) {
+		t.Errorf("mediaDevices must be served from a Navigator.prototype getter, not an own prop:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"enum_src":"function enumerateDevices() { [native code] }"`) {
+		t.Errorf("enumerateDevices source not disguised:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"gb_type":"function"`) {
+		t.Errorf("navigator.getBattery must be a function (Win32 desktop tell):\n%s", probe)
+	}
+	if !strings.Contains(probe, `"gb_own_on_nav":false`) {
+		t.Errorf("getBattery must live on Navigator.prototype, not as an own prop:\n%s", probe)
+	}
+	if !strings.Contains(probe, `"gb_src":"function getBattery() { [native code] }"`) {
+		t.Errorf("getBattery source not disguised:\n%s", probe)
+	}
+	if v := extractJSONField(bmProbe, "instance"); v != "true" && v != "no-interface" {
+		t.Errorf("getBattery() must resolve to a BatteryManager:\nprobe: %s\nbm: %s", probe, bmProbe)
+	}
+	if !strings.Contains(bmProbe, `"charging":true`) || !strings.Contains(bmProbe, `"level":1`) {
+		t.Errorf("getBattery() must report charging:true, level:1 (desktop on AC):\nbm: %s", bmProbe)
 	}
 }

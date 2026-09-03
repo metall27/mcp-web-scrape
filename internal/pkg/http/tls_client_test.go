@@ -144,8 +144,10 @@ func TestGetFingerprintInfo(t *testing.T) {
 
 	info := client.GetFingerprintInfo()
 
-	if info["chrome_version"] != "HelloChrome_120" {
-		t.Errorf("chrome_version = %v, want HelloChrome_120", info["chrome_version"])
+	// #105 ua-sync: the default parrot is HelloChrome_Auto (newest uTLS
+	// ships, Chrome 133) — closest to the engine's real major.
+	if info["chrome_version"] != "HelloChrome_Auto" {
+		t.Errorf("chrome_version = %v, want HelloChrome_Auto", info["chrome_version"])
 	}
 	if info["ja3_protection"] != true {
 		t.Error("ja3_protection should be true")

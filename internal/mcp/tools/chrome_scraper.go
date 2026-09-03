@@ -140,12 +140,16 @@ func (s *ChromeScraper) resolveGeoLocale(ctx context.Context, selectedProxy *pro
 }
 
 // fallbackUA returns a current desktop Chrome UA used when no rotator is
-// available and no explicit UA was requested.
+// available and no explicit UA was requested. Engine-synced (#105).
 func (s *ChromeScraper) fallbackUA() string {
+	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 	if s.uaRotator != nil {
-		return s.uaRotator.GetRandomDesktop()
+		ua = s.uaRotator.GetRandomDesktop()
 	}
-	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	if s.browserPool != nil {
+		ua = s.browserPool.SyncUserAgentToEngine(ua)
+	}
+	return ua
 }
 
 // createScrapeContext creates a new scrape context for a single attempt (Phase 5: Retry Loop)
@@ -192,6 +196,14 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			}
 			if ua == "" {
 				ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+			}
+			// ua-sync (#105): the advertised Chrome major must equal the engine's
+			// actual major — the static pool (120-124) drifts behind the shipped
+			// Chromium (149), and engine-shipped APIs (Promise.try etc.) betray
+			// the claimed version. Applied BEFORE the profile is derived so
+			// Sec-CH-UA brands and navigator agree with the synced UA.
+			if s.browserPool != nil {
+				ua = s.browserPool.SyncUserAgentToEngine(ua)
 			}
 			// The session pins a fingerprint derived from the SAME coherent
 			// profile as the Emulation override, so the stealth JS
@@ -281,6 +293,11 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 		if userAgent == "" {
 			// Use real Chrome UA instead of MCP-Web-Scrape
 			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+		}
+		// ua-sync (#105): match the advertised major to the engine's actual
+		// major — see the session-path comment above.
+		if s.browserPool != nil {
+			userAgent = s.browserPool.SyncUserAgentToEngine(userAgent)
 		}
 		scrapeCtx.userAgent = userAgent
 		// Ephemeral contexts get a fresh coherent profile per call; the
