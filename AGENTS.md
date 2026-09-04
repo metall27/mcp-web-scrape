@@ -45,9 +45,15 @@ Site-method learning (опционально) пишет в `./data/site_methods
 
 **Линтер:** `go vet` + `golangci-lint` (цели в Makefile). Отдельного конфига `.golangci.yml` нет — дефолтные правила.
 
-**Деплой:** Docker, multi-stage build (`Dockerfile`). Базовый runtime-образ `alpine:latest`
-с предустановленным Chromium. `docker-compose.yml` задаёт лимиты (4 CPU / 4GB RAM,
-shm 256MB — критично для Chrome), security_opt, ulimits, healthcheck.
+**Деплой:** Docker, multi-stage build (`Dockerfile`). Базовый runtime-образ `alpine`
+(3.23) с предустановленным Chromium **и фонт-стеком для anti-fingerprint**
+(#107): croscore/carlito/urw-base35/dejavu + vendored Caladea/Selawik
+(`fonts/`, OFL) с fontconfig-алиасами Windows-семейств (`fonts/fontconfig-
+windows-aliases.conf` → `/etc/fonts/conf.d/`). Без этого весь контейнер
+резолвится в один Open Sans — measureText-проба читает «одна шрифтовая
+семья», что выдаёт headless-окружение. `docker-compose.yml` задаёт лимиты
+(4 CPU / 4GB RAM, shm 256MB — критично для Chrome), security_opt, ulimits,
+healthcheck.
 Порт контейнера и хоста — **8192** (НЕ 8080, как местами в старом Makefile).
 
 Готовые образы хранятся в приватном registry **nexus.0x27.ru** (репозиторий
@@ -103,11 +109,16 @@ mcp-web-scrape/
 ├── config.yaml                 # Дефолтный конфиг (монтируется в Docker read-only)
 ├── config.yaml.example         # Пример конфигурации
 ├── docker-compose.yml          # Продакшен-конфиг: лимиты, security, healthcheck
-├── Dockerfile                  # Multi-stage: golang:1.24-alpine → alpine + chromium
+├── Dockerfile                  # Multi-stage: golang:1.24-alpine → alpine + chromium + фонт-стек (#107)
 ├── Makefile                    # build/run/test/docker-* цели
+├── fonts/                      # Vendored metric-шрифты #107 (Caladea=Cambria, Selawik=Segoe UI, OFL)
+│   ├── *.ttf                   # → /usr/share/fonts/vendored/ в Docker-образе
+│   ├── fontconfig-windows-aliases.conf # Алиасы Windows-семейств → /etc/fonts/conf.d/99-windows-aliases.conf
+│   ├── OFL.txt / README.md     # Лицензии и происхождение
 ├── docs/
 │   ├── GITHUB_TOKEN.md
 │   ├── SITE_METHOD_LEARNING.md
+│   ├── tools/                  # Утилиты для ручных замеров (desktop-font-dump.html — эталон шрифтовых метрик #107)
 │   └── archive/                # Архивные доки (RAG_INTEGRATION_ATTEMPTS, ROADMAP и т.д.)
 ├── examples/                   # Go-пример клиента + interactive/ JSON-сценарии
 └── AGENTS.md                   # Этот файл
