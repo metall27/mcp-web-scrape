@@ -33,8 +33,8 @@
     'Segoe UI Emoji','Segoe UI Light','Segoe UI Semibold','Segoe UI Semilight','SimSun','Sitka Text',
     'Symbol','System UI','Tahoma','Times','Times New Roman','Trebuchet MS','Verdana','Webdings',
     'Andale Mono','Book Antiqua','Century','Century Gothic','DengXian',
-    'Apple SD Gothic Neo','Charter','Courier','Courier New',
-    'Helvetica','Helvetica Neue','Kefa','Menlo','Monaco','Lucida Grande','Optima','Snell Roundhand','Tahoma',
+    'Apple SD Gothic Neo','Charter','Courier',
+    'Helvetica','Helvetica Neue','Kefa','Menlo','Monaco','Lucida Grande','Optima','Snell Roundhand',
     'DejaVu Sans','Liberation Sans','Nimbus Sans','Open Sans'
   ];
   // размеры/стили, под которые реальный челлендж меряет (16px regular + bold + italic)
@@ -71,6 +71,12 @@
   } catch (e) { data.installed = 'ERR ' + e; }
 
   document.getElementById('out').textContent = JSON.stringify(data, null, 1);
+  // Готовность: headless-дампу (--dump-dom) не на что опереться, кроме
+  // DOM-состояния. Считаем dump готовым, когда <pre> перестал быть RUNNING
+  // и поменял data-done="1". В headless-Chromium до этого момента гоняй
+  // с --virtual-time-budget (напр. --virtual-time-budget=2000) — иначе
+  // синхронный measureText-цикл может не успеть до --dump-dom.
+  document.getElementById('out').setAttribute('data-done', '1');
 })();
 </script>
 </body>
