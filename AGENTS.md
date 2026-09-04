@@ -109,11 +109,16 @@ mcp-web-scrape/
 ├── config.yaml                 # Дефолтный конфиг (монтируется в Docker read-only)
 ├── config.yaml.example         # Пример конфигурации
 ├── docker-compose.yml          # Продакшен-конфиг: лимиты, security, healthcheck
-├── Dockerfile                  # Multi-stage: golang:1.24-alpine → alpine + chromium
+├── Dockerfile                  # Multi-stage: golang:1.24-alpine → alpine + chromium + фонт-стек (#107)
 ├── Makefile                    # build/run/test/docker-* цели
+├── fonts/                      # Vendored metric-шрифты #107 (Caladea=Cambria, Selawik=Segoe UI, OFL)
+│   ├── *.ttf                   # → /usr/share/fonts/vendored/ в Docker-образе
+│   ├── fontconfig-windows-aliases.conf # Алиасы Windows-семейств → /etc/fonts/conf.d/99-windows-aliases.conf
+│   ├── OFL.txt / README.md     # Лицензии и происхождение
 ├── docs/
 │   ├── GITHUB_TOKEN.md
 │   ├── SITE_METHOD_LEARNING.md
+│   ├── tools/                  # Утилиты для ручных замеров (desktop-font-dump.html — эталон шрифтовых метрик #107)
 │   └── archive/                # Архивные доки (RAG_INTEGRATION_ATTEMPTS, ROADMAP и т.д.)
 ├── examples/                   # Go-пример клиента + interactive/ JSON-сценарии
 └── AGENTS.md                   # Этот файл
