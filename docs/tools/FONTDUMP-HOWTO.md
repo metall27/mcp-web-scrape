@@ -1,72 +1,108 @@
 # Инструкция: снятие эталона шрифтовых метрик с реального десктопа (#107, ступень C)
 
-Эталон (`fontmetrics_<os>.json`) — таблица ширин/высот, снятая с **реального
+Эталон (`fontmetrics_win.json`) — таблица ширин/высот, снятая с **реального
 десктопного Chrome**. Ступень C (мок `measureText` / `offsetWidth` /
 `FontFaceSet` в контейнере) будет подменять ответы контейнерного Chromium
 этой таблицей. От качества снятия зависит весь мок.
 
-Утилита снятия: `docs/tools/desktop-font-dump.html`. Она захватывает:
+Утилита снятия: `docs/tools/desktop-font-dump.html` (эта же ветка/PR).
+Захватывает: `measureText`-ширины (7 probe-строк × 5 стилей × 82 семейства,
+включая probe-строку челленджа Ozon `mmmwwwmmmWWW`), `spanProbe`
+(offsetWidth/offsetHeight @72px — реплика фонт-зонда `script_v47_4.js`),
+`installed` (список FontFace'ов для `getUserFonts`-мока).
 
-- `fonts.check` + `measureText`-ширины (6 probe-строк × 5 стилей × 82 семейства),
-  включая probe-строку челленджа Ozon `mmmwwwmmmWWW`;
-- `spanProbe` — offsetWidth/offsetHeight @72px для всех семейств: точная реплика
-  фонт-зонда `script_v47_4.js` (fab_chlg);
-- `installed` — список FontFace'ов в `document.fonts` (для `getUserFonts`-мока).
+Каждый шаг обязателен. Не пропускай проверки — плохой эталон тихо обнулит
+всю ступень C.
 
-## 1. Подготовка машины (важно — эталон должен быть «чистым десктопом»)
+---
 
-1. **ОС: Windows в приоритете** (прод-профиль контейнера — Windows-стек:
-   WebGL мокается под ANGLE/D3D11, UA — Windows Chrome). macOS — вторым
-   номером, если профиль MacIntel будет использоваться отдельно.
-2. Chrome той же мажорной версии, что Chromium в контейнере
-   (`docker exec mcp-web-scrape chromium-browser --version` — сверить
-   мажорную цифру; эталон снимается для конкретной линейки рендерера).
-3. **Чистый профиль**: запусти Chrome с отдельным profile-dir, без расширений:
-   - Windows: `chrome.exe --user-data-dir=C:\temp\fontdump-profile`
-   - macOS: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/tmp/fontdump-profile`
-4. Закрой все лишние вкладки (тайминги дампа чувствительны к нагрузке,
-   а версионные поля UA не должны отличаться).
-5. **Не ставь** никаких шрифтовых пакетов/антидетект-браузеров поверх —
-   эталон должен отражать штатный набор системы.
-
-## 2. Снятие дампа
-
-1. Скачай свежий `docs/tools/desktop-font-dump.html` из master
-   (репозиторий mcp-web-scrape, ветка master, коммит `1c393a3` или новее —
-   в старых нет `spanProbe` и probe-строки `mmmwwwmmmWWW`).
-2. Открой файл **локально** в подготовленном Chrome:
-   - Windows: двойной клик по файлу или `file:///C:/path/to/desktop-font-dump.html`;
-   - macOS: перетащи файл в окно Chrome (не в Safari!).
-3. Дождись, пока `<pre>` перестанет показывать `RUNNING...` и в нём появится
-   JSON, а атрибут тега станет `data-done="1"` (DevTools → Elements → pre#out).
-   Скрипт синхронный — обычно готов мгновенно, но дай 2–3 секунды.
-4. Выдели ВЕСЬ текст `<pre>` (клик в него → Ctrl/Cmd+A → Ctrl/Cmd+C) и сохрани
-   в файл `fontmetrics_win.json` (для macOS — `fontmetrics_mac.json`).
-
-## 3. Проверка дампа (обязательная — до коммита)
-
-Открой сохранённый JSON и проверь:
-
-1. **Поля-заголовки**:
-   - `"os"` — `Win32` для Windows (для mac — `MacIntel`);
-   - `"ua"` — десктопный Chrome, версия совпадает с контейнерным Chromium
-     по мажорной цифре.
-2. **spanProbe** (ключевая секция для fab_chlg):
-   - есть ключ `br0k3nd3f4u17` (базлайн-фолбэк);
-   - значения `Verdana` ≠ `Tahoma` (на реальном Windows они различаются —
-     это главный маркер, по которому мы сейчас палимся);
-   - `Impact` ≠ `Comic Sans MS`; `Consolas` ≠ `Courier New`;
-   - максимум 3–4 группы коллизий на 82 семейства (пары типа
-     `Segoe UI`==`Segoe UI Semibold` — норма, они реально делят метрики).
-3. **installed** — непустой список (десятки записей `Family|style|weight`).
-   Если `[]` или `"ERR ..."` — что-то пошло не так, пересними.
-4. **widths** — для каждого семейства 30 записей (6 проб × 5 стилей);
-   probe-ключ `16px|mmmwwwmmmWWW` присутствует.
-
-Быстрый sanity-скрипт (можно прогнать на любой машине с Python):
+## Шаг 0. Узнай версию Chromium в контейнере
 
 ```bash
-python3 - <<'EOF'
+ssh fb-u26 "docker exec mcp-web-scrape chromium-browser --version"
+# ожидаем на текущем образе: Chromium 149.0.7827.53 Alpine Linux
+```
+
+Нужна **мажорная+build-линия** (`149.0.7827`); последний патчик (.53 vs .155)
+на метрики не влияет — тот же рендерер. Если в контейнере другая версия —
+дальше везде подставляй свою линию (см. Шаг 1, п. 4).
+
+## Шаг 1. Скачай Chrome for Testing нужной версии
+
+Обычный установочный Chrome текущей ветки (Stable 152+) НЕ подходит — нужна
+та же линия, что в контейнере. Google публикует автономные сборки
+«Chrome for Testing» (CfT) — portable, без установки, не трогает твой
+основной браузер.
+
+1. Windows x64 — скачать и распаковать:
+   https://storage.googleapis.com/chrome-for-testing-public/149.0.7827.155/win64/chrome-win64.zip
+   Распаковать, например, в `C:\cft\` → бинарь `C:\cft\chrome-win64\chrome.exe`.
+2. macOS (Intel) —
+   https://storage.googleapis.com/chrome-for-testing-public/149.0.7827.155/mac-x64/chrome-mac-x64.zip
+3. macOS (Apple Silicon) —
+   https://storage.googleapis.com/chrome-for-testing-public/149.0.7827.155/mac-arm64/chrome-mac-arm64.zip
+4. Если линия в контейнере не 149.0.7827 — найди свой последний патч:
+   https://googlechromelabs.github.io/chrome-for-testing/latest-patch-versions-per-build.json
+   (ключ вида `"149.0.7827"` → `"version": "149.0.7827.155"`), затем подставь
+   его в шаблон:
+   `https://storage.googleapis.com/chrome-for-testing-public/<version>/<platform>/chrome-<platform>.zip`
+   Каталог всех платформ: https://googlechromelabs.github.io/chrome-for-testing/
+
+## Шаг 2. Подготовь окружение снятия
+
+1. **Windows: масштаб 100%.** Параметры → Система → Дисплей → Масштаб = 100%
+   (при 125%/150% offsetWidth снимется в масштабированных единицах — эталон
+   будет мусором).
+2. Закрой лишние приложения (тайминги и половина width-колонки чувствительны
+   к load — не критично, но зачем шум).
+3. Никаких шрифтовых пакетов/антидетект-браузеров на этой машине не ставь —
+   эталон должен отражать штатный набор ОС.
+
+## Шаг 3. Запусти CfT с чистым профилем
+
+Windows (PowerShell):
+```powershell
+C:\cft\chrome-win64\chrome.exe --user-data-dir=C:\cft\profile --no-first-run --no-default-browser-check about:blank
+```
+
+macOS (терминал):
+```bash
+ unzip chrome-mac-arm64.zip   # если ещё не распакован
+ ./chrome-mac-arm64/Google\ Chrome\ for\ Testing.app/Contents/MacOS/Google\ Chrome\ for\ Testing \
+   --user-data-dir=/tmp/cft-profile --no-first-run --no-default-browser-check about:blank
+```
+
+Проверь версию в запущенном браузере: `chrome://version` → строка
+`Google Chrome for Testing 149.0.7827.155` (линия должна совпадать с Шагом 0).
+
+## Шаг 4. Открой dump-утилиту
+
+1. Возьми `docs/tools/desktop-font-dump.html` из этой ветки (после влития PR —
+   из master). Скопируй файл на машину снятия.
+2. В запущенном CfT: Ctrl/Cmd+O → выбери файл (откроется как
+   `file:///.../desktop-font-dump.html`). Только Chrome — не Safari/Firefox.
+3. Дождись готовности: текст `<pre>` перестаёт быть `RUNNING...`, становится
+   JSON'ом. Контроль: DevTools (F12) → Elements → `<pre id="out" ...>` —
+   атрибут должен быть `data-done="1"`. Обычно готово за секунды; если
+   открыл без DevTools — просто подожди 3–5 секунд.
+
+## Шаг 5. Сохрани дамп
+
+1. Кликни в `<pre>`, выдели всё (Ctrl/Cmd+A), скопируй (Ctrl/Cmd+C).
+2. Вставь в текстовый редактор **как обычный текст** (не в богатый —
+   Word/заметки испортят кавычки), сохрани в UTF-8:
+   - Windows → `fontmetrics_win.json`
+   - macOS → `fontmetrics_mac.json`
+
+## Шаг 6. Проверь дамп (обязательно)
+
+Сохрани как `check_fontdump.py` рядом с JSON и запусти:
+
+```bash
+python3 check_fontdump.py fontmetrics_win.json
+```
+
+```python
 import json, sys
 d = json.load(open(sys.argv[1] if len(sys.argv) > 1 else 'fontmetrics_win.json'))
 print('os:', d['os'])
@@ -86,56 +122,59 @@ inst = d.get('installed')
 print('installed:', len(inst) if isinstance(inst, list) else inst)
 f = d['fonts']['Arial']['widths']
 print('probe key present:', '16px|mmmwwwmmmWWW' in f, '| width:', f.get('16px|mmmwwwmmmWWW'))
-EOF
 ```
 
-Ожидаемый вывод: `os: Win32`, `ua ok: True`, assertion'ы молча пройдены,
-`collision groups` — единицы, `installed` — число > 20.
+Критерии прохождения — ВСЕ одновременно:
+- `os: Win32` (для mac-эталона — `MacIntel`);
+- `ua ok: True`;
+- три assert'а молча пройдены (Verdana≠Tahoma, Impact≠Comic Sans,
+  baseline на месте);
+- `collision groups` — единицы (пары типа Segoe UI == Segoe UI Semibold —
+  норма, они реально делят метрики);
+- `installed` — число больше 20;
+- `probe key present: True`.
 
-## 4. Куда положить
+Любой провал → переснятие (чаще всего: не тот браузер, масштаб ≠ 100%,
+обрезанный при копировании JSON).
 
-Путь по договорённости (упомянут в самом dump.html):
-`internal/pkg/browser/fontmetrics_win.json` — рядом с будущим кодом мока
-(пакет `browser` — там stealth-инъекции; мок будет читать файл через
-`go:embed`). Мак-эталон — `fontmetrics_mac.json` там же.
-
-Коммит в master обычным путём (issue #107, ступень C):
-
-```
-git checkout -b feat/107-stage-c-font-mock
-cp <путь к снятому файлу> internal/pkg/browser/fontmetrics_win.json
-git add internal/pkg/browser/fontmetrics_win.json
-git commit -m "feat(#107): stage C — desktop font metrics reference (Win32, Chrome <major>)"
-```
-
-PR с `Related #107` (НЕ `Fixes` — issue закрывается только после прохождения
-контрольного прогона ozon).
-
-## 5. Сверка с контейнером (опционально, но полезно)
-
-После коммита эталона сними тот же дамп с контейнера и сравни:
+## Шаг 7. Положи эталон в репозиторий
 
 ```bash
-# дамп из контейнера (fb-u26)
-curl -s https://raw.githubusercontent.com/metall27/mcp-web-scrape/master/docs/tools/desktop-font-dump.html -o /tmp/dump.html
+git checkout master && git pull origin master
+git checkout -b feat/107-stage-c-font-mock
+cp <путь к fontmetrics_win.json> internal/pkg/browser/fontmetrics_win.json
+git add internal/pkg/browser/fontmetrics_win.json
+git commit -m "feat(#107): stage C — desktop font metrics reference (Win32, CfT 149.0.7827.155)"
+git push origin feat/107-stage-c-font-mock
+```
+
+Открыть PR в master с `Related #107` в описании (НЕ `Fixes` — issue
+закрывается только после прохождения контрольного прогона ozon).
+Мак-эталон — `fontmetrics_mac.json` туда же, отдельным коммитом.
+
+## Шаг 8 (опционально). Сними контейнерный дамп для диффа
+
+```bash
+curl -s -o /tmp/dump.html <ссылка raw на desktop-font-dump.html из master>
 scp /tmp/dump.html fb-u26:/tmp/
 ssh fb-u26 "docker cp /tmp/dump.html mcp-web-scrape:/tmp/dump.html && \
   docker exec mcp-web-scrape chromium-browser --headless --no-sandbox --disable-gpu \
-  --virtual-time-budget=5000 --dump-dom file:///tmp/dump.html 2>/dev/null" > /tmp/container_dump.html
+  --virtual-time-budget=5000 --dump-dom file:///tmp/dump.html 2>/dev/null" \
+  > /tmp/container_dump.html
 ```
 
-Различия desktop-vs-container по spanProbe — это ровно те подмены, которые
-должен делать мок ступени C. Файл `/tmp/container_dump.html` можно приложить
-к issue #107 для удобства имплементации.
+Вытащить JSON из `<pre id="out">` и прогон `check_fontdump.py` по нему
+**должен упасть** на `Verdana==Tahoma` — это и есть палевные коллизии,
+которые мок ступени C обязан закрыть. Приложи оба файла к issue #107 —
+имплементатору мока понадобится дифф.
+
+---
 
 ## Частые ошибки
 
-- **Снял в Safari/Firefox** — метрики другие, эталон непригоден. Только Chrome.
-- **Открыл dump.html по http(s)** — подойдёт, но file:// проще и без CSP-шумов.
-- **Снял с антидетект-браузером** (Mimic/Latte и пр.) — их шрифтовые моки
-  попадут в эталон вместо реальной системы. Только штатный Chrome.
-- **Скопировал JSON не весь** (pre обрезался при выделении) — проверка п.3
-  отловит (widths будет < 30 записей).
-- **Windows: снял под RDP с нестандартным DPI** — масштабирование может
-  повлиять на offsetWidth. Снимай при 100% масштабе (Параметры → Дисплей →
-  Масштаб 100%).
+- Снял в Safari/Firefox/основном Chrome другой версии — метрики другие.
+- Windows-масштаб ≠ 100% при снятии.
+- Антидетект-браузер (Mimic/Latte и пр.) — их шрифтовые моки попадут в
+  эталон вместо реальной системы.
+- JSON скопирован не весь (pre обрезался при выделении) — Шаг 6 отловит.
+- Открыл dump.html до того, как дождался `data-done="1"` — срежет хвост.
