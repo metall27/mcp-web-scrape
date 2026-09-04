@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>desktop font metrics dump</title></head>
+<body>
+<h1>Desktop font metrics dump (#107 stage C)</h1>
+<p>Открой в РЕАЛЬНОМ десктопном Chrome (Windows — приоритет, macOS — если профиль MacIntel).
+Скопируй JSON из <code>&lt;pre&gt;</code> и сохрани в репо, например
+<code>internal/pkg/browser/fontmetrics_win.json</code> — это эталонная таблица ширин
+для мок-а measureText/fontFamily-resolve в контейнере.</p>
+<pre id="out" style="white-space:pre-wrap">RUNNING...</pre>
+<script>
+(function () {
+  // Пробные строки: классические font-detection-наборы. Включи сюда и
+  // точные probe-строки из JS челленджа Ozon (fab_chlg), если удалось их
+  // выгрузить (DevTools -> Sources -> поиск по 'measureText'/'offsetWidth').
+  var probes = [
+    'mmmmmmmmmmlliilli',   // классика (fp-collect-подобный)
+    'Hgggqqyy',
+    'The quick brown fox jumps over the lazy dog',
+    'mmmbggqw',
+    'ldcwm',
+    'Hggg'
+  ];
+  var families = [
+    'sans-serif','serif','monospace','cursive','fantasy',
+    'Arial','Arial Black','Arial Narrow','Arial Rounded MT Bold','Bahnschrift',
+    'Calibri','Calibri Light','Candara','Cambria','Cambria Math','Cascadia Code','Cascadia Mono',
+    'Comic Sans MS','Consolas','Constantia','Corbel','Courier New','Ebrima',
+    'Franklin Gothic Book','Franklin Gothic Medium','Gabriola','Garamond','Georgia',
+    'Impact','Ink Free','Jokerman','Leelawadee UI','Lucida Console','Lucida Sans','Lucida Sans Unicode',
+    'Malgun Gothic','Microsoft Sans Serif','Microsoft YaHei','MingLiU','MS UI Gothic','NSimSun',
+    'Palatino Linotype','Rockwell','Segoe Print','Segoe Script','Segoe UI','Segoe UI Black',
+    'Segoe UI Emoji','Segoe UI Light','Segoe UI Semibold','Segoe UI Semilight','SimSun','Sitka Text',
+    'Symbol','System UI','Tahoma','Times','Times New Roman','Trebuchet MS','Verdana','Webdings',
+    'Andale Mono','Book Antiqua','Century','Century Gothic','DengXian',
+    'Apple SD Gothic Neo','Charter','Courier','Courier New',
+    'Helvetica','Helvetica Neue','Kefa','Menlo','Monaco','Lucida Grande','Optima','Snell Roundhand','Tahoma',
+    'DejaVu Sans','Liberation Sans','Nimbus Sans','Open Sans'
+  ];
+  // размеры/стили, под которые реальный челлендж меряет (16px regular + bold + italic)
+  var styles = ['16px', '16px bold', '16px italic', '12px', '24px'];
+
+  var cv = document.createElement('canvas');
+  var ctx = cv.getContext('2d');
+  var generic = {'sans-serif':1,'serif':1,'monospace':1,'cursive':1,'fantasy':1};
+  var data = { os: navigator.platform, ua: navigator.userAgent, fonts: {} };
+
+  families.forEach(function (fam) {
+    var entry = { check: false, widths: {} };
+    try { entry.check = document.fonts.check('16px "' + fam + '"'); } catch (e) {}
+    styles.forEach(function (st) {
+      ctx.font = st + (generic[fam] ? ' ' + fam : ' "' + fam + '"');
+      var w = 0;
+      probes.forEach(function (p) {
+        var m = ctx.measureText(p);
+        w += m.width;
+        entry.widths[st + '|' + p] = Math.round(m.width * 1000) / 1000;
+      });
+    });
+    data.fonts[fam] = entry;
+  });
+
+  // document.fonts — полный список реально установленных (для кросс-проверки)
+  try {
+    data.installed = [];
+    document.fonts.forEach(function (f) {
+      if (data.installed.indexOf(f.family + '|' + f.style) < 0) {
+        data.installed.push(f.family + '|' + f.style + '|' + f.weight);
+      }
+    });
+  } catch (e) { data.installed = 'ERR ' + e; }
+
+  document.getElementById('out').textContent = JSON.stringify(data, null, 1);
+})();
+</script>
+</body>
+</html>

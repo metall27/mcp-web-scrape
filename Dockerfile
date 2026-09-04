@@ -60,7 +60,25 @@ COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
 #RUN echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/main" > /etc/apk/repositories \
 #    && echo "https://nexus.0x27.ru/repository/alpine-proxy/v3.23/community" >> /etc/apk/repositories
 
-RUN apk add --no-cache git ca-certificates chromium
+# Фонт-стек для anti-fingerprint (#107): без пакетов шрифтов весь контейнер
+# резолвится в один Open Sans (chromedp-зависимость Chromium) — measureText-
+# проба читает "одна шрифтовая семья", что отличается от любого десктопа.
+# croscore (Arimo/Tinos/Cousine + алиасы Arial/Times/Courier), carlito
+# (Calibri), urw-base35 (Georgia/Verdana/Tahoma/Consolas/...), + vendored
+# Caladea (Cambria) / Selawik (Segoe UI) из fonts/ с собственными алиасами.
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    chromium \
+    font-croscore \
+    font-carlito \
+    font-urw-base35 \
+    font-dejavu
+
+# Vendored metric-совместимые шрифты + fontconfig-алиасы Windows-семейств (#107)
+COPY fonts/*.ttf /usr/share/fonts/vendored/
+COPY fonts/fontconfig-windows-aliases.conf /etc/fonts/conf.d/99-windows-aliases.conf
+RUN fc-cache -f
 
 WORKDIR /app
 
@@ -89,13 +107,27 @@ COPY public-apk.pem /etc/apk/keys/key-f14d99e5.rsa.pub
 
 # Установка Chromium БЕЗ GUI зависимостей
 # Chromium в Alpine = только headless, без X11/GTK
+#
+# Фонт-стек для anti-fingerprint (#107): см. комментарий в test-стадии.
+# Без него весь контейнер резолвится в один Open Sans — measureText-проба
+# читает "одна шрифтовая семья" вместо набора десктопных семейств.
 RUN apk add --no-cache \
     chromium \
     ca-certificates \
     wget \
+    font-croscore \
+    font-carlito \
+    font-urw-base35 \
+    font-dejavu \
     && rm -rf /var/cache/apk/* \
     /var/tmp/* \
     /tmp/*
+
+# Vendored metric-совместимые шрифты (Caladea=Cambria, Selawik=Segoe UI)
+# + fontconfig-алиасы Windows-семейств (#107). Лицензии: fonts/README.md.
+COPY fonts/*.ttf /usr/share/fonts/vendored/
+COPY fonts/fontconfig-windows-aliases.conf /etc/fonts/conf.d/99-windows-aliases.conf
+RUN fc-cache -f
 
 # Создание пользователя без привилегий
 RUN addgroup -g 1000 -S mcp && \

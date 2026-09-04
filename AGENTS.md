@@ -45,9 +45,15 @@ Site-method learning (опционально) пишет в `./data/site_methods
 
 **Линтер:** `go vet` + `golangci-lint` (цели в Makefile). Отдельного конфига `.golangci.yml` нет — дефолтные правила.
 
-**Деплой:** Docker, multi-stage build (`Dockerfile`). Базовый runtime-образ `alpine:latest`
-с предустановленным Chromium. `docker-compose.yml` задаёт лимиты (4 CPU / 4GB RAM,
-shm 256MB — критично для Chrome), security_opt, ulimits, healthcheck.
+**Деплой:** Docker, multi-stage build (`Dockerfile`). Базовый runtime-образ `alpine`
+(3.23) с предустановленным Chromium **и фонт-стеком для anti-fingerprint**
+(#107): croscore/carlito/urw-base35/dejavu + vendored Caladea/Selawik
+(`fonts/`, OFL) с fontconfig-алиасами Windows-семейств (`fonts/fontconfig-
+windows-aliases.conf` → `/etc/fonts/conf.d/`). Без этого весь контейнер
+резолвится в один Open Sans — measureText-проба читает «одна шрифтовая
+семья», что выдаёт headless-окружение. `docker-compose.yml` задаёт лимиты
+(4 CPU / 4GB RAM, shm 256MB — критично для Chrome), security_opt, ulimits,
+healthcheck.
 Порт контейнера и хоста — **8192** (НЕ 8080, как местами в старом Makefile).
 
 Готовые образы хранятся в приватном registry **nexus.0x27.ru** (репозиторий
