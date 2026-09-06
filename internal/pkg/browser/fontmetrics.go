@@ -229,10 +229,27 @@ func buildFontMetricsMockScript() string {
 			return 7.5;
 		}
 
-		// Calibrated estimate for strings outside the reference probe set:
-		// per-character classes scaled by the family's average char width
-		// (derived from the pangram row measured on the real desktop).
-		function estWidth(ac, text) {
+		// Calibrated ROUGH estimate for strings outside the reference
+		// probe set (review PR #111 finding 2): per-character classes
+		// scaled by the family's average char width. Calibrated for
+		// proportional Latin text — on monospace families the class
+		// spread is wrong by up to +60%, so those take the exact
+		// len(text) * avgChar form instead (it is exact for monospace).
+		function isMono(fam, sig) {
+			const t = famTable[fam] && famTable[fam][sig];
+			if (!t) return false;
+			// Monospace signature: single-char probes in the pinned set
+			// (if any) share one width; cheaper heuristic — the classic
+			// monospace families list (validated against the reference:
+			// Consolas/Courier New/NSimSim measure equal-width).
+			return fam === 'consolas' || fam === 'courier new' || fam === 'courier' ||
+				fam === 'lucida console' || fam === 'monospace' || fam === 'andale mono' ||
+				fam === 'cascadia code' || fam === 'cascadia mono' || fam === 'nsimsun' ||
+				fam === 'simsun' || fam === 'mingliu' || fam === 'ms ui gothic' ||
+				fam === 'menlo' || fam === 'monaco';
+		}
+		function estWidth(ac, text, mono) {
+			if (mono) return text.length * ac;
 			let w = 0;
 			for (let i = 0; i < text.length; i++) {
 				const ch = text.charAt(i);
@@ -262,7 +279,7 @@ func buildFontMetricsMockScript() string {
 				const sig = pickSig(pf, fam);
 				const pw = probeWidth(fam, sig, t);
 				if (pw !== null) w = pw * (pf.size / 16);
-				else w = estWidth(avgChar(fam, sig), t) * (pf.size / 16);
+				else w = estWidth(avgChar(fam, sig), t, isMono(fam, sig)) * (pf.size / 16);
 				if (widthCache.size > 2048) widthCache.clear();
 				widthCache.set(key, w);
 			}
@@ -322,6 +339,10 @@ func buildFontMetricsMockScript() string {
 				if (!st || !st.fontFamily) return null;
 				const txt = el.textContent || '';
 				if (!txt || txt.length > 64) return null;
+				// The reference span was captured with line-height normal;
+				// a span with an explicit line-height measures its own
+				// height and must keep the native value (review #111 #3).
+				if (getComputedStyle(el).lineHeight !== 'normal') return null;
 				const fam = lookupFam(st.fontFamily);
 				if (!spanTable[fam]) return null;
 				return fam;
