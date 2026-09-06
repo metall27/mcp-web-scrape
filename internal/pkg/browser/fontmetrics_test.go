@@ -64,6 +64,12 @@ func TestFontMockPayloadShape(t *testing.T) {
 		t.Error("no named family has italic != regular — i rows are dead (dump-tool font order regression?)")
 	}
 	t.Logf("live bold rows: %d, live italic rows: %d", liveBold, liveItalic)
+	// Supported platforms (#112): the reference OS maps to the platform
+	// list the UA selection is restricted to.
+	platforms := FontMockSupportedPlatforms()
+	if len(platforms) != 1 || platforms[0] != "Win32" {
+		t.Errorf("FontMockSupportedPlatforms = %v, want [Win32] for the Win32 reference", platforms)
+	}
 	if _, ok := p.W[p.D]; !ok {
 		t.Fatalf("fallback family %q not in width table", p.D)
 	}

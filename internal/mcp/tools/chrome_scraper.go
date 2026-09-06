@@ -141,10 +141,11 @@ func (s *ChromeScraper) resolveGeoLocale(ctx context.Context, selectedProxy *pro
 
 // fallbackUA returns a current desktop Chrome UA used when no rotator is
 // available and no explicit UA was requested. Engine-synced (#105).
+// Restricted to font-mock-supported platforms (#112) when a rotator exists.
 func (s *ChromeScraper) fallbackUA() string {
 	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 	if s.uaRotator != nil {
-		ua = s.uaRotator.GetRandomDesktop()
+		ua = s.uaRotator.GetRandomDesktopForPlatforms(browser.FontMockSupportedPlatforms())
 	}
 	if s.browserPool != nil {
 		ua = s.browserPool.SyncUserAgentToEngine(ua)
@@ -192,7 +193,7 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			// ignored and the session's own pinned values take over (#41).
 			ua := opts.UserAgent
 			if ua == "" && s.uaRotator != nil {
-				ua = s.uaRotator.GetRandomDesktop()
+				ua = s.uaRotator.GetRandomDesktopForPlatforms(browser.FontMockSupportedPlatforms())
 			}
 			if ua == "" {
 				ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -288,10 +289,12 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 	if !scrapeCtx.useSession {
 		userAgent := opts.UserAgent
 		if userAgent == "" && s.uaRotator != nil {
-			userAgent = s.uaRotator.GetRandomDesktop()
+			// #112: random UA only among platforms whose font metrics
+			// are covered by the stage C reference (stealth would leave
+			// an uncovered platform's font fingerprint collapsed).
+			userAgent = s.uaRotator.GetRandomDesktopForPlatforms(browser.FontMockSupportedPlatforms())
 		}
 		if userAgent == "" {
-			// Use real Chrome UA instead of MCP-Web-Scrape
 			userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 		}
 		// ua-sync (#105): match the advertised major to the engine's actual
