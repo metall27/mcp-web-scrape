@@ -41,8 +41,11 @@
     'Helvetica','Helvetica Neue','Kefa','Menlo','Monaco','Lucida Grande','Optima','Snell Roundhand',
     'DejaVu Sans','Liberation Sans','Nimbus Sans','Open Sans'
   ];
-  // размеры/стили, под которые реальный челлендж меряет (16px regular + bold + italic)
-  var styles = ['16px', '16px bold', '16px italic', '12px', '24px'];
+  // размеры/стили, под которые реальный челлендж меряет (16px regular +
+  // bold + italic). ПОРЯДОК КАНОНИЧЕСКИЙ: модификаторы ДО размера
+  // ('bold 16px "Fam"'). Прежний формат '16px bold "Fam"' — валидный CSS,
+  // но Chromium его НЕ применяет (bold снимался == regular) — review PR #111.
+  var styles = ['16px', 'bold 16px', 'italic 16px', '12px', '24px'];
 
   var cv = document.createElement('canvas');
   var ctx = cv.getContext('2d');
