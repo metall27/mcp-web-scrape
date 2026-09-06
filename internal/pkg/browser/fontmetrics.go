@@ -93,8 +93,13 @@ func buildFontMockPayload(doc *fontRefDoc) *fontMockPayload {
 			}
 			style, probe := k[:pipe], k[pipe+1:]
 			lstyle := strings.ToLower(style)
-			if !strings.HasPrefix(lstyle, "16px") {
-				continue // 12px/24px rows only validate linearity
+			// Keep only 16px rows (widths scale linearly with size —
+			// validated against the reference's own 12/24px rows).
+			// Accept both the canonical modifier order ('bold 16px',
+			// the current dump tool) and the legacy size-first order
+			// ('16px bold', the first dump whose b/i rows were dead).
+			if !strings.Contains(lstyle, "16px") || strings.Contains(lstyle, "12px") || strings.Contains(lstyle, "24px") {
+				continue
 			}
 			var sig string
 			switch {

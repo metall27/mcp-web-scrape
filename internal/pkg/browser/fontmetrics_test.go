@@ -33,6 +33,37 @@ func TestFontMockPayloadShape(t *testing.T) {
 	if p.W["arial"]["r"]["mmmwwwmmmWWW"] == 0 {
 		t.Fatal("arial/regular/mmmwwwmmmWWW missing from payload")
 	}
+	// b/i rows must be ALIVE (review #111 finding 1): the first dump
+	// recorded them with a size-first font order Chromium does not apply,
+	// so bold == regular for every family — dead data. At least one
+	// NAMED family must show a real bold difference (58 do in the
+	// current reference; generic fallbacks may legitimately match).
+	liveBold, liveItalic := 0, 0
+	for fam, sigs := range p.W {
+		if fam == "sans-serif" || fam == "serif" || fam == "monospace" ||
+			fam == "cursive" || fam == "fantasy" {
+			continue
+		}
+		for probe, rw := range sigs["r"] {
+			if bw, ok := sigs["b"][probe]; ok && bw != rw {
+				liveBold++
+				break
+			}
+		}
+		for probe, rw := range sigs["r"] {
+			if iw, ok := sigs["i"][probe]; ok && iw != rw {
+				liveItalic++
+				break
+			}
+		}
+	}
+	if liveBold == 0 {
+		t.Error("no named family has bold != regular — b rows are dead (dump-tool font order regression?)")
+	}
+	if liveItalic == 0 {
+		t.Error("no named family has italic != regular — i rows are dead (dump-tool font order regression?)")
+	}
+	t.Logf("live bold rows: %d, live italic rows: %d", liveBold, liveItalic)
 	if _, ok := p.W[p.D]; !ok {
 		t.Fatalf("fallback family %q not in width table", p.D)
 	}
@@ -116,6 +147,8 @@ func TestFontMockMeasureTextOnTargetPage(t *testing.T) {
 			const ctx = cv.getContext('2d');
 			ctx.font = '16px Arial';
 			const arial = ctx.measureText('mmmwwwmmmWWW').width;
+			ctx.font = 'bold 16px Arial';
+			const arialBold = ctx.measureText('mmmwwwmmmWWW').width;
 			ctx.font = '16px Verdana';
 			const verdana = ctx.measureText('mmmwwwmmmWWW').width;
 			ctx.font = '16px Tahoma';
@@ -149,7 +182,7 @@ func TestFontMockMeasureTextOnTargetPage(t *testing.T) {
 				g: !!d.get, s: !!d.set
 			}) : null;
 			return JSON.stringify({
-				arial: arial, verdana: verdana, tahoma: tahoma,
+				arial: arial, arialBold: arialBold, verdana: verdana, tahoma: tahoma,
 				comic: comic, impact: impact, jokerman: jokerman,
 				segou: segou, arial24: arial24,
 				spanArial: probeSpan['Arial'], spanVerdana: probeSpan['Verdana'],
@@ -167,10 +200,10 @@ func TestFontMockMeasureTextOnTargetPage(t *testing.T) {
 	t.Logf("probe: %s", probe)
 
 	var r struct {
-		Arial, Verdana, Tahoma, Comic, Impact, Jokerman, Segou, Arial24         float64
-		SpanArial, SpanVerdana, SpanTahoma, SpanComic, SpanImpact, SpanBaseline string
-		MTToString                                                              string
-		TMProtoWidthDesc                                                        string
+		Arial, ArialBold, Verdana, Tahoma, Comic, Impact, Jokerman, Segou, Arial24 float64
+		SpanArial, SpanVerdana, SpanTahoma, SpanComic, SpanImpact, SpanBaseline    string
+		MTToString                                                                 string
+		TMProtoWidthDesc                                                           string
 	}
 	if err := json.Unmarshal([]byte(probe), &r); err != nil {
 		t.Fatalf("parse probe: %v", err)
@@ -191,6 +224,16 @@ func TestFontMockMeasureTextOnTargetPage(t *testing.T) {
 	// 2. Linear size scaling within the mock.
 	if diff := r.Arial24 - famArial24; diff > 0.6 || diff < -0.6 {
 		t.Errorf("Arial/24px probe = %.3f, reference %.3f", r.Arial24, famArial24)
+	}
+	// 2b. Bold must answer the reference BOLD width (review #111 #1):
+	// a detector setting 'bold 16px Arial' must not get the regular row.
+	famArialBold := ref.Fonts["Arial"].Widths["bold 16px|mmmwwwmmmWWW"]
+	if famArialBold == 0 || r.ArialBold == r.Arial {
+		t.Errorf("bold row dead: mock %.3f (regular %.3f), reference bold %.3f",
+			r.ArialBold, r.Arial, famArialBold)
+	}
+	if diff := r.ArialBold - famArialBold; diff > 0.6 || diff < -0.6 {
+		t.Errorf("Arial bold probe = %.3f, reference %.3f", r.ArialBold, famArialBold)
 	}
 	// 3. Distinct families differ (container collapse is hidden).
 	if r.Verdana == r.Tahoma {
