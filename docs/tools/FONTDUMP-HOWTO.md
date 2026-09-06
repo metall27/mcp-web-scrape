@@ -133,7 +133,7 @@ for v in list(multi.values())[:10]: print('  =='.join(v))
 # (document.fonts) перечисляет только @font-face страницы, системных шрифтов
 # там нет — старая версия критерия по len(installed) была недостижима.
 inst = [fam for fam, e in d['fonts'].items() if e.get('check')]
-print('installed (fonts.check):', len(inst))
+print('installed (fonts.check):', len(inst), '/', len(d['fonts']))
 f = d['fonts']['Arial']['widths']
 print('probe key present:', '16px|mmmwwwmmmWWW' in f, '| width:', f.get('16px|mmmwwwmmmWWW'))
 ```
@@ -148,7 +148,11 @@ print('probe key present:', '16px|mmmwwwmmmWWW' in f, '| width:', f.get('16px|mm
   это реальные метрические совпадения/подстановки Windows;
 - `fallback group` — большое число (десятки) допустимо: это шрифты, которых
   нет на машине снятия (мак-шрифты на Win, Office-шрифты без Office и т.п.);
-- `installed (fonts.check)` — число больше 20;
+- `installed (fonts.check)` — **информативный, не gate**: в Chrome
+  `document.fonts.check` возвращает true почти для любого имени (фолбэк-
+  резолв считается доступным), поэтому на реальном десктопе счётчик близок
+  к максимуму (например 81/81). Реальный сигнал «чего нет» — fallback group.
+  Провал только если счётчик аномально низок (единицы);
 - `probe key present: True`.
 
 Любой провал → переснятие (чаще всего: не тот браузер, масштаб ≠ 100%,
