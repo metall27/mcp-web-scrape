@@ -338,20 +338,7 @@ type BrowserFingerprint struct {
 // contradict the identity the Emulation override advertises.
 func (s *StealthActions) InjectAntiDetectionScripts(profile BrowserProfile) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		// Build comprehensive anti-detection script
-		mainScript := s.buildAntiDetectionScript(profile)
-
-		// Advanced anti-fingerprinting methods
-		advancedStealth := NewAdvancedStealth()
-		advancedScript := advancedStealth.AdvancedAntiDetectionScript(profile)
-
-		// Combine both scripts so a single registration covers everything.
-		// Each script is self-contained (IIFE), so concatenation is safe.
-		combinedScript := mainScript + ";\n" + advancedScript
-
-		// #101 stages 3-4 + getter-toString disguise: WebGL stand-in,
-		// honest PluginArray, native-looking toString on overrides.
-		combinedScript += ";\n" + buildIdentityHardeningScript(profile)
+		combinedScript := s.BuildCombinedStealthScript(profile)
 
 		// Register via CDP so the script is re-injected on every new document,
 		// surviving navigation to the target page.
@@ -361,6 +348,40 @@ func (s *StealthActions) InjectAntiDetectionScripts(profile BrowserProfile) chro
 
 		return nil
 	})
+}
+
+// BuildCombinedStealthScript assembles the full stealth registration:
+// main + advanced + identity hardening, plus the #107 stage C font
+// metrics mock for Win32 profiles (the reference dump platform).
+//
+// Exposed as a method so tests can assert the composition (e.g. the
+// font mock is platform-gated) without a live browser.
+func (s *StealthActions) BuildCombinedStealthScript(profile BrowserProfile) string {
+	// Build comprehensive anti-detection script
+	mainScript := s.buildAntiDetectionScript(profile)
+
+	// Advanced anti-fingerprinting methods
+	advancedStealth := NewAdvancedStealth()
+	advancedScript := advancedStealth.AdvancedAntiDetectionScript(profile)
+
+	// Combine both scripts so a single registration covers everything.
+	// Each script is self-contained (IIFE), so concatenation is safe.
+	combinedScript := mainScript + ";\n" + advancedScript
+
+	// #101 stages 3-4 + getter-to-String disguise: WebGL stand-in,
+	// honest PluginArray, native-looking toString on overrides.
+	combinedScript += ";\n" + buildIdentityHardeningScript(profile)
+
+	// #107 stage C: font metrics mock (measureText + span offset
+	// probe) from the Win32 desktop reference. Only applied when the
+	// advertised platform matches the reference (Win32) — a MacIntel
+	// profile answering with Windows font metrics would be a new
+	// contradiction, not a fix.
+	if profile.Platform == "Win32" {
+		combinedScript += ";\n" + buildFontMetricsMockScript()
+	}
+
+	return combinedScript
 }
 
 // buildAntiDetectionScript builds the comprehensive JavaScript for anti-detection

@@ -40,6 +40,11 @@ func buildIdentityHardeningScript(profile BrowserProfile) string {
 				return realToString.call(this);
 			};
 			disguise(Function.prototype.toString, 'function toString() { [native code] }');
+			// Stage C (#107): later scripts in the combined registration
+			// (font-metrics mock) need disguise() for their own overrides.
+			// Hand it over through a Symbol-keyed registry — invisible to
+			// property enumeration and stable across realms.
+			try { globalThis[Symbol.for('mcpwsDisguise')] = disguise; } catch (e) {}
 
 			// Register the webdriver getter (defined by the main stealth
 			// script that runs BEFORE this IIFE) into the disguise map —
