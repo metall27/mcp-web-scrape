@@ -64,15 +64,14 @@
     data.fonts[fam] = entry;
   });
 
-  // document.fonts — полный список реально установленных (для кросс-проверки)
-  try {
-    data.installed = [];
-    document.fonts.forEach(function (f) {
-      if (data.installed.indexOf(f.family + '|' + f.style) < 0) {
-        data.installed.push(f.family + '|' + f.style + '|' + f.weight);
-      }
-    });
-  } catch (e) { data.installed = 'ERR ' + e; }
+  // document.fonts (FontFaceSet) перечисляет ТОЛЬКО шрифты, объявленные на
+  // странице через @font-face — системные шрифты там нет. На чистой статической
+  // странице он всегда пуст. Кросс-проверка установки — поле check per-family
+  // (document.fonts.check), см. цикл выше; оно же используется валидатором.
+  data.installed = [];
+  families.forEach(function (fam) {
+    if (data.fonts[fam] && data.fonts[fam].check) data.installed.push(fam);
+  });
 
   // offsetWidth-проба — как меряет fab_chlg (script_v47_4.js): offscreen span,
   // font-size:72px, innerHTML = probe-текст, подмена fontFamily, замер
@@ -86,7 +85,9 @@
     data.spanProbe = {};
     ['br0k3nd3f4u17'].concat(families).forEach(function (fam) {
       span.innerHTML = 'mmmwwwmmmWWW';
-      span.style.fontFamily = '"' + fam + '"';
+      // generic-ключевые слова (sans-serif и пр.) нельзя квотить: "sans-serif"
+      // трактуется как имя семейства, которого нет, → фолбэк в дефолт.
+      span.style.fontFamily = generic[fam] ? fam : '"' + fam + '"';
       data.spanProbe[fam] = span.offsetWidth + ',' + span.offsetHeight;
     });
     span.parentNode.removeChild(span);

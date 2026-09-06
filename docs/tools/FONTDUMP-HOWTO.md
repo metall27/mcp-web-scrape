@@ -6,10 +6,11 @@
 этой таблицей. От качества снятия зависит весь мок.
 
 Утилита снятия: `docs/tools/desktop-font-dump.html` (эта же ветка/PR).
-Захватывает: `measureText`-ширины (7 probe-строк × 5 стилей × 82 семейства,
+Захватывает: `measureText`-ширины (7 probe-строк × 5 стилей × 81 семейства,
 включая probe-строку челленджа Ozon `mmmwwwmmmWWW`), `spanProbe`
 (offsetWidth/offsetHeight @72px — реплика фонт-зонда `script_v47_4.js`),
-`installed` (список FontFace'ов для `getUserFonts`-мока).
+`installed` (семейства из списка, подтверждённые `document.fonts.check` —
+для `getUserFonts`-мока; FontFaceSet системные шрифты не перечисляет).
 
 Каждый шаг обязателен. Не пропускай проверки — плохой эталон тихо обнулит
 всю ступень C.
@@ -112,26 +113,42 @@ assert isinstance(sp, dict) and len(sp) >= 80, 'spanProbe missing/short'
 assert 'br0k3nd3f4u17' in sp, 'baseline missing'
 assert sp['Verdana'] != sp['Tahoma'], 'FAIL: Verdana==Tahoma (desktop never does this)'
 assert sp['Impact'] != sp['Comic Sans MS'], 'FAIL: Impact==Comic Sans'
+baseline = sp['br0k3nd3f4u17']
 coll = {}
 for fam, v in sp.items():
+    if fam == 'br0k3nd3f4u17':
+        continue
+    # fallback-группа (== baseline) — семейства, которых нет в системе:
+    # браузер отрендерил их дефолтным шрифтом. Это НОРМА (мак-шрифты на
+    # Win, Office-пакет без Office и т.п.), не палевная коллизия.
+    if v == baseline:
+        continue
     coll.setdefault(v, []).append(fam)
 multi = {k: v for k, v in coll.items() if len(v) > 1}
+print('fallback group (== baseline, not installed):',
+      sum(1 for v in sp.values() if v == baseline) - 1)
 print('collision groups:', len(multi))
 for v in list(multi.values())[:10]: print('  =='.join(v))
-inst = d.get('installed')
-print('installed:', len(inst) if isinstance(inst, list) else inst)
+# installed — из поля check (document.fonts.check per-family). FontFaceSet
+# (document.fonts) перечисляет только @font-face страницы, системных шрифтов
+# там нет — старая версия критерия по len(installed) была недостижима.
+inst = [fam for fam, e in d['fonts'].items() if e.get('check')]
+print('installed (fonts.check):', len(inst))
 f = d['fonts']['Arial']['widths']
 print('probe key present:', '16px|mmmwwwmmmWWW' in f, '| width:', f.get('16px|mmmwwwmmmWWW'))
 ```
 
 Критерии прохождения — ВСЕ одновременно:
 - `os: Win32` (для mac-эталона — `MacIntel`);
-- `ua ok: True`;
+- `ua ok: True` (в `ua` должна быть та же линия Chromium, что в контейнере — Шаг 0/3);
 - три assert'а молча пройдены (Verdana≠Tahoma, Impact≠Comic Sans,
   baseline на месте);
-- `collision groups` — единицы (пары типа Segoe UI == Segoe UI Semibold —
-  норма, они реально делят метрики);
-- `installed` — число больше 20;
+- `collision groups` (после исключения fallback-группы) — единицы; пары типа
+  `Arial == Helvetica`, `Courier New == Courier`, `NSimSun == SimSun` — норма,
+  это реальные метрические совпадения/подстановки Windows;
+- `fallback group` — большое число (десятки) допустимо: это шрифты, которых
+  нет на машине снятия (мак-шрифты на Win, Office-шрифты без Office и т.п.);
+- `installed (fonts.check)` — число больше 20;
 - `probe key present: True`.
 
 Любой провал → переснятие (чаще всего: не тот браузер, масштаб ≠ 100%,
