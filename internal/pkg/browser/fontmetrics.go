@@ -40,6 +40,8 @@ func FontMockSupportedPlatforms() []string {
 		return []string{"Win32"}
 	case "MacIntel":
 		return []string{"MacIntel"}
+	case "Linux x86_64":
+		return []string{"Linux x86_64"}
 	default:
 		// Unknown/failed reference: restrict nothing (old behavior).
 		return nil
@@ -76,19 +78,23 @@ type fontMockPayload struct {
 var (
 	fontPayloadOnce sync.Once
 	fontPayloadStr  string
+	fontRefOnce     sync.Once
 	fontRefCache    *fontRefDoc
 )
 
-// parseFontReference decodes the embedded reference dump.
+// parseFontReference decodes the embedded reference dump (once — the
+// function is called from concurrent scrape goroutines via
+// FontMockSupportedPlatforms, so the cache MUST be synchronized; an
+// unsynchronized read/write pair here is a proven -race failure).
 func parseFontReference() *fontRefDoc {
-	if fontRefCache != nil {
-		return fontRefCache
-	}
-	var doc fontRefDoc
-	if err := json.Unmarshal(fontMetricsWinRaw, &doc); err != nil {
-		return &fontRefDoc{}
-	}
-	fontRefCache = &doc
+	fontRefOnce.Do(func() {
+		var doc fontRefDoc
+		if err := json.Unmarshal(fontMetricsWinRaw, &doc); err != nil {
+			fontRefCache = &fontRefDoc{}
+			return
+		}
+		fontRefCache = &doc
+	})
 	return fontRefCache
 }
 
