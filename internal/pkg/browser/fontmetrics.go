@@ -25,6 +25,29 @@ import (
 // fallback resolution as available) and the container behaves the same —
 // natural parity, nothing to patch.
 
+// FontMockSupportedPlatforms lists the navigator.platform values whose
+// font metrics are covered by an embedded reference dump — i.e. the
+// profiles the stage C mock can honestly serve. UA selection on the
+// Chrome path is restricted to these platforms (#112): a randomly drawn
+// MacIntel profile would ship the container's collapsed font metrics
+// (the very tell stage C exists to hide). When a macOS reference
+// (fontmetrics_mac.json) is added, "MacIntel" joins automatically via
+// this function — no scraper changes needed.
+func FontMockSupportedPlatforms() []string {
+	doc := parseFontReference()
+	switch doc.OS {
+	case "Win32":
+		return []string{"Win32"}
+	case "MacIntel":
+		return []string{"MacIntel"}
+	case "Linux x86_64":
+		return []string{"Linux x86_64"}
+	default:
+		// Unknown/failed reference: restrict nothing (old behavior).
+		return nil
+	}
+}
+
 //go:embed fontmetrics_win.json
 var fontMetricsWinRaw []byte
 
@@ -55,19 +78,23 @@ type fontMockPayload struct {
 var (
 	fontPayloadOnce sync.Once
 	fontPayloadStr  string
+	fontRefOnce     sync.Once
 	fontRefCache    *fontRefDoc
 )
 
-// parseFontReference decodes the embedded reference dump.
+// parseFontReference decodes the embedded reference dump (once — the
+// function is called from concurrent scrape goroutines via
+// FontMockSupportedPlatforms, so the cache MUST be synchronized; an
+// unsynchronized read/write pair here is a proven -race failure).
 func parseFontReference() *fontRefDoc {
-	if fontRefCache != nil {
-		return fontRefCache
-	}
-	var doc fontRefDoc
-	if err := json.Unmarshal(fontMetricsWinRaw, &doc); err != nil {
-		return &fontRefDoc{}
-	}
-	fontRefCache = &doc
+	fontRefOnce.Do(func() {
+		var doc fontRefDoc
+		if err := json.Unmarshal(fontMetricsWinRaw, &doc); err != nil {
+			fontRefCache = &fontRefDoc{}
+			return
+		}
+		fontRefCache = &doc
+	})
 	return fontRefCache
 }
 

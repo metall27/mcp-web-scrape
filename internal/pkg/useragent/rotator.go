@@ -192,6 +192,69 @@ func (r *Rotator) GetRandomDesktop() string {
 	return r.chromeOnly()
 }
 
+// GetRandomDesktopForPlatforms возвращает случайный desktop-Chrome UA, чья
+// платформа входит в allowed (#112). Пустой allowed = без ограничения
+// (эквивалент GetRandomDesktop). Используется на Chrome-пути: stealth
+// stage C мокает шрифты только для платформ со снятым эталоном, поэтому
+// случайный UA должен выбираться среди «обеспеченных» платформ — иначе
+// мак-профиль уйдёт на цель с контейнерным (схлопнутым) font fingerprint.
+func (r *Rotator) GetRandomDesktopForPlatforms(allowed []string) string {
+	if len(allowed) == 0 {
+		return r.chromeOnly()
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	filtered := make([]string, 0, len(r.userAgents))
+	for _, ua := range r.userAgents {
+		uaLower := toLower(ua)
+		for _, platform := range allowed {
+			if isDesktopChrome(uaLower) && uaPlatformSupported(uaLower, platform) {
+				filtered = append(filtered, ua)
+				break
+			}
+		}
+	}
+
+	if len(filtered) == 0 {
+		// No pool UA matches the allowed platforms — fall back to the
+		// unrestricted desktop pick rather than an empty UA.
+		return r.chromeOnly()
+	}
+
+	idx := r.rnd.Intn(len(filtered))
+	return filtered[idx]
+}
+
+// uaPlatformSupported reports whether a (lowercased) UA advertises the
+// given navigator.platform family.
+func uaPlatformSupported(uaLower, platform string) bool {
+	switch platform {
+	case "Win32":
+		return contains(uaLower, "windows")
+	case "MacIntel":
+		return contains(uaLower, "macintosh") || contains(uaLower, "mac os x")
+	case "Linux x86_64":
+		return contains(uaLower, "linux") && !contains(uaLower, "android")
+	default:
+		return false
+	}
+}
+
+// isDesktopChrome reports whether a (lowercased) UA is a plain desktop
+// Chrome entry — the only family the Chrome scraper may advertise (#95).
+// Shared by chromeOnly() and GetRandomDesktopForPlatforms so the
+// predicate cannot drift between the two (#113 review, DRY).
+func isDesktopChrome(uaLower string) bool {
+	return contains(uaLower, "chrome") &&
+		!contains(uaLower, "headless") &&
+		!contains(uaLower, "edg") &&
+		!contains(uaLower, "mobile") &&
+		!contains(uaLower, "android") &&
+		!contains(uaLower, "iphone") &&
+		!contains(uaLower, "ipad")
+}
+
 // chromeOnly выбирает случайный UA из списка, ограниченного desktop-Chrome.
 func (r *Rotator) chromeOnly() string {
 	r.mu.RLock()
@@ -203,14 +266,7 @@ func (r *Rotator) chromeOnly() string {
 
 	filtered := make([]string, 0, len(r.userAgents))
 	for _, ua := range r.userAgents {
-		uaLower := toLower(ua)
-		if contains(uaLower, "chrome") &&
-			!contains(uaLower, "headless") &&
-			!contains(uaLower, "edg") &&
-			!contains(uaLower, "mobile") &&
-			!contains(uaLower, "android") &&
-			!contains(uaLower, "iphone") &&
-			!contains(uaLower, "ipad") {
+		if isDesktopChrome(toLower(ua)) {
 			filtered = append(filtered, ua)
 		}
 	}
