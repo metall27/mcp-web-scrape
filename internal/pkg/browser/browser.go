@@ -45,6 +45,11 @@ type Config struct {
 	ViewportHeight int
 	IsolatedMode   bool          // Use isolated browser instances instead of shared pool (expensive but avoids session conflicts)
 	SessionTTL     time.Duration // Inactivity TTL for named sessions; 0 = disabled
+
+	// Named-session disk persistence (#107 stage 2). Only effective when
+	// SessionTTL > 0. Empty dir = off.
+	SessionPersistDir      string        // Directory for session state snapshots (cookies/storage/identity)
+	SessionPersistInterval time.Duration // Flush interval for dirty sessions (default 5m)
 }
 
 func New(cfg Config) (*Pool, error) {
@@ -117,6 +122,9 @@ func New(cfg Config) (*Pool, error) {
 		cfg.Logger.Info().
 			Dur("session_ttl", cfg.SessionTTL).
 			Msg("Named session support enabled")
+		if cfg.SessionPersistDir != "" {
+			pool.sessions.enablePersistence(cfg.SessionPersistDir, cfg.SessionPersistInterval)
+		}
 	}
 
 	cfg.Logger.Info().

@@ -46,6 +46,21 @@ type namedSession struct {
 	// SecurityError + session-context poisoning that the original live
 	// GetLocalStorage caused on fresh/reused sessions. Guarded by mu.
 	localStorageSnapshot map[string]string
+
+	// pendingCookies holds cookies rehydrated from a persisted snapshot
+	// (#107 stage 2) that have NOT yet been injected into the live browser
+	// context. TakePendingCookies pops them. Injection happens in the
+	// scraper's pre-navigation task (the same ActionFunc that applies the
+	// UA override — proven-safe on a fresh session context), NEVER inside
+	// GetOrCreate, where any chromedp.Run could poison the context.
+	// Guarded by mu.
+	pendingCookies []CookieState
+
+	// stateDirty is set by MarkDirty after a scrape committed new state
+	// (cookies/storage). Close/CloseAll persist ONLY dirty sessions:
+	// persisting a never-used session would lazily LAUNCH Chrome just to
+	// read an empty cookie jar at shutdown. Guarded by mu.
+	stateDirty bool
 }
 
 func (s *namedSession) touch() {
@@ -64,6 +79,14 @@ type SessionManager struct {
 	sessions map[string]*namedSession
 	stopOnce sync.Once
 	stopCh   chan struct{}
+
+	// Persistence (#107 stage 2): when persistDir != "", session state
+	// (cookies, localStorage, pinned identity) is snapshotted to disk and
+	// rehydrated on next creation, so reputation survives restarts.
+	// dirty tracks sessions whose state changed since the last flush.
+	persistDir      string
+	persistInterval time.Duration
+	dirty           map[string]bool
 }
 
 func newSessionManager(pool *Pool, logger zerolog.Logger, ttl time.Duration) *SessionManager {
@@ -97,7 +120,34 @@ func (sm *SessionManager) GetOrCreate(parent context.Context, id, userAgent stri
 		sm.logger.Debug().Str("session_id", id).Msg("Reusing existing named session")
 		return sess.ctx, nil
 	}
+	persistDir := sm.persistDir
 	sm.mu.Unlock()
+
+	// #107 stage 2: rehydrate from a persisted snapshot BEFORE creating the
+	// context. A warm reputation is worthless if the identity that earned
+	// it changed — cookies are correlated with UA/fingerprint — so the
+	// persisted identity wins over the caller's freshly generated one.
+	var (
+		restored        *persistedSession
+		hadSnap         bool
+		restoredLS      map[string]string
+		restoredCookies []CookieState
+	)
+	if persistDir != "" {
+		restored, hadSnap = loadStateFile(persistDir, id)
+		if hadSnap {
+			userAgent = restored.UserAgent
+			fingerprint = restored.Fingerprint
+			restoredLS = restored.LocalStorage
+			restoredCookies = restored.Cookies
+			sm.logger.Info().
+				Str("session_id", id).
+				Str("user_agent", userAgent).
+				Time("saved_at", restored.SavedAt).
+				Int("cookies", len(restoredCookies)).
+				Msg("Rehydrating named session from persisted state")
+		}
+	}
 
 	// Create a new session outside the lock — browser context creation
 	// can take seconds (Chrome launch). Other sessions remain usable.
@@ -137,6 +187,17 @@ func (sm *SessionManager) GetOrCreate(parent context.Context, id, userAgent stri
 		lastAccess:  time.Now(),
 		userAgent:   userAgent,
 		fingerprint: fingerprint,
+	}
+	if hadSnap {
+		// The snapshot's localStorage becomes the session's live snapshot
+		// immediately — the scraper's #59 pre-navigation injection then
+		// re-seeds it before the first page JS runs, with no CDP round-trip.
+		sess.localStorageSnapshot = restoredLS
+		// Cookies are NOT injected here (a chromedp.Run on the still
+		// uninitialized context can poison it — see GetCachedLocalStorage
+		// history). They wait in pendingCookies for the scraper's
+		// pre-navigation task.
+		sess.pendingCookies = restoredCookies
 	}
 
 	sm.mu.Lock()
@@ -239,6 +300,26 @@ func (sm *SessionManager) SaveLocalStorage(id string, values map[string]string) 
 	sess.mu.Lock()
 	sess.localStorageSnapshot = values
 	sess.mu.Unlock()
+}
+
+// TakePendingCookies returns the cookies restored from a persisted snapshot
+// that have not yet been injected into the live browser context, clearing the
+// pending queue (#107 stage 2). The scraper calls it in its pre-navigation
+// ActionFunc (the same context where the UA override is applied — the first
+// chromedp.Run of the session) and re-sets them via network.SetCookie.
+// Returns nil when the session is unknown or has no pending cookies.
+func (sm *SessionManager) TakePendingCookies(id string) []CookieState {
+	sm.mu.Lock()
+	sess, ok := sm.sessions[id]
+	sm.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	out := sess.pendingCookies
+	sess.pendingCookies = nil
+	return out
 }
 
 // CookieInfo holds the metadata of a single cookie for session inspection (#42).
@@ -446,7 +527,19 @@ func (sm *SessionManager) Close(id string) bool {
 		return true
 	}
 	sess.closed = true
+	dirty := sess.stateDirty
 	sess.mu.Unlock()
+
+	// Persist the final state BEFORE cancelling the context — the cookie
+	// dump needs the live browser context (#107 stage 2). Only dirty
+	// sessions: a never-scraped session has an empty jar, and persisting it
+	// would lazily launch Chrome during shutdown.
+	if sm.persistDir != "" && dirty {
+		if err := sm.persistSession(sess); err != nil {
+			sm.logger.Warn().Err(err).Str("session_id", id).
+				Msg("Failed to persist session state on close")
+		}
+	}
 
 	sess.cancel()
 	sm.logger.Info().Str("session_id", id).Msg("Named session closed")
@@ -473,6 +566,17 @@ func (sm *SessionManager) CloseAll() {
 		sess.mu.Lock()
 		if !sess.closed {
 			sess.closed = true
+			// Persist dirty sessions before cancelling — the cookie dump
+			// needs the live context; this is the graceful-shutdown path
+			// that makes a `docker compose up -d` restart reputation-neutral
+			// (#107). Non-dirty sessions are skipped: persisting them would
+			// lazily launch Chrome to read an empty jar.
+			if sm.persistDir != "" && sess.stateDirty {
+				if err := sm.persistSession(sess); err != nil {
+					sm.logger.Warn().Err(err).Str("session_id", id).
+						Msg("Failed to persist session state on shutdown")
+				}
+			}
 			sess.cancel()
 		}
 		sess.mu.Unlock()

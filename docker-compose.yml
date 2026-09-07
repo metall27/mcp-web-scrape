@@ -48,6 +48,8 @@ services:
       - mcp-cache:/app/cache
       # Site method learning data
       - ./data:/app/data
+      # Named session state (cookies/storage for warm anti-bot reputation, #107)
+      # — mounted only when browser.sessions.persist_dir points here in config.yaml
       # Chrome shared memory (критично для headless Chrome)
       - chrome-shm:/dev/shm
 
