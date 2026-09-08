@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -67,6 +68,11 @@ type scrapeContext struct {
 	// BEFORE navigation. This eliminates the SPA hydration race (#59):
 	// React/Zustand sees the auth token synchronously on first JS execution.
 	localStorageData map[string]string
+
+	// pendingCookies are cookies rehydrated from a persisted session
+	// snapshot (#107 stage 2), set only when the session was freshly
+	// (re)created this call. buildChromeTasks injects them pre-navigation.
+	pendingCookies []browser.CookieState
 }
 
 // NewChromeScraper создает новый ChromeScraper
@@ -232,6 +238,17 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			// point — the original identity wins).
 			if pinnedUA, ok := sm.GetUserAgent(opts.SessionID); ok {
 				ua = pinnedUA
+				// ua-sync (#105) applies to the PINNED UA as well: a
+				// snapshot persisted under an older image (say Chromium
+				// 124) must not keep advertising that major after the
+				// engine was upgraded (149) — engine-shipped APIs
+				// (Promise.try etc.) betray the claimed version. The
+				// synced UA is written back so the session's pinned
+				// identity converges to the engine major.
+				if s.browserPool != nil {
+					ua = s.browserPool.SyncUserAgentToEngine(ua)
+					sm.SetUserAgent(opts.SessionID, ua)
+				}
 			}
 			if pinnedFP, ok := sm.GetFingerprint(opts.SessionID); ok {
 				fp = pinnedFP
@@ -258,6 +275,19 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			// localStorage and poisoned the session context ("context canceled"
 			// on every subsequent CDP op across all retries).
 			scrapeCtx.localStorageData = sm.GetCachedLocalStorage(opts.SessionID)
+
+			// #107 stage 2: if this call (re)created the session from a
+			// persisted snapshot, take its pending cookies for injection in
+			// the pre-navigation task. PeekPendingCookies (NOT a one-shot
+			// take) re-reads on every Phase 5 retry attempt — the retry
+			// loop calls createScrapeContext again, and a popped queue
+			// would lose the cookies forever when the first attempt fails
+			// before injection. The queue is cleared in the pre-navigation
+			// ActionFunc exactly at injection time. Concurrent first-scrapes
+			// of the same session race harmlessly: whichever task runs its
+			// Run first injects into the shared context; the others see
+			// cookies already present on the next scrape.
+			scrapeCtx.pendingCookies = sm.PeekPendingCookies(opts.SessionID)
 
 			s.logger.Info().
 				Str("session_id", opts.SessionID).
@@ -397,7 +427,7 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	result := scrapeAttemptResult{}
 
 	// 1. Build Chrome tasks
-	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.profile, scrapeCtx.stealth, opts, scrapeCtx.useSession, scrapeCtx.localStorageData)
+	tasks, actionExecutor := s.buildChromeTasks(urlStr, scrapeCtx.profile, scrapeCtx.stealth, opts, scrapeCtx.useSession, scrapeCtx.localStorageData, scrapeCtx.pendingCookies)
 
 	// 2. Run tasks
 	var html string
@@ -573,6 +603,10 @@ func (s *ChromeScraper) scrapeAttempt(ctx context.Context, urlStr string, scrape
 	if scrapeCtx.useSession && s.browserPool != nil {
 		if sm := s.browserPool.Sessions(); sm != nil {
 			sm.SaveLocalStorage(scrapeCtx.sessionID, localSnapshot)
+			// Navigation just mutated the cookie jar (and possibly
+			// localStorage) — schedule a disk snapshot so a restart doesn't
+			// lose the state the site just granted us (#107 stage 2).
+			sm.MarkDirty(scrapeCtx.sessionID)
 			if len(localSnapshot) > 0 {
 				s.logger.Debug().
 					Str("session_id", scrapeCtx.sessionID).
@@ -1161,7 +1195,13 @@ func (s *ChromeScraper) SupportsActions() bool {
 // every call so the target site observes a consistent browser across the
 // whole session (#41); for ephemeral contexts a fresh coherent profile is
 // generated per call.
-func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserProfile, stealth *browser.StealthActions, opts Options, preserveSession bool, localStorageData map[string]string) ([]chromedp.Action, *browser.ActionExecutor) {
+func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserProfile, stealth *browser.StealthActions, opts Options, preserveSession bool, localStorageData map[string]string, pendingCookies []browser.CookieState) ([]chromedp.Action, *browser.ActionExecutor) {
+	// sessionManager is captured for the pending-cookie queue clear below;
+	// nil on the ephemeral path (no session — nothing to clear).
+	var sessionManager *browser.SessionManager
+	if opts.SessionID != "" && s.browserPool != nil {
+		sessionManager = s.browserPool.Sessions()
+	}
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Override the browser identity at the ENGINE level via
@@ -1192,6 +1232,51 @@ func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserP
 					Str("user_agent", profile.UserAgent).
 					Str("platform", profile.Platform).
 					Msg("Browser identity override applied (UA + Sec-CH-UA + navigator)")
+			}
+
+			// #107 stage 2: rehydrate persisted cookies into the fresh browser
+			// context BEFORE navigation. Runs in the same ActionFunc as the
+			// UA override — the first initialized chromedp.Run of the session
+			// — where CDP network calls are proven safe. Each cookie is
+			// restored with its original domain/path/Secure/HttpOnly/SameSite
+			// so the jar is byte-faithful (__Secure-* cookies REQUIRE
+			// Secure=true; a dropped flag gets the cookie rejected). Failures
+			// are per-cookie and non-fatal — a stale/expired cookie simply
+			// doesn't take.
+			if len(pendingCookies) > 0 {
+				var injected, failed int
+				for _, c := range pendingCookies {
+					sc := network.SetCookie(c.Name, c.Value).
+						WithDomain(c.Domain).
+						WithPath(c.Path).
+						WithSecure(c.Secure).
+						WithHTTPOnly(c.HTTPOnly)
+					if c.SameSite != "" {
+						sc = sc.WithSameSite(network.CookieSameSite(c.SameSite))
+					}
+					if !c.Session && c.Expires > 0 {
+						exp := cdp.TimeSinceEpoch(time.Unix(int64(c.Expires), 0))
+						sc = sc.WithExpires(&exp)
+					}
+					if err := sc.Do(ctx); err != nil {
+						failed++
+						s.logger.Debug().Err(err).Str("cookie", c.Name).
+							Msg("Failed to restore persisted cookie (stale/expired?)")
+						continue
+					}
+					injected++
+				}
+				// #107: the queue is cleared exactly at injection time —
+				// the cookies are now in the live jar (and even stale ones
+				// would not become valid by retrying). Retry attempts peek
+				// the queue until this first successful Run injects.
+				if sessionManager != nil {
+					sessionManager.ClearPendingCookies(opts.SessionID)
+				}
+				s.logger.Info().
+					Int("injected", injected).
+					Int("failed", failed).
+					Msg("Restored persisted session cookies pre-navigation")
 			}
 
 			// Phase 3: Extended Stealth - Inject anti-detection scripts

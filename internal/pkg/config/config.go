@@ -108,6 +108,13 @@ type PollingConfig struct {
 type SessionConfig struct {
 	Enabled bool          `mapstructure:"enabled"` // Enable named session support
 	TTL     time.Duration `mapstructure:"ttl"`     // Inactivity TTL — sessions unused for this long are closed
+
+	// Disk persistence of session state (#107 stage 2): cookies, localStorage
+	// and the pinned browser identity survive process restarts, so a warm
+	// anti-bot reputation (e.g. Ozon abt cookies) is not reset by every
+	// container redeploy. Empty dir = off (memory-only sessions).
+	PersistDir      string        `mapstructure:"persist_dir"`      // Directory for per-session state files (0600 — contains live cookies)
+	PersistInterval time.Duration `mapstructure:"persist_interval"` // Flush interval for changed sessions (default 5m)
 }
 
 type SearchConfig struct {
@@ -286,6 +293,8 @@ func setDefaults(v *viper.Viper) {
 	// Named persistent sessions defaults
 	v.SetDefault("browser.sessions.enabled", true)
 	v.SetDefault("browser.sessions.ttl", 30*time.Minute)
+	v.SetDefault("browser.sessions.persist_dir", "") // off by default; set e.g. ./data/sessions to survive restarts (#107)
+	v.SetDefault("browser.sessions.persist_interval", 5*time.Minute)
 
 	// Tool timeout and block detection defaults
 	v.SetDefault("browser.tool_timeout", 120*time.Second)

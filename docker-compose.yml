@@ -46,7 +46,8 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       # Cache directory
       - mcp-cache:/app/cache
-      # Site method learning data
+      # Persistent data: site-method learning (site_methods.yaml) AND named
+      # session snapshots (browser.sessions.persist_dir — e.g. /app/data/sessions, #107)
       - ./data:/app/data
       # Chrome shared memory (критично для headless Chrome)
       - chrome-shm:/dev/shm

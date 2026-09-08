@@ -126,6 +126,10 @@ func main() {
 		ViewportWidth:  cfg.Browser.ViewportWidth,
 		ViewportHeight: cfg.Browser.ViewportHeight,
 		SessionTTL:     sessionTTL,
+
+		// Named-session disk persistence (#107 stage 2)
+		SessionPersistDir:      cfg.Browser.SessionConfig.PersistDir,
+		SessionPersistInterval: cfg.Browser.SessionConfig.PersistInterval,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize browser pool")

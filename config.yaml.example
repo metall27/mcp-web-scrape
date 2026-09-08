@@ -66,6 +66,8 @@ browser:
   sessions:
     enabled: true                  # Named persistent browser sessions (login-gated scraping)
     ttl: 30m                       # Inactivity TTL — sessions unused for this long are closed
+    persist_dir: ""                # Disk persistence of session state — cookies/localStorage/pinned identity survive restarts (#107). Empty = off. Use a SUBDIRECTORY of the mounted data volume (e.g. /app/data/sessions), not the volume root — site_methods.yaml lives there too
+    persist_interval: 5m           # How often changed sessions are flushed to disk (final flush also happens on graceful shutdown)
 
 search:
   provider: duckduckgo  # duckduckgo, brave, bing
