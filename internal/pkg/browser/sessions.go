@@ -49,7 +49,8 @@ type namedSession struct {
 
 	// pendingCookies holds cookies rehydrated from a persisted snapshot
 	// (#107 stage 2) that have NOT yet been injected into the live browser
-	// context. TakePendingCookies pops them. Injection happens in the
+	// context. PeekPendingCookies reads a copy; ClearPendingCookies drops
+	// the queue at injection time. Injection happens in the
 	// scraper's pre-navigation task (the same ActionFunc that applies the
 	// UA override — proven-safe on a fresh session context), NEVER inside
 	// GetOrCreate, where any chromedp.Run could poison the context.
@@ -246,7 +247,13 @@ func (sm *SessionManager) SetUserAgent(id, ua string) {
 	sess.mu.Lock()
 	if sess.userAgent != ua {
 		sess.userAgent = ua
-		sess.stateDirty = true // persist the converged identity
+		// NOTE (review #114, non-blocking): this may mark a rehydrated
+		// session dirty before its first successful navigation. In the
+		// narrow window where persistLoop flushes before cookies were
+		// re-injected, the snapshot is rewritten from an empty jar —
+		// self-healing: pendingCookies stay in memory and the next
+		// successful scrape re-persists the full state.
+		sess.stateDirty = true
 	}
 	sess.mu.Unlock()
 }

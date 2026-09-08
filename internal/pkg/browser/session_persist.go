@@ -30,7 +30,8 @@ import (
 // file: identity is pinned FROM DISK (a cookie bound to one UA/fingerprint
 // presented with another is itself an anomaly signal), and cookies are
 // re-injected into the fresh browser context pre-navigation by the scraper
-// (TakePendingCookies). Cookies are deliberately NOT injected inside
+// (PeekPendingCookies read / ClearPendingCookies at injection). Cookies are
+// deliberately NOT injected inside
 // GetOrCreate: any chromedp.Run there on a still-uninitialized context can
 // poison the session (see the GetLocalStorage history in sessions.go).
 
