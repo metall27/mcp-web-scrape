@@ -372,6 +372,13 @@ func (s *StealthActions) BuildCombinedStealthScript(profile BrowserProfile) stri
 	// honest PluginArray, native-looking toString on overrides.
 	combinedScript += ";\n" + buildIdentityHardeningScript(profile)
 
+	// #107 stage 3: deterministic per-profile media fingerprints —
+	// canvas LSB noise / audio buffer shapes seeded from the pinned
+	// identity. Must run AFTER the identity script (uses disguise()
+	// from the Symbol registry) and BEFORE the font-metrics mock (the
+	// canvas wrappers must not double-wrap the measureText chain).
+	combinedScript += ";\n" + buildDeterministicMediaScript(profile)
+
 	// #107 stage C: font metrics mock (measureText + span offset
 	// probe) from the Win32 desktop reference. Only applied when the
 	// advertised platform matches the reference (Win32) — a MacIntel

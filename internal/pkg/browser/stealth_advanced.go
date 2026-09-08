@@ -19,117 +19,31 @@ func NewAdvancedStealth() *AdvancedStealth {
 	}
 }
 
-// CanvasAntiFingerprinting добавляет noise в Canvas чтобы предотвратить fingerprinting
+// CanvasAntiFingerprinting: RETIRED as an active noise source (#107 stage 3).
+// The Math.random()-based noise produced a NEW canvas fingerprint on every
+// visit — anti-bot scoring treats "unique every time" as its own detection
+// signal. Deterministic, per-profile-seeded noise now lives in
+// buildDeterministicMediaScript (media_fingerprint.go); this stub is kept so
+// the advanced script composition and its callers stay unchanged.
 func (a *AdvancedStealth) CanvasAntiFingerprinting() string {
 	return `
 		(() => {
-			// Canvas Fingerprinting Protection
-			const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-			const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-			const originalToBlob = HTMLCanvasElement.prototype.toBlob;
-
-			// Add noise to canvas data
-			function addNoise(data) {
-				if (data && data.data) {
-					// Add minimal noise to 0.1% of pixels (undetectable to humans, breaks fingerprinting)
-					for (let i = 0; i < data.data.length; i += 4) {
-						if (Math.random() < 0.001) {
-							data.data[i] = Math.min(255, data.data[i] + 1);
-							data.data[i + 1] = Math.min(255, data.data[i + 1] + 1);
-							data.data[i + 2] = Math.min(255, data.data[i + 2] + 1);
-						}
-					}
-				}
-				return data;
-			}
-
-			// Override toDataURL
-			HTMLCanvasElement.prototype.toDataURL = function() {
-				const context = this.getContext('2d');
-				if (context) {
-					const imageData = context.getImageData(0, 0, this.width, this.height);
-					addNoise(imageData);
-					context.putImageData(imageData, 0, 0);
-				}
-				return originalToDataURL.apply(this, arguments);
-			};
-
-			// Override getImageData
-			CanvasRenderingContext2D.prototype.getImageData = function() {
-				const imageData = originalGetImageData.apply(this, arguments);
-				return addNoise(imageData);
-			};
-
-			// Override toBlob
-			HTMLCanvasElement.prototype.toBlob = function(callback) {
-				const context = this.getContext('2d');
-				if (context) {
-					const imageData = context.getImageData(0, 0, this.width, this.height);
-					addNoise(imageData);
-					context.putImageData(imageData, 0, 0);
-				}
-				return originalToBlob.apply(this, arguments);
-			};
-
-			// Canvas WebGL fingerprinting protection
-			const originalGetParameter = WebGLRenderingContext.prototype.getParameter;
-			WebGLRenderingContext.prototype.getParameter = function(parameter) {
-				// Add randomization to fingerprinting-relevant parameters
-				if (parameter === 37445 || parameter === 37446) {
-					// UNMASKED_VENDOR_WEBGL and UNMASKED_RENDERER_WEBGL
-					return originalGetParameter.call(this, parameter);
-				}
-
-				// Randomize some parameters slightly
-				const result = originalGetParameter.call(this, parameter);
-				if (typeof result === 'number' && result > 1000) {
-					// Add small random variation to large numbers
-					return result + Math.floor(Math.random() * 3) - 1;
-				}
-				return result;
-			};
+			// Canvas noise moved to the deterministic media script (#107
+			// stage 3): stable LSB flips seeded from the pinned profile.
 		})();
 	`
 }
 
-// AudioAntiFingerprinting предотвращает AudioContext fingerprinting
+// AudioAntiFingerprinting: RETIRED as an active noise source (#107 stage 3) —
+// same Math.random() instability problem as the canvas noise above. The
+// per-profile deterministic audio buffer shape lives in
+// buildDeterministicMediaScript. This stub keeps the composition intact and
+// still hardens createChannelMerger against the trivial reflection probe.
 func (a *AdvancedStealth) AudioAntiFingerprinting() string {
 	return `
 		(() => {
-			// AudioContext Fingerprinting Protection
-			const originalCreateAnalyser = AudioContext.prototype.createAnalyser;
-			const originalGetChannelData = AudioBuffer.prototype.getChannelData;
-
-			AudioContext.prototype.createAnalyser = function() {
-				const analyser = originalCreateAnalyser.apply(this, arguments);
-				const originalGetFloatFrequencyData = analyser.getFloatFrequencyData;
-
-				analyser.getFloatFrequencyData = function(array) {
-					originalGetFloatFrequencyData.apply(this, arguments);
-					// Add minimal noise to audio fingerprint
-					for (let i = 0; i < array.length; i++) {
-						if (Math.random() < 0.001) {
-							array[i] += Math.random() * 0.0001;
-						}
-					}
-				};
-
-				return analyser;
-			};
-
-			// Override getChannelData to add noise
-			AudioBuffer.prototype.getChannelData = function() {
-				const result = originalGetChannelData.apply(this, arguments);
-				// Add minimal noise
-				for (let i = 0; i < result.length; i++) {
-					if (Math.random() < 0.001) {
-						result[i] += Math.random() * 0.0001 - 0.00005;
-					}
-				}
-				return result;
-			};
-
-			// Protect AudioContext itself
+			// Audio noise moved to the deterministic media script (#107
+			// stage 3). Keep the channel-merger shape hardening only.
 			const AudioContextProto = window.AudioContext || window.webkitAudioContext;
 			if (AudioContextProto) {
 				const originalCreateChannelMerger = AudioContextProto.prototype.createChannelMerger;
@@ -142,41 +56,17 @@ func (a *AdvancedStealth) AudioAntiFingerprinting() string {
 	`
 }
 
-// FontAntiFingerprinting скрывает реальное количество шрифтов
+// FontAntiFingerprinting: the OffscreenCanvas measureText random-jitter
+// override is RETIRED (#107 stage 3 review): it contradicted the stage C
+// font-metrics mock (which serves exact reference-table widths) — a random
+// ±0.005px wobble on top of reference values is both unstable per call and
+// detectably non-deterministic. Stage C's mock covers OffscreenCanvas
+// contexts as well; nothing random remains here.
 func (a *AdvancedStealth) FontAntiFingerprinting() string {
 	return `
 		(() => {
-			// Font Fingerprinting Protection
-			// Limit the number of visible fonts to prevent detailed fingerprinting
-
-			const originalOffscreenCanvas = window.OffscreenCanvas;
-			if (originalOffscreenCanvas) {
-				// Add noise to offscreen canvas measurements
-				window.OffscreenCanvas = function() {
-					const canvas = originalOffscreenCanvas.apply(this, arguments);
-					const originalGetContext = canvas.getContext;
-
-					canvas.getContext = function() {
-						const context = originalGetContext.apply(this, arguments);
-						if (context && context.measureText) {
-							const originalMeasureText = context.measureText;
-							context.measureText = function(text) {
-								const result = originalMeasureText.apply(this, arguments);
-								// Add minimal variation to text measurements
-								if (result && result.width) {
-									Object.defineProperty(result, 'width', {
-									get: () => result.width + Math.random() * 0.01 - 0.005,
-									configurable: true
-									});
-								}
-								return result;
-							};
-						}
-						return context;
-					};
-					return canvas;
-				};
-			}
+			// Font measurement spoofing moved to the stage C font-metrics
+			// mock (#107): reference-table widths, deterministic.
 		})();
 	`
 }
