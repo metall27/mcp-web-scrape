@@ -161,20 +161,25 @@ func TestTakePendingCookies(t *testing.T) {
 		sessions: map[string]*namedSession{},
 	}
 	// unknown session
-	if got := sm.TakePendingCookies("ghost"); got != nil {
+	if got := sm.PeekPendingCookies("ghost"); got != nil {
 		t.Error("unknown session should return nil")
 	}
 
 	cookies := []CookieState{{Name: "abt_data", Domain: ".ozon.ru"}}
 	sm.sessions["s"] = &namedSession{id: "s", pendingCookies: cookies}
 
-	got := sm.TakePendingCookies("s")
+	got := sm.PeekPendingCookies("s")
 	if len(got) != 1 || got[0].Name != "abt_data" {
 		t.Fatalf("pending cookies not returned: %+v", got)
 	}
-	// second take must be empty (popped)
-	if got := sm.TakePendingCookies("s"); got != nil {
-		t.Error("pending cookies should be cleared after take")
+	// peek does NOT clear — retry attempts must be able to re-read
+	if got := sm.PeekPendingCookies("s"); got == nil {
+		t.Error("peek must not clear the pending queue")
+	}
+	// explicit clear is the one-shot point (injection time)
+	sm.ClearPendingCookies("s")
+	if got := sm.PeekPendingCookies("s"); got != nil {
+		t.Error("pending cookies should be cleared after ClearPendingCookies")
 	}
 }
 
@@ -290,12 +295,18 @@ func TestGetOrCreateRehydratesPersistedIdentity(t *testing.T) {
 	if got := sm.GetCachedLocalStorage("ozon"); got["token"] != "abc" {
 		t.Errorf("localStorage not restored: %v", got)
 	}
-	pc := sm.TakePendingCookies("ozon")
+	pc := sm.PeekPendingCookies("ozon")
 	if len(pc) != 1 || pc[0].Name != "abt_data" {
 		t.Errorf("pending cookies not staged: %+v", pc)
 	}
-	// Second GetOrCreate on the live session must not re-load the file.
-	if pc := sm.TakePendingCookies("ozon"); pc != nil {
-		t.Error("pending cookies should be one-shot")
+	// Peek stays available until the scraper injects and clears — the
+	// Phase 5 retry loop rebuilds the scrape context per attempt and must
+	// not lose rehydrated cookies to a one-shot take (review #114).
+	if pc := sm.PeekPendingCookies("ozon"); pc == nil {
+		t.Error("pending cookies must survive a peek (cleared only at injection)")
+	}
+	sm.ClearPendingCookies("ozon")
+	if pc := sm.PeekPendingCookies("ozon"); pc != nil {
+		t.Error("pending cookies should be cleared after injection")
 	}
 }

@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,6 +124,16 @@ func New(cfg Config) (*Pool, error) {
 			Dur("session_ttl", cfg.SessionTTL).
 			Msg("Named session support enabled")
 		if cfg.SessionPersistDir != "" {
+			// Resolve to an absolute path once at startup: a relative
+			// persist_dir would silently move with the process CWD
+			// (local runs from different directories would read/write
+			// different snapshot dirs and "lose" sessions).
+			if abs, err := filepath.Abs(cfg.SessionPersistDir); err == nil {
+				cfg.SessionPersistDir = abs
+			} else {
+				cfg.Logger.Warn().Err(err).Str("persist_dir", cfg.SessionPersistDir).
+					Msg("Failed to resolve session persist_dir to absolute; using as-is")
+			}
 			pool.sessions.enablePersistence(cfg.SessionPersistDir, cfg.SessionPersistInterval)
 		}
 	}

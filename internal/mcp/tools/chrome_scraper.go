@@ -238,6 +238,17 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 			// point — the original identity wins).
 			if pinnedUA, ok := sm.GetUserAgent(opts.SessionID); ok {
 				ua = pinnedUA
+				// ua-sync (#105) applies to the PINNED UA as well: a
+				// snapshot persisted under an older image (say Chromium
+				// 124) must not keep advertising that major after the
+				// engine was upgraded (149) — engine-shipped APIs
+				// (Promise.try etc.) betray the claimed version. The
+				// synced UA is written back so the session's pinned
+				// identity converges to the engine major.
+				if s.browserPool != nil {
+					ua = s.browserPool.SyncUserAgentToEngine(ua)
+					sm.SetUserAgent(opts.SessionID, ua)
+				}
 			}
 			if pinnedFP, ok := sm.GetFingerprint(opts.SessionID); ok {
 				fp = pinnedFP
@@ -267,13 +278,16 @@ func (s *ChromeScraper) createScrapeContext(ctx context.Context, urlStr string, 
 
 			// #107 stage 2: if this call (re)created the session from a
 			// persisted snapshot, take its pending cookies for injection in
-			// the pre-navigation task. TakePendingCookies returns nil for a
-			// reused in-memory session or one without a snapshot, so this is
-			// a no-op on the warm path. Concurrent first-scrapes of the same
-			// session race harmlessly: whichever task runs its Run first
-			// injects into the shared context; the others see cookies already
-			// present on the next scrape.
-			scrapeCtx.pendingCookies = sm.TakePendingCookies(opts.SessionID)
+			// the pre-navigation task. PeekPendingCookies (NOT a one-shot
+			// take) re-reads on every Phase 5 retry attempt — the retry
+			// loop calls createScrapeContext again, and a popped queue
+			// would lose the cookies forever when the first attempt fails
+			// before injection. The queue is cleared in the pre-navigation
+			// ActionFunc exactly at injection time. Concurrent first-scrapes
+			// of the same session race harmlessly: whichever task runs its
+			// Run first injects into the shared context; the others see
+			// cookies already present on the next scrape.
+			scrapeCtx.pendingCookies = sm.PeekPendingCookies(opts.SessionID)
 
 			s.logger.Info().
 				Str("session_id", opts.SessionID).
@@ -1182,6 +1196,12 @@ func (s *ChromeScraper) SupportsActions() bool {
 // whole session (#41); for ephemeral contexts a fresh coherent profile is
 // generated per call.
 func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserProfile, stealth *browser.StealthActions, opts Options, preserveSession bool, localStorageData map[string]string, pendingCookies []browser.CookieState) ([]chromedp.Action, *browser.ActionExecutor) {
+	// sessionManager is captured for the pending-cookie queue clear below;
+	// nil on the ephemeral path (no session — nothing to clear).
+	var sessionManager *browser.SessionManager
+	if opts.SessionID != "" && s.browserPool != nil {
+		sessionManager = s.browserPool.Sessions()
+	}
 	tasks := []chromedp.Action{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Phase 1: Override the browser identity at the ENGINE level via
@@ -1245,6 +1265,13 @@ func (s *ChromeScraper) buildChromeTasks(urlStr string, profile browser.BrowserP
 						continue
 					}
 					injected++
+				}
+				// #107: the queue is cleared exactly at injection time —
+				// the cookies are now in the live jar (and even stale ones
+				// would not become valid by retrying). Retry attempts peek
+				// the queue until this first successful Run injects.
+				if sessionManager != nil {
+					sessionManager.ClearPendingCookies(opts.SessionID)
 				}
 				s.logger.Info().
 					Int("injected", injected).

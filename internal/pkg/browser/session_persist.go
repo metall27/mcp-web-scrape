@@ -174,6 +174,10 @@ func (sm *SessionManager) enablePersistence(dir string, interval time.Duration) 
 	sm.mu.Lock()
 	sm.persistDir = dir
 	if interval <= 0 {
+		sm.logger.Warn().
+			Dur("configured", interval).
+			Dur("default", 5*time.Minute).
+			Msg("session persist_interval is <= 0; using the default")
 		interval = 5 * time.Minute
 	}
 	sm.persistInterval = interval

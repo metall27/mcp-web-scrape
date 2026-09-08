@@ -229,6 +229,28 @@ func (sm *SessionManager) GetUserAgent(id string) (string, bool) {
 	return sess.userAgent, true
 }
 
+// SetUserAgent updates the User-Agent pinned to a named session. Used when
+// ua-sync (#105) rewrites the Chrome major of a rehydrated pinned UA after an
+// engine upgrade — the persisted identity converges to the engine's actual
+// major so the session never advertises a version the engine betrays.
+func (sm *SessionManager) SetUserAgent(id, ua string) {
+	if ua == "" {
+		return
+	}
+	sm.mu.Lock()
+	sess, ok := sm.sessions[id]
+	sm.mu.Unlock()
+	if !ok {
+		return
+	}
+	sess.mu.Lock()
+	if sess.userAgent != ua {
+		sess.userAgent = ua
+		sess.stateDirty = true // persist the converged identity
+	}
+	sess.mu.Unlock()
+}
+
 // GetFingerprint returns the BrowserFingerprint pinned to a named session.
 // Returns a zero BrowserFingerprint and false when the session does not
 // exist. The caller uses this so stealth injection (timezone, language,
@@ -302,13 +324,19 @@ func (sm *SessionManager) SaveLocalStorage(id string, values map[string]string) 
 	sess.mu.Unlock()
 }
 
-// TakePendingCookies returns the cookies restored from a persisted snapshot
-// that have not yet been injected into the live browser context, clearing the
-// pending queue (#107 stage 2). The scraper calls it in its pre-navigation
-// ActionFunc (the same context where the UA override is applied — the first
-// chromedp.Run of the session) and re-sets them via network.SetCookie.
+// PeekPendingCookies returns the cookies restored from a persisted snapshot
+// that have not yet been injected into the live browser context (#107 stage 2)
+// WITHOUT clearing the queue. The scraper reads them in createScrapeContext
+// (every retry attempt re-reads — the Phase 5 loop rebuilds the scrape
+// context, and a one-shot take here would lose the cookies forever if the
+// first attempt failed before injection). The queue is cleared by
+// ClearPendingCookies from the pre-navigation ActionFunc — the same context
+// where the UA override is applied, the first chromedp.Run of the session.
+// The named-session context survives across retry attempts (browserCancel is
+// a no-op), so once injected the cookies stay in the jar; clearing exactly at
+// injection time is the correct one-shot point.
 // Returns nil when the session is unknown or has no pending cookies.
-func (sm *SessionManager) TakePendingCookies(id string) []CookieState {
+func (sm *SessionManager) PeekPendingCookies(id string) []CookieState {
 	sm.mu.Lock()
 	sess, ok := sm.sessions[id]
 	sm.mu.Unlock()
@@ -317,9 +345,26 @@ func (sm *SessionManager) TakePendingCookies(id string) []CookieState {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	out := sess.pendingCookies
-	sess.pendingCookies = nil
+	if sess.pendingCookies == nil {
+		return nil
+	}
+	out := make([]CookieState, len(sess.pendingCookies))
+	copy(out, sess.pendingCookies)
 	return out
+}
+
+// ClearPendingCookies drops the pending rehydrated-cookie queue after the
+// scraper injected them into the live browser context (#107 stage 2).
+func (sm *SessionManager) ClearPendingCookies(id string) {
+	sm.mu.Lock()
+	sess, ok := sm.sessions[id]
+	sm.mu.Unlock()
+	if !ok {
+		return
+	}
+	sess.mu.Lock()
+	sess.pendingCookies = nil
+	sess.mu.Unlock()
 }
 
 // CookieInfo holds the metadata of a single cookie for session inspection (#42).
@@ -564,14 +609,25 @@ func (sm *SessionManager) CloseAll() {
 	for _, id := range ids {
 		sess := sessions[id]
 		sess.mu.Lock()
-		if !sess.closed {
+		closed := sess.closed
+		if !closed {
 			sess.closed = true
-			// Persist dirty sessions before cancelling — the cookie dump
-			// needs the live context; this is the graceful-shutdown path
-			// that makes a `docker compose up -d` restart reputation-neutral
-			// (#107). Non-dirty sessions are skipped: persisting them would
-			// lazily launch Chrome to read an empty jar.
-			if sm.persistDir != "" && sess.stateDirty {
+		}
+		// Persist dirty sessions before cancelling — the cookie dump
+		// needs the live context; this is the graceful-shutdown path
+		// that makes a `docker compose up -d` restart reputation-neutral
+		// (#107). Non-dirty sessions are skipped: persisting them would
+		// lazily launch Chrome to read an empty jar.
+		//
+		// NOTE: persistSession locks sess.mu itself — read the dirty flag
+		// under the lock and RELEASE it before persisting (same pattern
+		// as Close; locking recursively would deadlock on the
+		// non-reentrant mutex).
+		dirty := sess.stateDirty
+		sess.mu.Unlock()
+
+		if !closed {
+			if sm.persistDir != "" && dirty {
 				if err := sm.persistSession(sess); err != nil {
 					sm.logger.Warn().Err(err).Str("session_id", id).
 						Msg("Failed to persist session state on shutdown")
@@ -579,7 +635,6 @@ func (sm *SessionManager) CloseAll() {
 			}
 			sess.cancel()
 		}
-		sess.mu.Unlock()
 	}
 	if len(ids) > 0 {
 		sm.logger.Info().Int("count", len(ids)).Msg("Closed all named sessions")
