@@ -105,8 +105,10 @@ func TestDeterministicMediaFingerprint(t *testing.T) {
 			return c;
 		};
 		const countNZ = (d) => {
+			// RGB only — alpha is 255 everywhere on an opaque canvas and
+			// is never flipped (it would drown out the signal).
 			let n = 0;
-			for (let i = 0; i < d.length; i++) if (d[i] !== 0) n++;
+			for (let i = 0; i < d.length; i++) if (i % 4 !== 3 && d[i] !== 0) n++;
 			return n;
 		};
 		const bl = blackCv(), blCtx = bl.getContext('2d');
