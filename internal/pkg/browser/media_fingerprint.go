@@ -80,8 +80,10 @@ func profileSeed(profile BrowserProfile) uint64 {
 		_, _ = h.Write([]byte(s))
 		_, _ = h.Write([]byte{0}) // field separator
 	}
-	// Keep the seed inside the exact float64 integer range (2^52) so the
-	// JS literal round-trips losslessly.
+	// The JS literal carries the full 2^52 value; only the low 32 bits
+	// reach the hash()/lcg() mixers (JS ^ and Math.imul are int32), which
+	// still leaves ~2^-32 collision odds between profiles — far below the
+	// noise floor of the fingerprints being differentiated.
 	return h.Sum64() & ((1 << 52) - 1)
 }
 
@@ -99,9 +101,11 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 		})() || function () {};
 
 		// ---- deterministic PRNG core -------------------------------------
-		// hash(): PURE function of (x, y, channel) — no state, so the same
-		// pixel always maps to the same decision. Idempotent noise: stable
-		// canvas hash across calls, visits and restarts.
+		// hash(): PURE function of CANVAS-ABSOLUTE coordinates — no state,
+		// so the same pixel always maps to the same decision regardless of
+		// which window it is read through. Idempotent noise: stable canvas
+		// hash across calls, visits and restarts, and overlapping partial
+		// getImageData reads never contradict each other (#117).
 		function hash(x, y, c) {
 			// 32-bit mix (murmur3 finalizer) over three lanes.
 			let h = SEED ^ 0x9e3779b9;
@@ -113,25 +117,32 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 		}
 		// lcg(): seeded stream for audio jitter (real codec paths correlate
 		// neighboring samples, so a stream is the plausible shape there).
-		let lcgState = ((SEED ^ 0x1234abcd) >>> 0) || 1;
-		function lcg() {
-			lcgState = (Math.imul(lcgState, 1664525) + 1013904223) >>> 0;
-			return lcgState / 4294967296;
+		// NOTE: a fresh stream is derived PER BUFFER from the profile seed
+		// plus the buffer's own parameters (#117) — never a shared mutable
+		// state — so the jitter does not depend on the order in which
+		// buffers are first read on the page.
+		function lcgStream(seedExtra) {
+			let s = ((SEED ^ 0x1234abcd ^ Math.imul(seedExtra | 0, 0x27d4eb2f)) >>> 0) || 1;
+			return function () {
+				s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+				return s / 4294967296;
+			};
 		}
 
 		const MAX_PIXELS = 4194304; // 2048² guard against huge canvases
 
-		function noisyCopy(src, w, h) {
+		function noisyCopy(src, w, h, ox, oy) {
 			const out = new Uint8ClampedArray(src);
 			for (let y = 0; y < h; y++) {
 				for (let x = 0; x < w; x++) {
 					const i = (y * w + x) * 4;
 					// LSB flips on RGB only: fingerprint canvases are
 					// opaque, and alpha speckle is visible to trivial
-					// pixel-diff checks.
-					if (hash(x, y, 0) < 0.004) out[i] ^= 1;
-					if (hash(x, y, 1) < 0.004) out[i + 1] ^= 1;
-					if (hash(x, y, 2) < 0.004) out[i + 2] ^= 1;
+					// pixel-diff checks. ox/oy make the decision a
+					// function of the CANVAS-ABSOLUTE pixel (#117).
+					if (hash(ox + x, oy + y, 0) < 0.004) out[i] ^= 1;
+					if (hash(ox + x, oy + y, 1) < 0.004) out[i + 1] ^= 1;
+					if (hash(ox + x, oy + y, 2) < 0.004) out[i + 2] ^= 1;
 				}
 			}
 			return out;
@@ -140,10 +151,16 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 		// origGetImageData must be captured BEFORE the getImageData wrapper
 		// below is installed — internal noise application uses the raw
 		// pixels, never the already-noised copy (double noise would cancel
-		// out: the flips are deterministic XORs).
+		// out: the flips are deterministic XORs). The OffscreenCanvas path
+		// gets its own raw handle for the same reason (#117).
 		let origGetImageData = null;
 		try {
 			origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+		} catch (e) {}
+		let origGetImageDataOff = null;
+		try {
+			origGetImageDataOff = (typeof OffscreenCanvasRenderingContext2D !== 'undefined')
+				? OffscreenCanvasRenderingContext2D.prototype.getImageData : null;
 		} catch (e) {}
 
 		// ---- canvas: stable LSB noise on read-out probes -----------------
@@ -170,6 +187,33 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 				try {
 					if (ctx && origGetImageData && saved && canvas.width > 0 && canvas.height > 0) {
 						const img2 = origGetImageData.call(ctx, 0, 0, canvas.width, canvas.height);
+						img2.data.set(saved);
+						ctx.putImageData(img2, 0, 0);
+					}
+				} catch (e) {}
+			}
+		}
+
+		// OffscreenCanvas twin of withNoisedCanvas (#117): same
+		// swap → read → restore dance against the Offscreen 2D context.
+		function withNoisedOffscreen(canvas, fn) {
+			let saved = null, ctx = null;
+			try {
+				ctx = canvas.getContext('2d');
+				if (ctx && origGetImageDataOff && canvas.width > 0 && canvas.height > 0 &&
+					canvas.width * canvas.height <= MAX_PIXELS) {
+					const img = origGetImageDataOff.call(ctx, 0, 0, canvas.width, canvas.height);
+					saved = new Uint8ClampedArray(img.data);
+					img.data.set(noisyCopy(img.data, canvas.width, canvas.height, 0, 0));
+					ctx.putImageData(img, 0, 0);
+				}
+			} catch (e) { /* tainted canvas etc. */ }
+			try {
+				return fn();
+			} finally {
+				try {
+					if (ctx && origGetImageDataOff && saved && canvas.width > 0 && canvas.height > 0) {
+						const img2 = origGetImageDataOff.call(ctx, 0, 0, canvas.width, canvas.height);
 						img2.data.set(saved);
 						ctx.putImageData(img2, 0, 0);
 					}
@@ -208,13 +252,51 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 			if (origGetImageData) {
 				CanvasRenderingContext2D.prototype.getImageData = function (sx, sy, w, h) {
 					const img = origGetImageData.call(this, sx, sy, w, h);
+					// #117: hash over CANVAS-ABSOLUTE coordinates —
+					// overlapping reads of the same pixel from different
+					// origins must agree on its LSB, or partial reads
+					// contradict the full-canvas toDataURL.
 					if (w > 0 && h > 0 && w * h <= MAX_PIXELS) {
-						img.data.set(noisyCopy(img.data, w, h));
+						img.data.set(noisyCopy(img.data, w, h, Math.floor(sx), Math.floor(sy)));
 					}
 					return img;
 				};
 				disguiseFn(CanvasRenderingContext2D.prototype.getImageData,
 					'function getImageData() { [native code] }');
+			}
+		} catch (e) {}
+
+		// ---- OffscreenCanvas (#117) ---------------------------------------
+		// OffscreenCanvasRenderingContext2D does NOT inherit from
+		// CanvasRenderingContext2D.prototype — prototype overrides above
+		// never reach it, so convertToBlob/ImageData reads used to bypass
+		// the noise entirely. Wrap both explicitly.
+		try {
+			const origGIDOff = (typeof OffscreenCanvasRenderingContext2D !== 'undefined')
+				? OffscreenCanvasRenderingContext2D.prototype.getImageData : null;
+			if (origGIDOff) {
+				OffscreenCanvasRenderingContext2D.prototype.getImageData = function (sx, sy, w, h) {
+					const img = origGIDOff.call(this, sx, sy, w, h);
+					if (w > 0 && h > 0 && w * h <= MAX_PIXELS) {
+						img.data.set(noisyCopy(img.data, w, h, Math.floor(sx), Math.floor(sy)));
+					}
+					return img;
+				};
+				disguiseFn(OffscreenCanvasRenderingContext2D.prototype.getImageData,
+					'function getImageData() { [native code] }');
+			}
+		} catch (e) {}
+
+		try {
+			if (typeof OffscreenCanvas !== 'undefined' && OffscreenCanvas.prototype.convertToBlob) {
+				const origConvertToBlob = OffscreenCanvas.prototype.convertToBlob;
+				OffscreenCanvas.prototype.convertToBlob = function () {
+					return withNoisedOffscreen(this, function () {
+						return origConvertToBlob.apply(this, arguments);
+					}.bind(this));
+				};
+				disguiseFn(OffscreenCanvas.prototype.convertToBlob,
+					'function convertToBlob() { [native code] }');
 			}
 		} catch (e) {}
 
@@ -243,9 +325,12 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 				if (!nonzero && AUDIO_REF && AUDIO_REF.st && AUDIO_REF.st.length > 1) {
 					// Reference points are the stationary waveform decimated
 					// from a 44100-sample render; resample to this buffer.
+					// #117: per-buffer RNG (seed ← profile seed ⊕ buffer
+					// params) — same buffer always gets the same jitter,
+					// independent of read order across the page.
 					const st = AUDIO_REF.st;
 					const attack = Math.min(AUDIO_REF.az || 0, data.length);
-					const scale = AUDIO_REF.mx || 0.28;
+					const rnd = lcgStream(data.length ^ Math.imul(channel | 0, 0x9e3779b9));
 					for (let i = 0; i < attack; i++) data[i] = 0;
 					for (let i = attack; i < data.length; i++) {
 						const t = (i - attack) / (data.length - attack);
@@ -255,11 +340,12 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 						// Linear interpolation between reference points,
 						// then per-profile deterministic jitter.
 						const v = st[i0] * (1 - frac) + st[i1] * frac;
-						data[i] = v * (1 + (lcg() - 0.5) * 0.01);
+						data[i] = v * (1 + (rnd() - 0.5) * 0.01);
 					}
 				} else if (nonzero) {
+					const rnd = lcgStream(data.length ^ Math.imul(channel | 0, 0x9e3779b9));
 					for (let i = 0; i < data.length; i++) {
-						data[i] += (lcg() - 0.5) * 1e-7;
+						data[i] += (rnd() - 0.5) * 1e-7;
 					}
 				}
 				return data;

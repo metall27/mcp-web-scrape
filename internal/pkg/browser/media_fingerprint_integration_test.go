@@ -91,6 +91,61 @@ func TestDeterministicMediaFingerprint(t *testing.T) {
 			hash3: hashCanvas(c2),   // fresh canvas, same drawing
 			daturl_stable: c3.toDataURL() === c3.toDataURL()
 		};
+
+		// NON-DEFAULT probes (#117): a solid-black canvas has RAW rgb all
+		// zero — any nonzero byte after the wrappers is an LSB flip, i.e.
+		// the noise is actually applied (the old test had this check
+		// locked behind an unreachable block and never ran).
+		const blackCv = () => {
+			const c = document.createElement('canvas');
+			c.width = 100; c.height = 60;
+			const x = c.getContext('2d');
+			x.fillStyle = '#000';
+			x.fillRect(0, 0, 100, 60);
+			return c;
+		};
+		const countNZ = (d) => {
+			let n = 0;
+			for (let i = 0; i < d.length; i++) if (d[i] !== 0) n++;
+			return n;
+		};
+		const bl = blackCv(), blCtx = bl.getContext('2d');
+		const bd1 = blCtx.getImageData(0, 0, 100, 60).data;
+		const bd2 = blCtx.getImageData(0, 0, 100, 60).data;
+		result.noise_pixels = countNZ(bd1);
+		result.noise_stable = countNZ(bd2) === result.noise_pixels &&
+			bd1[0] === bd2[0] && bd1[1] === bd2[1] && bd1[2] === bd2[2];
+
+		// Overlapping reads must agree (#117 canvas-absolute coords):
+		// pixel (50, y) read via the full window vs via a window starting
+		// at sx=50 must have identical LSB decisions.
+		const right = blCtx.getImageData(50, 0, 50, 60).data;
+		let mism = 0;
+		for (let y = 0; y < 60; y++) {
+			const fi = (y * 100 + 50) * 4, ri = (y * 50) * 4;
+			if (bd1[fi] !== right[ri] || bd1[fi + 1] !== right[ri + 1] ||
+				bd1[fi + 2] !== right[ri + 2]) mism++;
+		}
+		result.overlap_mismatch = mism;
+
+		// OffscreenCanvas hole (#117): raw black is all-zero, so nonzero
+		// bytes through the Offscreen getImageData path prove the noise
+		// reaches the non-inheriting prototype.
+		result.off_noise_pixels = -1;
+		try {
+			if (typeof OffscreenCanvas !== 'undefined') {
+				const oc = new OffscreenCanvas(100, 60);
+				const octx = oc.getContext('2d');
+				octx.fillStyle = '#000';
+				octx.fillRect(0, 0, 100, 60);
+				const od = octx.getImageData(0, 0, 100, 60).data;
+				result.off_noise_pixels = countNZ(od);
+				result.off_native_toString =
+					String(OffscreenCanvasRenderingContext2D.prototype.measureText)
+						.indexOf('[native code]') >= 0;
+			}
+		} catch (e) { result.off_noise_pixels = -2; }
+
 		return JSON.stringify(result);
 	})()`
 
@@ -173,12 +228,32 @@ func TestDeterministicMediaFingerprint(t *testing.T) {
 		t.Error("toDataURL not stable across calls")
 	}
 
-	// 2. Non-default: the noise must actually alter the PNG bytes.
-	if r1["hash1"] == r1["hash3"] && false {
-		// same-drawing different canvases MAY legitimately collide only if
-		// no pixel crossed an LSB — with 0.4% per channel it is vanishingly
-		// unlikely; kept informational.
-		t.Log("note: two independently drawn canvases hashed equal")
+	// 2. NON-DEFAULT (#117): the LSB noise must actually alter pixels.
+	// A 100x60 black canvas = 6000 pixels x 3 channels; at 0.4% flip
+	// density the expected nonzero count is ~72 (Poisson) — require a
+	// sane band so a fully-dead wrapper fails and an over-flipping one
+	// fails too.
+	if np, _ := r1["noise_pixels"].(float64); np < 5 || np > 600 {
+		t.Errorf("canvas noise not applied or over-applied: noise_pixels=%v", np)
+	}
+	if r1["noise_stable"] != true {
+		t.Error("partial getImageData noise not stable across reads")
+	}
+	// Overlapping reads must agree on shared pixels (canvas-absolute
+	// coordinates): a mismatch is the #117 partial-read contradiction.
+	if mm, _ := r1["overlap_mismatch"].(float64); mm != 0 {
+		t.Errorf("overlapping getImageData windows disagree on %d pixels", int(mm))
+	}
+	// OffscreenCanvas coverage (#117): -1 = OffscreenCanvas unavailable
+	// (old headless), -2 = probe threw; only a real count is meaningful.
+	switch off := r1["off_noise_pixels"].(float64); {
+	case off == -2:
+		t.Errorf("OffscreenCanvas probe threw")
+	case off >= 0 && off < 5:
+		t.Errorf("OffscreenCanvas noise not applied: off_noise_pixels=%v", off)
+	}
+	if v, ok := r1["off_native_toString"].(bool); ok && !v {
+		t.Error("OffscreenCanvas measureText toString leaks override source")
 	}
 
 	// 3. Audio: non-zero, stable.
