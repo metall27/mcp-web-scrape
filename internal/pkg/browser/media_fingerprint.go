@@ -177,7 +177,12 @@ func buildDeterministicMediaScript(profile BrowserProfile) string {
 					canvas.width * canvas.height <= MAX_PIXELS) {
 					const img = origGetImageData.call(ctx, 0, 0, canvas.width, canvas.height);
 					saved = new Uint8ClampedArray(img.data);
-					img.data.set(noisyCopy(img.data, canvas.width, canvas.height));
+					// Full-canvas read: origin (0,0). #118 review: this call
+					// MUST pass the origin explicitly — a 3-arg call leaves
+					// ox/oy undefined, hash(NaN|0=0, 0, c) becomes a global
+					// per-channel constant and the noise dies on the
+					// toDataURL/toBlob path entirely.
+					img.data.set(noisyCopy(img.data, canvas.width, canvas.height, 0, 0));
 					ctx.putImageData(img, 0, 0);
 				}
 			} catch (e) { /* tainted canvas etc. */ }

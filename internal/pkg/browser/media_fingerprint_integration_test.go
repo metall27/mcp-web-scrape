@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -299,7 +300,23 @@ func TestMediaFingerprintDiffersAcrossProfiles(t *testing.T) {
 	win := NewProfile("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 	mac := NewProfile("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 
+	// #118 review: crc32 of toDataURL must DIFFER across profiles — the
+	// regression this guards against (a dead noise path on toDataURL)
+	// made every session exfiltrate the byte-identical raw canvas, which
+	// is exactly what the Ozon challenge hashes. Length alone is too
+	// coarse and was only logged, never asserted.
 	const hashProbe = `(() => {
+		const crc32 = (bytes) => {
+			let c, table = [];
+			for (let n = 0; n < 256; n++) {
+				c = n;
+				for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+				table[n] = c >>> 0;
+			}
+			let crc = 0xFFFFFFFF;
+			for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+			return (crc ^ 0xFFFFFFFF) >>> 0;
+		};
 		const c = document.createElement('canvas');
 		c.width = 100; c.height = 60;
 		const ctx = c.getContext('2d');
@@ -308,39 +325,54 @@ func TestMediaFingerprintDiffersAcrossProfiles(t *testing.T) {
 		ctx.fillStyle = g; ctx.fillRect(0, 0, 100, 60);
 		ctx.fillStyle = 'rgba(10, 84, 200, 0.7)';
 		ctx.fillText('fp', 2, 15);
-		return c.toDataURL('image/png').length;
+		const b64 = c.toDataURL('image/png');
+		const bin = atob(b64.split(',')[1]);
+		const arr = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+		return JSON.stringify({hash: crc32(arr), len: b64.length});
 	})()`
 
-	runHash := func(profile BrowserProfile) (float64, error) {
+	runHash := func(profile BrowserProfile) (map[string]interface{}, error) {
 		bctx, bcancel, err := pool.GetContext(ctx)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		defer bcancel()
-		var n float64
+		var outJSON string
 		err = chromedp.Run(bctx,
 			chromedp.Navigate("about:blank"),
 			stealth.InjectAntiDetectionScripts(profile),
 			chromedp.Reload(),
 			chromedp.Sleep(300*time.Millisecond),
-			chromedp.Evaluate(hashProbe, &n),
+			chromedp.Evaluate(hashProbe, &outJSON),
 		)
-		return n, err
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(outJSON), &m); err != nil {
+			return nil, fmt.Errorf("hash probe not JSON: %w (%s)", err, outJSON)
+		}
+		return m, nil
 	}
 
-	nWin, err := runHash(win)
+	mWin, err := runHash(win)
 	if err != nil {
 		t.Fatalf("win: %v", err)
 	}
-	nMac, err := runHash(mac)
+	mMac, err := runHash(mac)
 	if err != nil {
 		t.Fatalf("mac: %v", err)
 	}
-	t.Logf("data URL lengths: win=%v mac=%v", nWin, nMac)
-	// PNG length is a coarse proxy; different seeds flip different LSBs and
-	// virtually always change the compressed length. Informational assert:
-	// identical length is not a failure per se, but flag it.
-	if nWin == nMac {
-		t.Log("WARNING: identical PNG lengths across profiles — check seed plumbing")
+	nWin, _ := mWin["len"].(float64)
+	nMac, _ := mMac["len"].(float64)
+	hWin, _ := mWin["hash"].(float64)
+	hMac, _ := mMac["hash"].(float64)
+	t.Logf("toDataURL: win crc32=%v len=%v | mac crc32=%v len=%v", hWin, nWin, hMac, nMac)
+	// HARD assert (#118 review): the crc32 of the noised toDataURL must
+	// differ across profiles — identical hashes mean the per-pixel noise
+	// is dead on the main read-out path (the NaN-origin regression).
+	if hWin == hMac {
+		t.Errorf("toDataURL crc32 identical across profiles (%v): noise dead on toDataURL path?", hWin)
 	}
 }
