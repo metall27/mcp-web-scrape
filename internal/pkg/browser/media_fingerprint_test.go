@@ -59,6 +59,14 @@ func TestDeterministicMediaScriptShape(t *testing.T) {
 			t.Errorf("missing disguise text %q", native)
 		}
 	}
+	// #117: the OffscreenCanvas wrappers must be present — its context
+	// prototype does not inherit from CanvasRenderingContext2D.
+	if !strings.Contains(js, "OffscreenCanvasRenderingContext2D") {
+		t.Error("OffscreenCanvas getImageData wrapper missing")
+	}
+	if !strings.Contains(js, "convertToBlob") {
+		t.Error("OffscreenCanvas convertToBlob wrapper missing")
+	}
 	// Check the JS body only (strip Go line comments — they document the
 	// retired Math.random approach and legitimately mention it).
 	body := js

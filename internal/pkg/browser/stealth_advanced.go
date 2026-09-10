@@ -60,8 +60,11 @@ func (a *AdvancedStealth) AudioAntiFingerprinting() string {
 // override is RETIRED (#107 stage 3 review): it contradicted the stage C
 // font-metrics mock (which serves exact reference-table widths) — a random
 // ±0.005px wobble on top of reference values is both unstable per call and
-// detectably non-deterministic. Stage C's mock covers OffscreenCanvas
-// contexts as well; nothing random remains here.
+// detectably non-deterministic. The stage C mock overrides
+// CanvasRenderingContext2D.prototype.measureText; since #117 the
+// OffscreenCanvasRenderingContext2D path is covered by the deterministic
+// media script explicitly (it does not inherit the prototype above).
+// Nothing random remains here.
 func (a *AdvancedStealth) FontAntiFingerprinting() string {
 	return `
 		(() => {

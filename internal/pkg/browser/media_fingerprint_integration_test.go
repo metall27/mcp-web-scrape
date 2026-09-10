@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -91,6 +92,63 @@ func TestDeterministicMediaFingerprint(t *testing.T) {
 			hash3: hashCanvas(c2),   // fresh canvas, same drawing
 			daturl_stable: c3.toDataURL() === c3.toDataURL()
 		};
+
+		// NON-DEFAULT probes (#117): a solid-black canvas has RAW rgb all
+		// zero — any nonzero byte after the wrappers is an LSB flip, i.e.
+		// the noise is actually applied (the old test had this check
+		// locked behind an unreachable block and never ran).
+		const blackCv = () => {
+			const c = document.createElement('canvas');
+			c.width = 100; c.height = 60;
+			const x = c.getContext('2d');
+			x.fillStyle = '#000';
+			x.fillRect(0, 0, 100, 60);
+			return c;
+		};
+		const countNZ = (d) => {
+			// RGB only — alpha is 255 everywhere on an opaque canvas and
+			// is never flipped (it would drown out the signal).
+			let n = 0;
+			for (let i = 0; i < d.length; i++) if (i % 4 !== 3 && d[i] !== 0) n++;
+			return n;
+		};
+		const bl = blackCv(), blCtx = bl.getContext('2d');
+		const bd1 = blCtx.getImageData(0, 0, 100, 60).data;
+		const bd2 = blCtx.getImageData(0, 0, 100, 60).data;
+		result.noise_pixels = countNZ(bd1);
+		result.noise_stable = countNZ(bd2) === result.noise_pixels &&
+			bd1[0] === bd2[0] && bd1[1] === bd2[1] && bd1[2] === bd2[2];
+
+		// Overlapping reads must agree (#117 canvas-absolute coords):
+		// pixel (50, y) read via the full window vs via a window starting
+		// at sx=50 must have identical LSB decisions.
+		const right = blCtx.getImageData(50, 0, 50, 60).data;
+		let mism = 0;
+		for (let y = 0; y < 60; y++) {
+			const fi = (y * 100 + 50) * 4, ri = (y * 50) * 4;
+			if (bd1[fi] !== right[ri] || bd1[fi + 1] !== right[ri + 1] ||
+				bd1[fi + 2] !== right[ri + 2]) mism++;
+		}
+		result.overlap_mismatch = mism;
+
+		// OffscreenCanvas hole (#117): raw black is all-zero, so nonzero
+		// bytes through the Offscreen getImageData path prove the noise
+		// reaches the non-inheriting prototype.
+		result.off_noise_pixels = -1;
+		try {
+			if (typeof OffscreenCanvas !== 'undefined') {
+				const oc = new OffscreenCanvas(100, 60);
+				const octx = oc.getContext('2d');
+				octx.fillStyle = '#000';
+				octx.fillRect(0, 0, 100, 60);
+				const od = octx.getImageData(0, 0, 100, 60).data;
+				result.off_noise_pixels = countNZ(od);
+				result.off_native_toString =
+					String(OffscreenCanvasRenderingContext2D.prototype.measureText)
+						.indexOf('[native code]') >= 0;
+			}
+		} catch (e) { result.off_noise_pixels = -2; }
+
 		return JSON.stringify(result);
 	})()`
 
@@ -173,12 +231,32 @@ func TestDeterministicMediaFingerprint(t *testing.T) {
 		t.Error("toDataURL not stable across calls")
 	}
 
-	// 2. Non-default: the noise must actually alter the PNG bytes.
-	if r1["hash1"] == r1["hash3"] && false {
-		// same-drawing different canvases MAY legitimately collide only if
-		// no pixel crossed an LSB — with 0.4% per channel it is vanishingly
-		// unlikely; kept informational.
-		t.Log("note: two independently drawn canvases hashed equal")
+	// 2. NON-DEFAULT (#117): the LSB noise must actually alter pixels.
+	// A 100x60 black canvas = 6000 pixels x 3 channels; at 0.4% flip
+	// density the expected nonzero count is ~72 (Poisson) — require a
+	// sane band so a fully-dead wrapper fails and an over-flipping one
+	// fails too.
+	if np, _ := r1["noise_pixels"].(float64); np < 5 || np > 600 {
+		t.Errorf("canvas noise not applied or over-applied: noise_pixels=%v", np)
+	}
+	if r1["noise_stable"] != true {
+		t.Error("partial getImageData noise not stable across reads")
+	}
+	// Overlapping reads must agree on shared pixels (canvas-absolute
+	// coordinates): a mismatch is the #117 partial-read contradiction.
+	if mm, _ := r1["overlap_mismatch"].(float64); mm != 0 {
+		t.Errorf("overlapping getImageData windows disagree on %d pixels", int(mm))
+	}
+	// OffscreenCanvas coverage (#117): -1 = OffscreenCanvas unavailable
+	// (old headless), -2 = probe threw; only a real count is meaningful.
+	switch off := r1["off_noise_pixels"].(float64); {
+	case off == -2:
+		t.Errorf("OffscreenCanvas probe threw")
+	case off >= 0 && off < 5:
+		t.Errorf("OffscreenCanvas noise not applied: off_noise_pixels=%v", off)
+	}
+	if v, ok := r1["off_native_toString"].(bool); ok && !v {
+		t.Error("OffscreenCanvas measureText toString leaks override source")
 	}
 
 	// 3. Audio: non-zero, stable.
@@ -222,7 +300,23 @@ func TestMediaFingerprintDiffersAcrossProfiles(t *testing.T) {
 	win := NewProfile("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 	mac := NewProfile("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 
+	// #118 review: crc32 of toDataURL must DIFFER across profiles — the
+	// regression this guards against (a dead noise path on toDataURL)
+	// made every session exfiltrate the byte-identical raw canvas, which
+	// is exactly what the Ozon challenge hashes. Length alone is too
+	// coarse and was only logged, never asserted.
 	const hashProbe = `(() => {
+		const crc32 = (bytes) => {
+			let c, table = [];
+			for (let n = 0; n < 256; n++) {
+				c = n;
+				for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+				table[n] = c >>> 0;
+			}
+			let crc = 0xFFFFFFFF;
+			for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+			return (crc ^ 0xFFFFFFFF) >>> 0;
+		};
 		const c = document.createElement('canvas');
 		c.width = 100; c.height = 60;
 		const ctx = c.getContext('2d');
@@ -231,39 +325,54 @@ func TestMediaFingerprintDiffersAcrossProfiles(t *testing.T) {
 		ctx.fillStyle = g; ctx.fillRect(0, 0, 100, 60);
 		ctx.fillStyle = 'rgba(10, 84, 200, 0.7)';
 		ctx.fillText('fp', 2, 15);
-		return c.toDataURL('image/png').length;
+		const b64 = c.toDataURL('image/png');
+		const bin = atob(b64.split(',')[1]);
+		const arr = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+		return JSON.stringify({hash: crc32(arr), len: b64.length});
 	})()`
 
-	runHash := func(profile BrowserProfile) (float64, error) {
+	runHash := func(profile BrowserProfile) (map[string]interface{}, error) {
 		bctx, bcancel, err := pool.GetContext(ctx)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		defer bcancel()
-		var n float64
+		var outJSON string
 		err = chromedp.Run(bctx,
 			chromedp.Navigate("about:blank"),
 			stealth.InjectAntiDetectionScripts(profile),
 			chromedp.Reload(),
 			chromedp.Sleep(300*time.Millisecond),
-			chromedp.Evaluate(hashProbe, &n),
+			chromedp.Evaluate(hashProbe, &outJSON),
 		)
-		return n, err
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(outJSON), &m); err != nil {
+			return nil, fmt.Errorf("hash probe not JSON: %w (%s)", err, outJSON)
+		}
+		return m, nil
 	}
 
-	nWin, err := runHash(win)
+	mWin, err := runHash(win)
 	if err != nil {
 		t.Fatalf("win: %v", err)
 	}
-	nMac, err := runHash(mac)
+	mMac, err := runHash(mac)
 	if err != nil {
 		t.Fatalf("mac: %v", err)
 	}
-	t.Logf("data URL lengths: win=%v mac=%v", nWin, nMac)
-	// PNG length is a coarse proxy; different seeds flip different LSBs and
-	// virtually always change the compressed length. Informational assert:
-	// identical length is not a failure per se, but flag it.
-	if nWin == nMac {
-		t.Log("WARNING: identical PNG lengths across profiles — check seed plumbing")
+	nWin, _ := mWin["len"].(float64)
+	nMac, _ := mMac["len"].(float64)
+	hWin, _ := mWin["hash"].(float64)
+	hMac, _ := mMac["hash"].(float64)
+	t.Logf("toDataURL: win crc32=%v len=%v | mac crc32=%v len=%v", hWin, nWin, hMac, nMac)
+	// HARD assert (#118 review): the crc32 of the noised toDataURL must
+	// differ across profiles — identical hashes mean the per-pixel noise
+	// is dead on the main read-out path (the NaN-origin regression).
+	if hWin == hMac {
+		t.Errorf("toDataURL crc32 identical across profiles (%v): noise dead on toDataURL path?", hWin)
 	}
 }

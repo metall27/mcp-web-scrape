@@ -303,7 +303,13 @@ func buildFontMetricsMockScript() string {
 		function mockedMeasureText(text) {
 			const t = String(text);
 			const pf = parseFont(this.font);
-			if (!pf) return origMeasure ? origMeasure.call(this, t) : { width: 0 };
+			if (!pf) {
+				// Cross-prototype safety (#117): origMeasure is the CANVAS
+				// prototype's native — calling it with an Offscreen receiver
+				// throws. Fall back to the plain shape instead.
+				try { return origMeasure ? origMeasure.call(this, t) : { width: 0 }; }
+				catch (e) { return { width: 0 }; }
+			}
 			const key = this.font + '\x00' + t;
 			let w = widthCache.get(key);
 			if (w === undefined) {
@@ -324,6 +330,18 @@ func buildFontMetricsMockScript() string {
 			CanvasRenderingContext2D.prototype.measureText = mockedMeasureText;
 			disguiseFn(CanvasRenderingContext2D.prototype.measureText,
 				'function measureText() { [native code] }');
+		} catch (e) {}
+
+		// OffscreenCanvasRenderingContext2D does NOT inherit from
+		// CanvasRenderingContext2D.prototype — without this second
+		// install the Offscreen path would bypass the reference-table
+		// mock and leak the container's collapsed metrics (#117).
+		try {
+			if (typeof OffscreenCanvasRenderingContext2D !== 'undefined') {
+				OffscreenCanvasRenderingContext2D.prototype.measureText = mockedMeasureText;
+				disguiseFn(OffscreenCanvasRenderingContext2D.prototype.measureText,
+					'function measureText() { [native code] }');
+			}
 		} catch (e) {}
 
 		// TextMetrics: keep the value in a WeakMap, serve it from PROTOTYPE
